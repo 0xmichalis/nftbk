@@ -115,6 +115,7 @@ pub async fn process_nfts(config_path: &Path, output_path: &Path) -> Result<()> 
 
         // Save metadata
         let dir_path = output_path
+            .join("ethereum")
             .join(contract_addr.to_string())
             .join(token_id.to_string());
         fs::create_dir_all(&dir_path).await?;
@@ -130,6 +131,7 @@ pub async fn process_nfts(config_path: &Path, output_path: &Path) -> Result<()> 
             fetch_and_save_content(
                 image_url,
                 output_path,
+                "ethereum",
                 &token_id.to_string(),
                 &contract_addr.to_string(),
                 "image",
@@ -142,6 +144,7 @@ pub async fn process_nfts(config_path: &Path, output_path: &Path) -> Result<()> 
             fetch_and_save_content(
                 animation_url,
                 output_path,
+                "ethereum",
                 &token_id.to_string(),
                 &contract_addr.to_string(),
                 "animation",

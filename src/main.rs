@@ -71,6 +71,7 @@ impl FromStr for ChainAddress {
 pub async fn fetch_and_save_content(
     url: &str,
     output_path: &Path,
+    chain: &str,
     token_id: &str,
     contract: &str,
     content_type: &str,
@@ -91,7 +92,7 @@ pub async fn fetch_and_save_content(
         .and_then(|segments| segments.last())
         .unwrap_or(content_type);
 
-    let dir_path = output_path.join(contract).join(token_id);
+    let dir_path = output_path.join(chain).join(contract).join(token_id);
     fs::create_dir_all(&dir_path).await?;
 
     let file_path = dir_path.join(file_name);
@@ -111,10 +112,13 @@ async fn main() -> Result<()> {
     // Parse command line arguments
     let args = Args::parse();
 
-    // Use provided output path or current directory
-    let output_path = args.output_path.unwrap_or_else(|| PathBuf::from("."));
+    // Use provided output path or current directory as base
+    let base_path = args.output_path.unwrap_or_else(|| PathBuf::from("."));
 
-    // Create output directory if it doesn't exist
+    // Set output path to nft_backup within the base path
+    let output_path = base_path.join("nft_backup");
+
+    // Create nft_backup directory if it doesn't exist
     fs::create_dir_all(&output_path).await?;
 
     // Process each address

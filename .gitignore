@@ -2,3 +2,4 @@
 **/*.rs.bk
 .env
 config.toml
+/nft_backup
