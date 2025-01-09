@@ -97,9 +97,19 @@ pub async fn process_nfts(config_path: &Path, output_path: &Path) -> Result<()> 
 
         println!("Fetching token {} metadata from {}", token_id, token_uri);
 
+        // Convert IPFS URLs to use a gateway
+        let metadata_url = if token_uri.starts_with("ipfs://") {
+            format!(
+                "https://ipfs.io/ipfs/{}",
+                token_uri.trim_start_matches("ipfs://")
+            )
+        } else {
+            token_uri
+        };
+
         // Fetch and save metadata
         let client = reqwest::Client::new();
-        let metadata: NFTMetadata = client.get(&token_uri).send().await?.json().await?;
+        let metadata: NFTMetadata = client.get(&metadata_url).send().await?.json().await?;
 
         // Save metadata
         let dir_path = output_path

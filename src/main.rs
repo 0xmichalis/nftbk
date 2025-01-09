@@ -75,8 +75,17 @@ pub async fn fetch_and_save_content(
     contract: &str,
     content_type: &str,
 ) -> Result<PathBuf> {
+    let content_url = if url.starts_with("ipfs://") {
+        format!(
+            "https://ipfs.io/ipfs/{}",
+            url.trim_start_matches("ipfs://")
+        )
+    } else {
+        url.to_string()
+    };
+
     let client = reqwest::Client::new();
-    let response = client.get(url).send().await?;
+    let response = client.get(&content_url).send().await?;
     let content = response.bytes().await?;
 
     let url = Url::parse(url)?;
