@@ -1,11 +1,18 @@
 # NFT Contracts Configuration
 [contracts]
 
-# List of NFT contract addresses to fetch NFTs from
+# List of NFT contracts to fetch in format: "contract_address:token_id"
 ethereum = [
-    # Add Ethereum contract addresses here
+    # Bored Ape Yacht Club #1
+    "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d:1",
+
+    # Mutant Ape Yacht Club #2
+    "0x60e4d786628fea6478f785a6d7e704777c86a7c6:2",
+
+    # CryptoPunks #7804
+    "0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb:7804"
 ]
 
-tezos = [
-    # Add Tezos contract addresses here
-]
+# Tezos contracts (coming soon)
+# Format will be: "contract_address:token_id"
+tezos = []
