@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use ethers::{
-    prelude::*,
     providers::{Http, Provider},
     types::Address,
+    contract::Contract,
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -36,6 +36,16 @@ const NFT_ABI: &str = r#"[
 ]"#;
 
 #[derive(Debug, Deserialize)]
+pub struct ContractsConfig {
+    pub contracts: Contracts,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Contracts {
+    ethereum: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct ContractWithToken {
     pub address: String,
     pub token_id: u64,
@@ -46,7 +56,18 @@ pub async fn process_nfts(config_path: &Path, output_path: &Path) -> Result<()> 
         Provider::<Http>::try_from(std::env::var("ETH_RPC_URL").context("ETH_RPC_URL not set")?)?;
 
     let config = fs::read_to_string(config_path).await?;
-    let contracts = toml::from_str::<Vec<ContractWithToken>>(&config)?;
+    let contracts_config = toml::from_str::<ContractsConfig>(&config)?;
+    
+    let contracts = contracts_config.contracts.ethereum
+        .into_iter()
+        .map(|s| {
+            let parts: Vec<&str> = s.split(':').collect();
+            ContractWithToken {
+                address: parts[0].to_string(),
+                token_id: parts[1].parse().unwrap(),
+            }
+        })
+        .collect::<Vec<_>>();
 
     for contract in contracts {
         let contract_addr = contract.address.parse::<Address>()?;
