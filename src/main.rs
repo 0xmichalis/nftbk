@@ -38,8 +38,14 @@ struct ContractsConfig {
 
 #[derive(Debug, Deserialize)]
 struct Contracts {
-    ethereum: Vec<String>,
-    tezos: Vec<String>,
+    ethereum: Vec<ContractWithToken>,
+    tezos: Vec<ContractWithToken>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ContractWithToken {
+    address: String,
+    token_id: u64,
 }
 
 // NFT Metadata structure
@@ -132,11 +138,7 @@ async fn fetch_and_save_content(
     Ok(file_path)
 }
 
-async fn process_ethereum_nfts(
-    address: EthAddress,
-    config_path: &Path,
-    base_path: &Path,
-) -> Result<()> {
+async fn process_ethereum_nfts(config_path: &Path, base_path: &Path) -> Result<()> {
     let provider =
         Provider::<Http>::try_from(std::env::var("ETH_RPC_URL").context("ETH_RPC_URL not set")?)?;
 
@@ -146,89 +148,79 @@ async fn process_ethereum_nfts(
         .ethereum;
 
     for contract in contracts {
-        let contract_addr = contract.parse::<EthAddress>()?;
+        let contract_addr = contract.address.parse::<EthAddress>()?;
         let abi: ethers::abi::Abi = serde_json::from_str(NFT_ABI)?;
-        let contract = Contract::new(contract_addr, abi, provider.clone().into());
+        let contract_instance = Contract::new(contract_addr, abi, provider.clone().into());
 
-        // Try both ERC721 and ERC1155 balance checks
-        let balance: U256 = match contract
-            .method::<_, U256>("balanceOf", address)?
+        println!("Processing contract {}", contract_addr);
+
+        let token_id = contract.token_id;
+
+        // Try both tokenURI and uri functions
+        let token_uri = match contract_instance
+            .method::<_, String>("tokenURI", token_id)?
             .call()
             .await
         {
-            Ok(bal) => bal,
-            Err(_) => continue, // Skip if contract doesn't implement balanceOf
-        };
-
-        println!(
-            "Processing contract {} (balance: {})",
-            contract_addr, balance
-        );
-
-        for token_id in 0..balance.as_u64() {
-            // Try both tokenURI and uri functions
-            let token_uri = match contract
-                .method::<_, String>("tokenURI", token_id)?
+            Ok(uri) => uri,
+            Err(_) => match contract_instance
+                .method::<_, String>("uri", token_id)?
                 .call()
                 .await
             {
                 Ok(uri) => uri,
-                Err(_) => match contract.method::<_, String>("uri", token_id)?.call().await {
-                    Ok(uri) => uri,
-                    Err(_) => continue, // Skip if we can't get URI
-                },
-            };
+                Err(_) => continue, // Skip if we can't get URI
+            },
+        };
 
-            println!("Fetching token {} metadata from {}", token_id, token_uri);
+        println!("Fetching token {} metadata from {}", token_id, token_uri);
 
-            // Fetch and save metadata
-            let client = reqwest::Client::new();
-            let metadata: NFTMetadata = client.get(&token_uri).send().await?.json().await?;
+        // Fetch and save metadata
+        let client = reqwest::Client::new();
+        let metadata: NFTMetadata = client.get(&token_uri).send().await?.json().await?;
 
-            // Save metadata
-            let dir_path = base_path
-                .join(contract_addr.to_string())
-                .join(token_id.to_string());
-            fs::create_dir_all(&dir_path).await?;
-            fs::write(
-                dir_path.join("metadata.json"),
-                serde_json::to_string_pretty(&metadata)?,
+        // Save metadata
+        let dir_path = base_path
+            .join(contract_addr.to_string())
+            .join(token_id.to_string());
+        fs::create_dir_all(&dir_path).await?;
+        fs::write(
+            dir_path.join("metadata.json"),
+            serde_json::to_string_pretty(&metadata)?,
+        )
+        .await?;
+
+        // Save linked content
+        if let Some(image_url) = &metadata.image {
+            println!("Downloading image from {}", image_url);
+            fetch_and_save_content(
+                image_url,
+                base_path,
+                &token_id.to_string(),
+                &contract_addr.to_string(),
+                "image",
             )
             .await?;
+        }
 
-            // Save linked content
-            if let Some(image_url) = &metadata.image {
-                println!("Downloading image from {}", image_url);
-                fetch_and_save_content(
-                    image_url,
-                    base_path,
-                    &token_id.to_string(),
-                    &contract_addr.to_string(),
-                    "image",
-                )
-                .await?;
-            }
-
-            if let Some(animation_url) = &metadata.animation_url {
-                println!("Downloading animation from {}", animation_url);
-                fetch_and_save_content(
-                    animation_url,
-                    base_path,
-                    &token_id.to_string(),
-                    &contract_addr.to_string(),
-                    "animation",
-                )
-                .await?;
-            }
+        if let Some(animation_url) = &metadata.animation_url {
+            println!("Downloading animation from {}", animation_url);
+            fetch_and_save_content(
+                animation_url,
+                base_path,
+                &token_id.to_string(),
+                &contract_addr.to_string(),
+                "animation",
+            )
+            .await?;
         }
     }
 
     Ok(())
 }
 
-async fn process_tezos_nfts(address: &str, config_path: &Path, base_path: &Path) -> Result<()> {
+async fn process_tezos_nfts(config_path: &Path, base_path: &Path) -> Result<()> {
     println!("Tezos support is not yet implemented");
-    println!("Address: {}", address);
     let config = fs::read_to_string(config_path).await?;
     let contracts = toml::from_str::<ContractsConfig>(&config)?.contracts.tezos;
     println!("Contracts: {:?}", contracts);
@@ -255,11 +247,11 @@ async fn main() -> Result<()> {
         let chain_address = addr_str.parse::<ChainAddress>()?;
 
         match chain_address {
-            ChainAddress::Ethereum(addr) => {
-                process_ethereum_nfts(addr, &args.config_path, &base_path).await?;
+            ChainAddress::Ethereum(_) => {
+                process_ethereum_nfts(&args.config_path, &base_path).await?;
             }
-            ChainAddress::Tezos(addr) => {
-                process_tezos_nfts(&addr, &args.config_path, &base_path).await?;
+            ChainAddress::Tezos(_) => {
+                process_tezos_nfts(&args.config_path, &base_path).await?;
             }
         }
     }
