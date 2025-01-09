@@ -96,6 +96,9 @@ pub async fn fetch_and_save_content(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Load environment variables from .env file if it exists
+    dotenv::dotenv().ok();
+
     // Initialize logging
     tracing_subscriber::fmt::init();
 
