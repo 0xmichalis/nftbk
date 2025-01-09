@@ -21,13 +21,13 @@ struct Args {
     #[arg(required = true)]
     addresses: Vec<String>,
 
-    /// Path to the NFT contracts configuration file
-    #[arg(short, long)]
+    /// Path to the NFT contracts configuration file (default: config.toml)
+    #[arg(short, long, default_value = "config.toml")]
     config_path: PathBuf,
 
-    /// Optional backup directory path (defaults to current directory)
+    /// Optional output directory path (defaults to current directory)
     #[arg(short, long)]
-    path: Option<PathBuf>,
+    output_path: Option<PathBuf>,
 }
 
 // TOML Config structure
@@ -115,7 +115,7 @@ const NFT_ABI: &str = r#"[
 
 async fn fetch_and_save_content(
     url: &str,
-    base_path: &Path,
+    output_path: &Path,
     token_id: &str,
     contract: &str,
     content_type: &str,
@@ -130,7 +130,7 @@ async fn fetch_and_save_content(
         .and_then(|segments| segments.last())
         .unwrap_or(content_type);
 
-    let dir_path = base_path.join(contract).join(token_id);
+    let dir_path = output_path.join(contract).join(token_id);
     fs::create_dir_all(&dir_path).await?;
 
     let file_path = dir_path.join(file_name);
@@ -139,7 +139,7 @@ async fn fetch_and_save_content(
     Ok(file_path)
 }
 
-async fn process_ethereum_nfts(config_path: &Path, base_path: &Path) -> Result<()> {
+async fn process_ethereum_nfts(config_path: &Path, output_path: &Path) -> Result<()> {
     let provider =
         Provider::<Http>::try_from(std::env::var("ETH_RPC_URL").context("ETH_RPC_URL not set")?)?;
 
@@ -181,7 +181,7 @@ async fn process_ethereum_nfts(config_path: &Path, base_path: &Path) -> Result<(
         let metadata: NFTMetadata = client.get(&token_uri).send().await?.json().await?;
 
         // Save metadata
-        let dir_path = base_path
+        let dir_path = output_path
             .join(contract_addr.to_string())
             .join(token_id.to_string());
         fs::create_dir_all(&dir_path).await?;
@@ -196,7 +196,7 @@ async fn process_ethereum_nfts(config_path: &Path, base_path: &Path) -> Result<(
             println!("Downloading image from {}", image_url);
             fetch_and_save_content(
                 image_url,
-                base_path,
+                output_path,
                 &token_id.to_string(),
                 &contract_addr.to_string(),
                 "image",
@@ -208,7 +208,7 @@ async fn process_ethereum_nfts(config_path: &Path, base_path: &Path) -> Result<(
             println!("Downloading animation from {}", animation_url);
             fetch_and_save_content(
                 animation_url,
-                base_path,
+                output_path,
                 &token_id.to_string(),
                 &contract_addr.to_string(),
                 "animation",
@@ -220,12 +220,12 @@ async fn process_ethereum_nfts(config_path: &Path, base_path: &Path) -> Result<(
     Ok(())
 }
 
-async fn process_tezos_nfts(config_path: &Path, base_path: &Path) -> Result<()> {
+async fn process_tezos_nfts(config_path: &Path, output_path: &Path) -> Result<()> {
     println!("Tezos support is not yet implemented");
     let config = fs::read_to_string(config_path).await?;
     let contracts = toml::from_str::<ContractsConfig>(&config)?.contracts.tezos;
     println!("Contracts: {:?}", contracts);
-    println!("Backup path: {}", base_path.display());
+    println!("Backup path: {}", output_path.display());
     Ok(())
 }
 
@@ -237,11 +237,11 @@ async fn main() -> Result<()> {
     // Parse command line arguments
     let args = Args::parse();
 
-    // Use provided path or current directory
-    let base_path = args.path.unwrap_or_else(|| PathBuf::from("."));
+    // Use provided output path or current directory
+    let output_path = args.output_path.unwrap_or_else(|| PathBuf::from("."));
 
-    // Create base directory if it doesn't exist
-    fs::create_dir_all(&base_path).await?;
+    // Create output directory if it doesn't exist
+    fs::create_dir_all(&output_path).await?;
 
     // Process each address
     for addr_str in args.addresses {
@@ -249,10 +249,10 @@ async fn main() -> Result<()> {
 
         match chain_address {
             ChainAddress::Ethereum => {
-                process_ethereum_nfts(&args.config_path, &base_path).await?;
+                process_ethereum_nfts(&args.config_path, &output_path).await?;
             }
             ChainAddress::Tezos => {
-                process_tezos_nfts(&args.config_path, &base_path).await?;
+                process_tezos_nfts(&args.config_path, &output_path).await?;
             }
         }
     }
