@@ -69,8 +69,8 @@ struct NFTAttribute {
 
 #[derive(Debug)]
 enum ChainAddress {
-    Ethereum(EthAddress),
-    Tezos(String),
+    Ethereum,
+    Tezos,
 }
 
 impl FromStr for ChainAddress {
@@ -78,11 +78,12 @@ impl FromStr for ChainAddress {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.starts_with("KT1") {
-            Ok(ChainAddress::Tezos(s.to_string()))
+            Ok(ChainAddress::Tezos)
         } else {
-            Ok(ChainAddress::Ethereum(
-                s.parse().context("Failed to parse Ethereum address")?,
-            ))
+            // Validate it's a valid Ethereum address
+            s.parse::<EthAddress>()
+                .context("Failed to parse Ethereum address")?;
+            Ok(ChainAddress::Ethereum)
         }
     }
 }
@@ -247,10 +248,10 @@ async fn main() -> Result<()> {
         let chain_address = addr_str.parse::<ChainAddress>()?;
 
         match chain_address {
-            ChainAddress::Ethereum(_) => {
+            ChainAddress::Ethereum => {
                 process_ethereum_nfts(&args.config_path, &base_path).await?;
             }
-            ChainAddress::Tezos(_) => {
+            ChainAddress::Tezos => {
                 process_tezos_nfts(&args.config_path, &base_path).await?;
             }
         }
