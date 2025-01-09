@@ -77,7 +77,7 @@ impl FromStr for ChainAddress {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.starts_with("tz") {
+        if s.starts_with("KT1") {
             Ok(ChainAddress::Tezos(s.to_string()))
         } else {
             Ok(ChainAddress::Ethereum(
