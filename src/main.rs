@@ -21,13 +21,25 @@ struct Args {
     #[arg(required = true)]
     addresses: Vec<String>,
 
-    /// Optional list of specific NFT contract addresses to filter by
-    #[arg(short, long, value_delimiter = ',')]
-    nft_contracts: Option<Vec<String>>,
+    /// Path to the NFT contracts configuration file
+    #[arg(short, long)]
+    config_path: PathBuf,
 
     /// Optional backup directory path (defaults to current directory)
     #[arg(short, long)]
     path: Option<PathBuf>,
+}
+
+// TOML Config structure
+#[derive(Debug, Deserialize)]
+struct ContractsConfig {
+    contracts: Contracts,
+}
+
+#[derive(Debug, Deserialize)]
+struct Contracts {
+    ethereum: Vec<String>,
+    tezos: Vec<String>,
 }
 
 // NFT Metadata structure
@@ -122,17 +134,16 @@ async fn fetch_and_save_content(
 
 async fn process_ethereum_nfts(
     address: EthAddress,
-    nft_contracts: &Option<Vec<String>>,
+    config_path: &Path,
     base_path: &Path,
 ) -> Result<()> {
     let provider =
         Provider::<Http>::try_from(std::env::var("ETH_RPC_URL").context("ETH_RPC_URL not set")?)?;
 
-    let Some(contracts) = nft_contracts else {
-        println!("No specific contracts provided. To fetch all NFTs, you need to specify contract addresses.");
-        println!("Use --nft-contracts option with comma-separated contract addresses.");
-        return Ok(());
-    };
+    let config = fs::read_to_string(config_path).await?;
+    let contracts = toml::from_str::<ContractsConfig>(&config)?
+        .contracts
+        .ethereum;
 
     for contract in contracts {
         let contract_addr = contract.parse::<EthAddress>()?;
@@ -215,16 +226,12 @@ async fn process_ethereum_nfts(
     Ok(())
 }
 
-async fn process_tezos_nfts(
-    address: &str,
-    nft_contracts: &Option<Vec<String>>,
-    base_path: &Path,
-) -> Result<()> {
+async fn process_tezos_nfts(address: &str, config_path: &Path, base_path: &Path) -> Result<()> {
     println!("Tezos support is not yet implemented");
     println!("Address: {}", address);
-    if let Some(contracts) = nft_contracts {
-        println!("Contracts: {:?}", contracts);
-    }
+    let config = fs::read_to_string(config_path).await?;
+    let contracts = toml::from_str::<ContractsConfig>(&config)?.contracts.tezos;
+    println!("Contracts: {:?}", contracts);
     println!("Backup path: {}", base_path.display());
     Ok(())
 }
@@ -249,10 +256,10 @@ async fn main() -> Result<()> {
 
         match chain_address {
             ChainAddress::Ethereum(addr) => {
-                process_ethereum_nfts(addr, &args.nft_contracts, &base_path).await?;
+                process_ethereum_nfts(addr, &args.config_path, &base_path).await?;
             }
             ChainAddress::Tezos(addr) => {
-                process_tezos_nfts(&addr, &args.nft_contracts, &base_path).await?;
+                process_tezos_nfts(&addr, &args.config_path, &base_path).await?;
             }
         }
     }

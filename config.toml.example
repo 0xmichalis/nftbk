@@ -1,0 +1,11 @@
+# NFT Contracts Configuration
+[contracts]
+
+# List of NFT contract addresses to fetch NFTs from
+ethereum = [
+    # Add Ethereum contract addresses here
+]
+
+tezos = [
+    # Add Tezos contract addresses here
+]
