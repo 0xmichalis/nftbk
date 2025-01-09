@@ -14,7 +14,10 @@ pub async fn process_nfts(config_path: &Path, output_path: &Path) -> Result<()> 
     let config = fs::read_to_string(config_path).await?;
     let contracts = toml::from_str::<Vec<ContractWithToken>>(&config)?;
     for contract in contracts {
-        println!("Contract {} (token id={})", contract.address, contract.token_id);
+        println!(
+            "Contract {} (token id={})",
+            contract.address, contract.token_id
+        );
     }
     println!("Backup path: {}", output_path.display());
     Ok(())

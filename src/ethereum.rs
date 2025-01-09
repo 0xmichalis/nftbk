@@ -1,8 +1,8 @@
 use anyhow::{Context, Result};
 use ethers::{
+    contract::Contract,
     providers::{Http, Provider},
     types::Address,
-    contract::Contract,
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -57,8 +57,10 @@ pub async fn process_nfts(config_path: &Path, output_path: &Path) -> Result<()> 
 
     let config = fs::read_to_string(config_path).await?;
     let contracts_config = toml::from_str::<ContractsConfig>(&config)?;
-    
-    let contracts = contracts_config.contracts.ethereum
+
+    let contracts = contracts_config
+        .contracts
+        .ethereum
         .into_iter()
         .map(|s| {
             let parts: Vec<&str> = s.split(':').collect();
