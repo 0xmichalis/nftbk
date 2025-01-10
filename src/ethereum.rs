@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::path::Path;
 use tokio::fs;
 
-use crate::{fetch_and_save_content, NFTMetadata};
+use crate::{fetch_and_save_content, url::get_url, NFTMetadata};
 
 // ERC721/ERC1155 minimal ABI for token URI and balance
 const NFT_ABI: &str = r#"[
@@ -99,15 +99,8 @@ pub async fn process_nfts(config_path: &Path, output_path: &Path) -> Result<()> 
 
         println!("Fetching token {} metadata from {}", token_id, token_uri);
 
-        // Convert IPFS URLs to use a gateway
-        let metadata_url = if token_uri.starts_with("ipfs://") {
-            format!(
-                "https://ipfs.io/ipfs/{}",
-                token_uri.trim_start_matches("ipfs://")
-            )
-        } else {
-            token_uri
-        };
+        // Convert IPFS URLs to gateway URL if needed
+        let metadata_url = get_url(&token_uri);
 
         // Fetch and save metadata
         let client = reqwest::Client::new();
