@@ -9,15 +9,9 @@ _Built with the use of [Cline](https://github.com/cline/cline) + [OpenRouter](ht
 - Rust toolchain (install from [rustup.rs](https://rustup.rs))
 - Ethereum RPC URL (e.g., from [Alchemy](https://www.alchemy.com/) or [Infura](https://infura.io/))
 
-## Build
-
-```bash
-cargo build --release
-```
-
 ## Configuration
 
-Create a `config.toml` file (or copy from `config.toml.example`) to specify which NFT contracts and token IDs to backup:
+1. Create a `config.toml` file (or copy from `config.toml.example`) to specify which NFT contracts and token IDs to backup:
 
 ```toml
 [contracts]
@@ -31,17 +25,16 @@ ethereum = [
 tezos = []
 ```
 
-## Usage
-
-1. Set your Ethereum RPC URL:
+2. Copy `.env` from `.env.example` and fill out as needed.
 ```bash
-export ETH_RPC_URL='your-ethereum-rpc-url'
+cp .env.example .env
+# Update .env accordingly ...
 ```
 
-2. Run the tool:
+## Usage
+
 ```bash
-# Basic usage with config file
-./target/release/nftbk [YOUR_ADDRESS]
+cargo run
 ```
 
 ## Output Structure
@@ -61,6 +54,9 @@ nft_backup/
 ## Contribute
 
 ```bash
+# Build code
+cargo build
+
 # Format code
 cargo fmt
 
