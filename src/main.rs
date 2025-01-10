@@ -1,18 +1,11 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use serde::{Deserialize, Serialize};
-use std::{
-    path::{Path, PathBuf},
-    str::FromStr,
-};
+use std::{path::PathBuf, str::FromStr};
 use tokio::fs;
-use url::Url;
 
 mod ethereum;
 mod tezos;
 mod url;
-
-use url::get_url;
 
 // CLI Arguments
 #[derive(Parser, Debug)]
@@ -29,25 +22,6 @@ struct Args {
     /// Optional output directory path (defaults to current directory)
     #[arg(short, long)]
     output_path: Option<PathBuf>,
-}
-
-// NFT Metadata structure
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NFTMetadata {
-    pub name: Option<String>,
-    pub description: Option<String>,
-    pub image: Option<String>,
-    pub animation_url: Option<String>,
-    pub external_url: Option<String>,
-    pub attributes: Option<Vec<NFTAttribute>>,
-    #[serde(flatten)]
-    pub extra: serde_json::Value,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NFTAttribute {
-    pub trait_type: String,
-    pub value: serde_json::Value,
 }
 
 #[derive(Debug)]
@@ -69,34 +43,6 @@ impl FromStr for ChainAddress {
             Ok(ChainAddress::Ethereum)
         }
     }
-}
-
-pub async fn fetch_and_save_content(
-    url: &str,
-    output_path: &Path,
-    chain: &str,
-    token_id: &str,
-    contract: &str,
-    content_type: &str,
-) -> Result<PathBuf> {
-    let content_url = get_url(url);
-    let client = reqwest::Client::new();
-    let response = client.get(&content_url).send().await?;
-    let content = response.bytes().await?;
-
-    let url = Url::parse(url)?;
-    let file_name = url
-        .path_segments()
-        .and_then(|segments| segments.last())
-        .unwrap_or(content_type);
-
-    let dir_path = output_path.join(chain).join(contract).join(token_id);
-    fs::create_dir_all(&dir_path).await?;
-
-    let file_path = dir_path.join(file_name);
-    fs::write(&file_path, content).await?;
-
-    Ok(file_path)
 }
 
 #[tokio::main]

@@ -1,5 +1,3 @@
-use url::Url;
-
 /// Converts IPFS URLs to use a gateway, otherwise returns the original URL
 pub fn get_url(url: &str) -> String {
     if url.starts_with("ipfs://") {
