@@ -3574,7 +3574,7 @@ dependencies = [
 [[package]]
 name = "tezos-contract"
 version = "0.2.0"
-source = "git+https://github.com/airgap-it/tezos-rust-sdk#0c1c6b97f5042c2458bef705e7aac05c0815c811"
+source = "git+https://github.com/0xmichalis/tezos-rust-sdk#0c1c6b97f5042c2458bef705e7aac05c0815c811"
 dependencies = [
  "async-trait",
  "derive_more 0.99.18",
@@ -3587,7 +3587,7 @@ dependencies = [
 [[package]]
 name = "tezos-core"
 version = "0.2.0"
-source = "git+https://github.com/airgap-it/tezos-rust-sdk#0c1c6b97f5042c2458bef705e7aac05c0815c811"
+source = "git+https://github.com/0xmichalis/tezos-rust-sdk#0c1c6b97f5042c2458bef705e7aac05c0815c811"
 dependencies = [
  "blake2",
  "bs58 0.4.0",
@@ -3608,7 +3608,7 @@ dependencies = [
 [[package]]
 name = "tezos-michelson"
 version = "0.2.0"
-source = "git+https://github.com/airgap-it/tezos-rust-sdk#0c1c6b97f5042c2458bef705e7aac05c0815c811"
+source = "git+https://github.com/0xmichalis/tezos-rust-sdk#0c1c6b97f5042c2458bef705e7aac05c0815c811"
 dependencies = [
  "chrono",
  "derive_more 0.99.18",
@@ -3624,7 +3624,7 @@ dependencies = [
 [[package]]
 name = "tezos-operation"
 version = "0.2.0"
-source = "git+https://github.com/airgap-it/tezos-rust-sdk#0c1c6b97f5042c2458bef705e7aac05c0815c811"
+source = "git+https://github.com/0xmichalis/tezos-rust-sdk#0c1c6b97f5042c2458bef705e7aac05c0815c811"
 dependencies = [
  "chrono",
  "derive_more 0.99.18",
@@ -3638,7 +3638,7 @@ dependencies = [
 [[package]]
 name = "tezos-rpc"
 version = "0.2.0"
-source = "git+https://github.com/airgap-it/tezos-rust-sdk#0c1c6b97f5042c2458bef705e7aac05c0815c811"
+source = "git+https://github.com/0xmichalis/tezos-rust-sdk#0c1c6b97f5042c2458bef705e7aac05c0815c811"
 dependencies = [
  "async-trait",
  "chrono",
