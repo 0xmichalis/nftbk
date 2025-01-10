@@ -1,0 +1,17 @@
+# Project Guidelines
+
+## Documentation Requirements
+
+- Keep README.md up to date with latest capabilities
+
+## Code Changes
+
+- Ensure the code can be compiled
+- Ensure the code is formatted
+- Any clippy warnings are addressed
+
+## Security Practices
+
+- Never commit sensitive files
+- Use environment variables for secrets
+- Keep credentials out of logs and output

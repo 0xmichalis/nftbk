@@ -2,6 +2,8 @@
 
 CLI tool for backing up NFT metadata and content from Ethereum and Tezos NFT contracts.
 
+_Built with the use of [Cline](https://github.com/cline/cline) + [OpenRouter](https://openrouter.ai/) (Claude Sonnet 3.5, DeepSeek)._
+
 ## Prerequisites
 
 - Rust toolchain (install from [rustup.rs](https://rustup.rs))
