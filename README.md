@@ -2,8 +2,6 @@
 
 CLI tool for backing up NFT metadata and content from Ethereum and Tezos NFT contracts.
 
-_Built with the use of [Cline](https://github.com/cline/cline) + [OpenRouter](https://openrouter.ai/) (Claude Sonnet 3.5, DeepSeek)._
-
 ## Prerequisites
 
 - Rust toolchain (install from [rustup.rs](https://rustup.rs))
@@ -14,15 +12,17 @@ _Built with the use of [Cline](https://github.com/cline/cline) + [OpenRouter](ht
 1. Create a `config.toml` file (or copy from `config.toml.example`) to specify which NFT contracts and token IDs to backup:
 
 ```toml
+# List of NFT contract addresses to fetch metadata and content from
 [contracts]
-# Ethereum contracts in format: "contract_address:token_id"
-ethereum = [
-    "0xbc4ca0eda7647a8ab7c2061c2e118a18a936f13d:1",  # BAYC #1
-    "0x60e4d786628fea6478f785a6d7e704777c86a7c6:2"   # MAYC #2
-]
 
-# Tezos contracts (coming soon)
-tezos = []
+# Tokens in format: "contract_address:token_id"
+ethereum = [
+    '0x3D7E6A293C5ca4cD6721Df1A99683802331793C7:26',
+    '0x1D8629438f0Ce0DE787D48BEb3F153884B2F370d:12'
+]
+tezos = [
+    'KT1DmEFfeqEC3nEx6bpWKqjNY8FF8RFrR3Gc:28'
+]
 ```
 
 2. Copy `.env` from `.env.example` and fill out as needed.
