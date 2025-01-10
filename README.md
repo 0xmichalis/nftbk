@@ -5,12 +5,13 @@ CLI tool for backing up NFT metadata and content from Ethereum and Tezos NFT con
 ## Prerequisites
 
 - Rust toolchain (install from [rustup.rs](https://rustup.rs))
-- Ethereum RPC URL (e.g., from [Alchemy](https://www.alchemy.com/) or [Infura](https://infura.io/))
+- Chain-specific RPC URLs
 
 ## Configuration
 
-1. Create a `config.toml` file (or copy from `config.toml.example`) to specify which NFT contracts and token IDs to backup:
+1. Copy `config.toml.example` to `config.toml` file and specify which tokens (contract address + token id) to backup. 
 
+Example config:
 ```toml
 # List of NFT contract addresses to fetch metadata and content from
 [contracts]
@@ -25,7 +26,7 @@ tezos = [
 ]
 ```
 
-2. Copy `.env` from `.env.example` and fill out as needed.
+2. Copy `.env.example` to `.env` and fill out as needed.
 ```bash
 cp .env.example .env
 # Update .env accordingly ...
@@ -43,12 +44,16 @@ All content is saved in an `nft_backup` directory within the specified output pa
 
 ```
 nft_backup/
-  └── ethereum/
+  ├── ethereum/
+  │   └── contract_address/
+  │       └── token_id/
+  │           ├── artifact.*
+  │           └── metadata.json
+  └── tezos/
       └── contract_address/
           └── token_id/
-              ├── metadata.json
-              ├── image.*
-              └── animation.*
+              ├── artifact.*
+              └── metadata.json
 ```
 
 ## Contribute
@@ -58,10 +63,7 @@ nft_backup/
 cargo build
 
 # Format code
-cargo fmt
-
-# Check formatting
-cargo fmt --all -- --check
+cargo fmt --all
 
 # Run clippy lints
 cargo clippy -- -D warnings
