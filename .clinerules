@@ -2,7 +2,7 @@
 
 ## Documentation Requirements
 
-- Keep README.md up to date with latest capabilities
+- Keep README.md up to date with latest capabilities but avoid unnecessary changes. Only update the README when latest capabilities introduce breakages to the documented README commands.
 
 ## Code Changes
 

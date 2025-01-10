@@ -82,32 +82,17 @@ const NFT_ABI: &str = r#"[
     }
 ]"#;
 
-#[derive(Debug, Deserialize)]
-pub struct ContractsConfig {
-    pub contracts: Contracts,
+#[derive(Debug)]
+struct ContractWithToken {
+    address: String,
+    token_id: u64,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Contracts {
-    ethereum: Vec<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ContractWithToken {
-    pub address: String,
-    pub token_id: u64,
-}
-
-pub async fn process_nfts(config_path: &Path, output_path: &Path) -> Result<()> {
+pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path) -> Result<()> {
     let provider =
         Provider::<Http>::try_from(std::env::var("ETH_RPC_URL").context("ETH_RPC_URL not set")?)?;
 
-    let config = fs::read_to_string(config_path).await?;
-    let contracts_config = toml::from_str::<ContractsConfig>(&config)?;
-
-    let contracts = contracts_config
-        .contracts
-        .ethereum
+    let contracts = contracts
         .into_iter()
         .map(|s| {
             let parts: Vec<&str> = s.split(':').collect();
