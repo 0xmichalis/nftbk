@@ -119,7 +119,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
         // Save metadata
         let dir_path = output_path
             .join("ethereum")
-            .join(contract_addr.to_string())
+            .join(format!("{:#x}", contract_addr))
             .join(token_id.to_string());
         fs::create_dir_all(&dir_path).await?;
         fs::write(
@@ -136,7 +136,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
                 output_path,
                 "ethereum",
                 &token_id.to_string(),
-                &contract_addr.to_string(),
+                &format!("{:#x}", contract_addr),
                 Some("image"),
             )
             .await?;
@@ -149,7 +149,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
                 output_path,
                 "ethereum",
                 &token_id.to_string(),
-                &contract_addr.to_string(),
+                &format!("{:#x}", contract_addr),
                 Some("animation"),
             )
             .await?;
