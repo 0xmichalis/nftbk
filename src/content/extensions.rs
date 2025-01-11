@@ -1,4 +1,6 @@
 use anyhow::Result;
+use flate2::read::GzDecoder;
+use std::io::Read;
 use std::path::Path;
 use tokio::fs;
 
@@ -38,7 +40,18 @@ async fn extend_crocket_challenge_content(
         println!("Downloading {} as {}", url, target_file);
         let response = client.get(&url).send().await?;
         let content = response.bytes().await?;
-        fs::write(file_path, content).await?;
+
+        // Decompress if it's a gzipped file
+        let final_content = if source_file.ends_with(".gz") {
+            let mut decoder = GzDecoder::new(&content[..]);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed)?;
+            decompressed
+        } else {
+            content.to_vec()
+        };
+
+        fs::write(file_path, final_content).await?;
     }
 
     Ok(())
@@ -59,7 +72,7 @@ pub async fn fetch_and_save_additional_content(
     match (chain, contract, token_id) {
         (
             "ethereum",
-            "0x2A86C5466f088caEbf94e071a77669BAe371CD87",
+            "0x2a86c5466f088caebf94e071a77669bae371cd87",
             "25811853076941608055270457512038717433705462539422789705262203111341130500780",
         ) => extend_crocket_challenge_content(_output_path, contract, token_id).await,
         // Default case - no extension needed
