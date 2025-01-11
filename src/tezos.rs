@@ -41,7 +41,7 @@ pub struct NFTAttribute {
 #[derive(Debug)]
 struct ContractWithToken {
     address: String,
-    token_id: u64,
+    token_id: String,
 }
 
 async fn get_ipfs_uri(
@@ -56,9 +56,8 @@ async fn get_ipfs_uri(
         .big_maps()
         .get_by_name("token_metadata")
         .unwrap();
-    let token_id_str = contract.token_id.to_string();
-    let token_id_int = Int::from(token_id_str)?;
-    let token_id_michelson = data::int(token_id_int);
+    let token_id = Int::from(&contract.token_id)?;
+    let token_id_michelson = data::int(token_id);
     let value = token_metadata
         .get_value(rpc, token_id_michelson, None)
         .await?;
@@ -124,7 +123,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
             let dir_path = output_path
                 .join("tezos")
                 .join(&contract.address)
-                .join(contract.token_id.to_string());
+                .join(&contract.token_id);
             let metadata_filename = dir_path.join("metadata.json");
             fs::create_dir_all(&dir_path).await?;
             fs::write(&metadata_filename, serde_json::to_string_pretty(&metadata)?).await?;
@@ -163,7 +162,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
                         &url,
                         output_path,
                         "tezos",
-                        &contract.token_id.to_string(),
+                        &contract.token_id,
                         &contract.address,
                         Some(&file_name),
                     )

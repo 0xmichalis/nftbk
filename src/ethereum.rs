@@ -55,7 +55,7 @@ const NFT_ABI: &str = r#"[
 #[derive(Debug)]
 struct ContractWithToken {
     address: String,
-    token_id: u64,
+    token_id: String,
 }
 
 pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path) -> Result<()> {
@@ -68,7 +68,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
             let parts: Vec<&str> = s.split(':').collect();
             ContractWithToken {
                 address: parts[0].to_string(),
-                token_id: parts[1].parse().unwrap(),
+                token_id: parts[1].to_string(),
             }
         })
         .collect::<Vec<_>>();
@@ -80,7 +80,9 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
 
         println!("Processing contract {}", contract_addr);
 
-        let token_id = contract.token_id;
+        // Parse token ID into U256
+        let token_id = ethers::types::U256::from_dec_str(&contract.token_id)
+            .context("Failed to parse token ID")?;
 
         // Try both tokenURI and uri functions
         let token_uri = match contract_instance
@@ -89,17 +91,23 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
             .await
         {
             Ok(uri) => uri,
-            Err(_) => match contract_instance
-                .method::<_, String>("uri", token_id)?
-                .call()
-                .await
-            {
-                Ok(uri) => uri,
-                Err(_) => continue, // Skip if we can't get URI
-            },
+            Err(e) => {
+                println!("tokenURI failed: {}, trying uri...", e);
+                match contract_instance
+                    .method::<_, String>("uri", token_id)?
+                    .call()
+                    .await
+                {
+                    Ok(uri) => uri,
+                    Err(e) => {
+                        println!("uri failed: {}, skipping token", e);
+                        continue;
+                    }
+                }
+            }
         };
 
-        println!("Fetching token {} metadata from {}", token_id, token_uri);
+        println!("Fetching token {} metadata from {}", &token_id, token_uri);
 
         // Convert IPFS URLs to gateway URL if needed
         let metadata_url = get_url(&token_uri);
