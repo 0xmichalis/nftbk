@@ -52,11 +52,19 @@ pub async fn download_html_resources(
                 let client = reqwest::Client::new();
                 match client.get(&absolute_url).send().await {
                     Ok(response) => {
-                        let content = response.bytes().await?;
                         // Clean up resource URL by removing query parameters
                         let clean_resource_url =
                             resource_url.split('?').next().unwrap_or(resource_url);
-                        fs::write(dir_path.join(clean_resource_url), content).await?;
+                        let resource_path = dir_path.join(clean_resource_url);
+
+                        // Skip if file already exists
+                        if fs::try_exists(&resource_path).await? {
+                            println!("Resource already exists at {}", resource_path.display());
+                            continue;
+                        }
+
+                        let content = response.bytes().await?;
+                        fs::write(resource_path, content).await?;
                     }
                     Err(e) => {
                         println!(
