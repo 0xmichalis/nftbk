@@ -135,15 +135,15 @@ pub async fn fetch_and_save_content(
 
     let content = response.bytes().await?;
 
-    if is_html {
+    if !is_html {
+        fs::write(&file_path, content).await?;
+    } else {
         // For HTML content, download associated resources
         println!("Warning: Downloading HTML content from {}. The saved file may be incomplete as it might depend on additional resources or backend servers.", url);
         fs::create_dir_all(&dir_path).await?;
         let content_str = String::from_utf8_lossy(&content);
         let modified_html = download_html_resources(&content_str, url, &dir_path).await?;
         fs::write(&file_path, modified_html).await?;
-    } else {
-        fs::write(&file_path, content).await?;
     }
 
     Ok(file_path)
