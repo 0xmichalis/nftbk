@@ -46,7 +46,7 @@ async fn extend_crocket_challenge_content(
 
 /// Extends content handling based on chain, contract address, and token ID.
 /// This function is called after the main content has been downloaded and saved.
-pub async fn extend_content(
+pub async fn fetch_and_save_additional_content(
     chain: &str,
     contract: &str,
     token_id: &str,

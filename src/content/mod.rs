@@ -81,7 +81,7 @@ async fn download_html_resources(
     Ok(modified_html)
 }
 
-pub async fn fetch_and_save_content(
+async fn fetch_and_save_main_content(
     url: &str,
     output_path: &Path,
     chain: &str,
@@ -105,50 +105,71 @@ pub async fn fetch_and_save_content(
         .join(chain)
         .join(contract_address)
         .join(token_id);
-    let file_path = dir_path.join(&file_name);
+    let mut file_path = dir_path.join(&file_name);
 
-    // Return early if file already exists
-    if fs::try_exists(&file_path).await? {
+    // Check if file exists
+    if !fs::try_exists(&file_path).await? {
+        // File doesn't exist, proceed with download
+        let content_url = get_url(url);
+        let client = reqwest::Client::new();
+        let response = client.get(&content_url).send().await?;
+
+        // Check content type
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("unknown/unknown");
+
+        let is_html =
+            content_type.contains("text/html") || content_type.contains("application/xhtml");
+
+        // Ensure HTML files have .html extension
+        if is_html && !file_path.to_string_lossy().ends_with(".html") {
+            file_path = dir_path.join(format!("{}.html", file_name));
+        }
+
+        let content = response.bytes().await?;
+
+        if !is_html {
+            fs::write(&file_path, content).await?;
+        } else {
+            // For HTML content, download associated resources
+            println!("Warning: Downloading HTML content from {}. The saved file may be incomplete as it might depend on additional resources or backend servers.", url);
+            fs::create_dir_all(&dir_path).await?;
+            let content_str = String::from_utf8_lossy(&content);
+            let modified_html = download_html_resources(&content_str, url, &dir_path).await?;
+            fs::write(&file_path, modified_html).await?;
+        }
+    } else {
         println!("File already exists at {}", file_path.display());
-        return Ok(file_path);
     }
 
-    // File doesn't exist, proceed with download
-    let content_url = get_url(url);
-    let client = reqwest::Client::new();
-    let response = client.get(&content_url).send().await?;
+    Ok(file_path)
+}
 
-    // Check content type
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown/unknown");
-
-    let is_html = content_type.contains("text/html") || content_type.contains("application/xhtml");
-
-    // Ensure HTML files have .html extension
-    let file_path = if is_html && !file_path.to_string_lossy().ends_with(".html") {
-        dir_path.join(format!("{}.html", file_name))
-    } else {
-        file_path
-    };
-
-    let content = response.bytes().await?;
-
-    if !is_html {
-        fs::write(&file_path, content).await?;
-    } else {
-        // For HTML content, download associated resources
-        println!("Warning: Downloading HTML content from {}. The saved file may be incomplete as it might depend on additional resources or backend servers.", url);
-        fs::create_dir_all(&dir_path).await?;
-        let content_str = String::from_utf8_lossy(&content);
-        let modified_html = download_html_resources(&content_str, url, &dir_path).await?;
-        fs::write(&file_path, modified_html).await?;
-    }
+pub async fn fetch_and_save_content(
+    url: &str,
+    output_path: &Path,
+    chain: &str,
+    token_id: &str,
+    contract_address: &str,
+    file_name: Option<&str>,
+) -> Result<PathBuf> {
+    // Download main content
+    let file_path = fetch_and_save_main_content(
+        url,
+        output_path,
+        chain,
+        token_id,
+        contract_address,
+        file_name,
+    )
+    .await?;
 
     // Extend content based on chain/contract/token
-    extensions::extend_content(chain, contract_address, token_id, output_path).await?;
+    extensions::fetch_and_save_additional_content(chain, contract_address, token_id, output_path)
+        .await?;
 
     Ok(file_path)
 }
