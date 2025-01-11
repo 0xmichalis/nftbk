@@ -3,10 +3,8 @@ use clap::Parser;
 use std::path::PathBuf;
 use tokio::fs;
 
+mod chain;
 mod content;
-mod ethereum;
-mod tezos;
-mod url;
 
 use serde::Deserialize;
 
@@ -62,11 +60,11 @@ async fn main() -> Result<()> {
 
     // Process chains based on config
     if !config.contracts.ethereum.is_empty() {
-        ethereum::process_nfts(config.contracts.ethereum.clone(), &output_path).await?;
+        chain::ethereum::process_nfts(config.contracts.ethereum.clone(), &output_path).await?;
     }
 
     if !config.contracts.tezos.is_empty() {
-        tezos::process_nfts(config.contracts.tezos.clone(), &output_path).await?;
+        chain::tezos::process_nfts(config.contracts.tezos.clone(), &output_path).await?;
     }
 
     Ok(())

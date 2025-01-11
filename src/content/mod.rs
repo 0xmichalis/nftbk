@@ -1,12 +1,13 @@
+use ::url::Url;
 use anyhow::Result;
 use scraper::{Html, Selector};
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use url::Url;
 
-use crate::url::get_url;
+pub mod url;
+use self::url::get_url;
 
-async fn download_html_resources(
+pub async fn download_html_resources(
     html_content: &str,
     base_url: &str,
     dir_path: &Path,

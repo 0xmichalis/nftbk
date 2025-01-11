@@ -8,7 +8,7 @@ use tezos_rpc::client::TezosRpc;
 use tezos_rpc::http::default::HttpClient;
 use tokio::fs;
 
-use crate::{content::fetch_and_save_content, url::get_url};
+use crate::content::{fetch_and_save_content, url::get_url};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {

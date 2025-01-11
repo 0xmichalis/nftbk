@@ -7,7 +7,7 @@ use ethers::{
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 
-use crate::{content::fetch_and_save_content, url::get_url};
+use crate::content::{fetch_and_save_content, url::get_url};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
