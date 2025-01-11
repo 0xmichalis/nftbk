@@ -4,6 +4,7 @@ use scraper::{Html, Selector};
 use std::path::{Path, PathBuf};
 use tokio::fs;
 
+pub mod extensions;
 pub mod url;
 use self::url::get_url;
 
@@ -145,6 +146,9 @@ pub async fn fetch_and_save_content(
         let modified_html = download_html_resources(&content_str, url, &dir_path).await?;
         fs::write(&file_path, modified_html).await?;
     }
+
+    // Extend content based on chain/contract/token
+    extensions::extend_content(chain, contract_address, token_id, output_path).await?;
 
     Ok(file_path)
 }
