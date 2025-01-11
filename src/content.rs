@@ -16,7 +16,12 @@ pub async fn fetch_and_save_content(
     // Try to extract filename from URL first, then fallback to provided file_name, then "content"
     let file_name = Url::parse(url)
         .ok()
-        .and_then(|url| url.path_segments()?.last().map(|s| s.to_string()))
+        .and_then(|url| {
+            url.path_segments()?
+                .filter(|s| !s.is_empty())
+                .last()
+                .map(|s| s.to_string())
+        })
         .or_else(|| file_name.map(|s| s.to_string()))
         .unwrap_or_else(|| "content".to_string());
 
