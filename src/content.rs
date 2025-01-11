@@ -13,11 +13,6 @@ pub async fn fetch_and_save_content(
     contract: &str,
     file_name: Option<&str>,
 ) -> Result<PathBuf> {
-    let content_url = get_url(url);
-    let client = reqwest::Client::new();
-    let response = client.get(&content_url).send().await?;
-    let content = response.bytes().await?;
-
     // Try to extract filename from URL first, then fallback to provided file_name, then "content"
     let file_name = Url::parse(url)
         .ok()
@@ -26,9 +21,21 @@ pub async fn fetch_and_save_content(
         .unwrap_or_else(|| "content".to_string());
 
     let dir_path = output_path.join(chain).join(contract).join(token_id);
-    fs::create_dir_all(&dir_path).await?;
+    let file_path = dir_path.join(&file_name);
 
-    let file_path = dir_path.join(file_name);
+    // Return early if file already exists
+    if fs::try_exists(&file_path).await? {
+        println!("File already exists at {}", file_path.display());
+        return Ok(file_path);
+    }
+
+    // File doesn't exist, proceed with download
+    let content_url = get_url(url);
+    let client = reqwest::Client::new();
+    let response = client.get(&content_url).send().await?;
+    let content = response.bytes().await?;
+
+    fs::create_dir_all(&dir_path).await?;
     fs::write(&file_path, content).await?;
 
     Ok(file_path)

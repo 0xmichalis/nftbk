@@ -23,8 +23,6 @@ pub struct NFTMetadata {
     #[serde(rename = "thumbnailUri")]
     pub thumbnail_uri: Option<String>,
     pub formats: Option<Vec<NFTFormat>>,
-    #[serde(flatten)]
-    pub extra: serde_json::Value,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
