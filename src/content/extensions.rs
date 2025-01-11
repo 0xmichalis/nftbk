@@ -52,6 +52,10 @@ pub async fn fetch_and_save_additional_content(
     token_id: &str,
     _output_path: &Path,
 ) -> Result<()> {
+    println!(
+        "Fetching additional content for {} contract {} token {}",
+        chain, contract, token_id
+    );
     match (chain, contract, token_id) {
         (
             "ethereum",

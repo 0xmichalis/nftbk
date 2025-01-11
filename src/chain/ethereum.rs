@@ -133,10 +133,10 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
             println!("Downloading image from {}", image_url);
             fetch_and_save_content(
                 image_url,
-                output_path,
                 "ethereum",
-                &token_id.to_string(),
                 &format!("{:#x}", contract_addr),
+                &token_id.to_string(),
+                output_path,
                 Some("image"),
             )
             .await?;
@@ -146,10 +146,10 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
             println!("Downloading animation from {}", animation_url);
             fetch_and_save_content(
                 animation_url,
-                output_path,
                 "ethereum",
-                &token_id.to_string(),
                 &format!("{:#x}", contract_addr),
+                &token_id.to_string(),
+                output_path,
                 Some("animation"),
             )
             .await?;

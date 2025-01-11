@@ -83,10 +83,10 @@ async fn download_html_resources(
 
 async fn fetch_and_save_main_content(
     url: &str,
-    output_path: &Path,
     chain: &str,
-    token_id: &str,
     contract_address: &str,
+    token_id: &str,
+    output_path: &Path,
     file_name: Option<&str>,
 ) -> Result<PathBuf> {
     // Try to extract filename from URL first, then fallback to provided file_name, then "content"
@@ -150,19 +150,19 @@ async fn fetch_and_save_main_content(
 
 pub async fn fetch_and_save_content(
     url: &str,
-    output_path: &Path,
     chain: &str,
-    token_id: &str,
     contract_address: &str,
+    token_id: &str,
+    output_path: &Path,
     file_name: Option<&str>,
 ) -> Result<PathBuf> {
     // Download main content
     let file_path = fetch_and_save_main_content(
         url,
-        output_path,
         chain,
-        token_id,
         contract_address,
+        token_id,
+        output_path,
         file_name,
     )
     .await?;

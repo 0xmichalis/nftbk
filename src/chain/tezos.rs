@@ -160,10 +160,10 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
                     println!("Downloading content from {}", url);
                     fetch_and_save_content(
                         &url,
-                        output_path,
                         "tezos",
-                        &contract.token_id,
                         &contract.address,
+                        &contract.token_id,
+                        output_path,
                         Some(&file_name),
                     )
                     .await?;
