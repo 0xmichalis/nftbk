@@ -85,7 +85,7 @@ pub async fn fetch_and_save_content(
     output_path: &Path,
     chain: &str,
     token_id: &str,
-    contract: &str,
+    contract_address: &str,
     file_name: Option<&str>,
 ) -> Result<PathBuf> {
     // Try to extract filename from URL first, then fallback to provided file_name, then "content"
@@ -100,7 +100,10 @@ pub async fn fetch_and_save_content(
         .or_else(|| file_name.map(|s| s.to_string()))
         .unwrap_or_else(|| "content".to_string());
 
-    let dir_path = output_path.join(chain).join(contract).join(token_id);
+    let dir_path = output_path
+        .join(chain)
+        .join(contract_address)
+        .join(token_id);
     let file_path = dir_path.join(&file_name);
 
     // Return early if file already exists
