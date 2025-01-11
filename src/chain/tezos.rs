@@ -169,6 +169,15 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
                     .await?;
                 }
             }
+
+            // Process any additional content after downloading all files
+            crate::content::extensions::fetch_and_save_additional_content(
+                "tezos",
+                &contract.address,
+                &contract.token_id,
+                output_path,
+            )
+            .await?;
         }
     }
 

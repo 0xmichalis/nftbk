@@ -81,7 +81,7 @@ async fn download_html_resources(
     Ok(modified_html)
 }
 
-async fn fetch_and_save_main_content(
+pub async fn fetch_and_save_content(
     url: &str,
     chain: &str,
     contract_address: &str,
@@ -144,32 +144,6 @@ async fn fetch_and_save_main_content(
     } else {
         println!("File already exists at {}", file_path.display());
     }
-
-    Ok(file_path)
-}
-
-pub async fn fetch_and_save_content(
-    url: &str,
-    chain: &str,
-    contract_address: &str,
-    token_id: &str,
-    output_path: &Path,
-    file_name: Option<&str>,
-) -> Result<PathBuf> {
-    // Download main content
-    let file_path = fetch_and_save_main_content(
-        url,
-        chain,
-        contract_address,
-        token_id,
-        output_path,
-        file_name,
-    )
-    .await?;
-
-    // Extend content based on chain/contract/token
-    extensions::fetch_and_save_additional_content(chain, contract_address, token_id, output_path)
-        .await?;
 
     Ok(file_path)
 }

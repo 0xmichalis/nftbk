@@ -74,15 +74,25 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
         .collect::<Vec<_>>();
 
     for contract in contracts {
-        let contract_addr = contract.address.parse::<Address>()?;
+        println!("Processing contract {}", contract.address);
+        let contract_addr = match contract.address.parse::<Address>() {
+            Ok(addr) => addr,
+            Err(e) => {
+                println!("Failed to parse contract address: {}", e);
+                continue;
+            }
+        };
         let abi: ethers::abi::Abi = serde_json::from_str(NFT_ABI)?;
         let contract_instance = Contract::new(contract_addr, abi, provider.clone().into());
 
-        println!("Processing contract {}", contract_addr);
-
         // Parse token ID into U256
-        let token_id = ethers::types::U256::from_dec_str(&contract.token_id)
-            .context("Failed to parse token ID")?;
+        let token_id = match ethers::types::U256::from_dec_str(&contract.token_id) {
+            Ok(id) => id,
+            Err(e) => {
+                println!("Failed to parse token ID: {}", e);
+                continue;
+            }
+        };
 
         // Try both tokenURI and uri functions
         let token_uri = match contract_instance
@@ -154,6 +164,15 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
             )
             .await?;
         }
+
+        // Process any additional content after downloading all files
+        crate::content::extensions::fetch_and_save_additional_content(
+            "ethereum",
+            &format!("{:#x}", contract_addr),
+            &token_id.to_string(),
+            output_path,
+        )
+        .await?;
     }
 
     Ok(())
