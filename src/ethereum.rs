@@ -5,11 +5,9 @@ use ethers::{
     types::Address,
 };
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
 use tokio::fs;
-use url::Url;
 
-use crate::url::get_url;
+use crate::{content::fetch_and_save_content, url::get_url};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -27,34 +25,6 @@ pub struct NFTMetadata {
 pub struct NFTAttribute {
     pub trait_type: String,
     pub value: serde_json::Value,
-}
-
-pub async fn fetch_and_save_content(
-    url: &str,
-    output_path: &Path,
-    chain: &str,
-    token_id: &str,
-    contract: &str,
-    content_type: &str,
-) -> Result<PathBuf> {
-    let content_url = get_url(url);
-    let client = reqwest::Client::new();
-    let response = client.get(&content_url).send().await?;
-    let content = response.bytes().await?;
-
-    let url = Url::parse(url)?;
-    let file_name = url
-        .path_segments()
-        .and_then(|segments| segments.last())
-        .unwrap_or(content_type);
-
-    let dir_path = output_path.join(chain).join(contract).join(token_id);
-    fs::create_dir_all(&dir_path).await?;
-
-    let file_path = dir_path.join(file_name);
-    fs::write(&file_path, content).await?;
-
-    Ok(file_path)
 }
 
 // ERC721/ERC1155 minimal ABI for token URI and balance
@@ -159,7 +129,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
                 "ethereum",
                 &token_id.to_string(),
                 &contract_addr.to_string(),
-                "image",
+                Some("image"),
             )
             .await?;
         }
@@ -172,7 +142,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
                 "ethereum",
                 &token_id.to_string(),
                 &contract_addr.to_string(),
-                "animation",
+                Some("animation"),
             )
             .await?;
         }

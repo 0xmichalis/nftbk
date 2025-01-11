@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
-use std::path::{Path, PathBuf};
 use tezos_contract::ContractFetcher;
 use tezos_core::types::number::Int;
 use tezos_michelson::michelson::data;
@@ -9,7 +8,7 @@ use tezos_rpc::client::TezosRpc;
 use tezos_rpc::http::default::HttpClient;
 use tokio::fs;
 
-use crate::url::get_url;
+use crate::{content::fetch_and_save_content, url::get_url};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -39,27 +38,6 @@ pub struct NFTFormat {
 pub struct NFTAttribute {
     pub trait_type: String,
     pub value: serde_json::Value,
-}
-
-async fn fetch_and_save_content(
-    url: &str,
-    output_path: &Path,
-    token_id: &str,
-    contract: &str,
-    file_name: &str,
-) -> Result<PathBuf> {
-    let content_url = get_url(url);
-    let client = reqwest::Client::new();
-    let response = client.get(&content_url).send().await?;
-    let content = response.bytes().await?;
-
-    let dir_path = output_path.join("tezos").join(contract).join(token_id);
-    fs::create_dir_all(&dir_path).await?;
-
-    let file_path = dir_path.join(file_name);
-    fs::write(&file_path, content).await?;
-
-    Ok(file_path)
 }
 
 #[derive(Debug)]
@@ -186,9 +164,10 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
                     fetch_and_save_content(
                         &url,
                         output_path,
+                        "tezos",
                         &contract.token_id.to_string(),
                         &contract.address,
-                        &file_name,
+                        Some(&file_name),
                     )
                     .await?;
                 }

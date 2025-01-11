@@ -3,6 +3,7 @@ use clap::Parser;
 use std::path::PathBuf;
 use tokio::fs;
 
+mod content;
 mod ethereum;
 mod tezos;
 mod url;
