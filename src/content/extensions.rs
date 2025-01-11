@@ -4,7 +4,7 @@ use std::io::Read;
 use std::path::Path;
 use tokio::fs;
 
-async fn extend_crocket_challenge_content(
+async fn extend_croquet_challenge_content(
     output_path: &Path,
     contract: &str,
     token_id: &str,
@@ -74,7 +74,7 @@ pub async fn fetch_and_save_additional_content(
             "ethereum",
             "0x2a86c5466f088caebf94e071a77669bae371cd87",
             "25811853076941608055270457512038717433705462539422789705262203111341130500780",
-        ) => extend_crocket_challenge_content(_output_path, contract, token_id).await,
+        ) => extend_croquet_challenge_content(_output_path, contract, token_id).await,
         // Default case - no extension needed
         _ => Ok(()),
     }
