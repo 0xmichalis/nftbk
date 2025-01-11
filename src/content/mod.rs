@@ -7,7 +7,7 @@ use tokio::fs;
 pub mod url;
 use self::url::get_url;
 
-pub async fn download_html_resources(
+async fn download_html_resources(
     html_content: &str,
     base_url: &str,
     dir_path: &Path,
