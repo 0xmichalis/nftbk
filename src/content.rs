@@ -52,7 +52,10 @@ async fn download_html_resources(
                 match client.get(&absolute_url).send().await {
                     Ok(response) => {
                         let content = response.bytes().await?;
-                        fs::write(dir_path.join(resource_url), content).await?;
+                        // Clean up resource URL by removing query parameters
+                        let clean_resource_url =
+                            resource_url.split('?').next().unwrap_or(resource_url);
+                        fs::write(dir_path.join(clean_resource_url), content).await?;
                     }
                     Err(e) => {
                         println!(
