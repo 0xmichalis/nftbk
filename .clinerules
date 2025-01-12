@@ -10,6 +10,7 @@
 - Ensure the code is formatted
 - Any clippy warnings are addressed
 - When writing an if/else clause, prefer putting the clause with most of the code in the else part to keep the whole conditional more readable
+- Avoid arrowized code when possible
 
 ## Security Practices
 
