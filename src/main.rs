@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs;
 
@@ -23,20 +24,24 @@ struct Args {
 
 #[derive(Debug, Deserialize)]
 struct Config {
-    contracts: Contracts,
+    chains: ChainConfig,
+    tokens: TokenConfig,
 }
 
 #[derive(Debug, Deserialize)]
-struct Contracts {
-    ethereum: Vec<String>,
-    tezos: Vec<String>,
+struct ChainConfig {
+    rpc: HashMap<String, String>,
+    is_evm: HashMap<String, bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TokenConfig {
+    #[serde(flatten)]
+    chains: HashMap<String, Vec<String>>,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Load environment variables from .env file if it exists
-    dotenv::dotenv().ok();
-
     // Initialize logging
     tracing_subscriber::fmt::init();
 
@@ -58,13 +63,30 @@ async fn main() -> Result<()> {
         .context("Failed to read config file")?;
     let config: Config = toml::from_str(&config_content).context("Failed to parse config file")?;
 
-    // Process chains based on config
-    if !config.contracts.ethereum.is_empty() {
-        chain::ethereum::process_nfts(config.contracts.ethereum.clone(), &output_path).await?;
-    }
+    // Process chains from config
+    for (chain_name, contracts) in &config.tokens.chains {
+        if contracts.is_empty() {
+            tracing::warn!("No contracts configured for chain {}", chain_name);
+            continue;
+        }
 
-    if !config.contracts.tezos.is_empty() {
-        chain::tezos::process_nfts(config.contracts.tezos.clone(), &output_path).await?;
+        let rpc_url = config
+            .chains
+            .rpc
+            .get(chain_name)
+            .context(format!("No RPC URL configured for chain {}", chain_name))?;
+
+        let is_evm = config
+            .chains
+            .is_evm
+            .get(chain_name)
+            .context(format!("No chain type configured for chain {}", chain_name))?;
+
+        if *is_evm {
+            chain::evm::process_nfts(chain_name, rpc_url, contracts.clone(), &output_path).await?;
+        } else {
+            chain::tezos::process_nfts(rpc_url, contracts.clone(), &output_path).await?;
+        }
     }
 
     Ok(())

@@ -1,10 +1,7 @@
 use anyhow::{Context, Result};
-use ethers::{
-    contract::Contract,
-    providers::{Http, Provider},
-    types::Address,
-};
+use ethers::prelude::*;
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use tokio::fs;
 
 use crate::content::{fetch_and_save_content, url::get_url};
@@ -58,9 +55,14 @@ struct ContractWithToken {
     token_id: String,
 }
 
-pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path) -> Result<()> {
-    let provider =
-        Provider::<Http>::try_from(std::env::var("ETH_RPC_URL").context("ETH_RPC_URL not set")?)?;
+pub async fn process_nfts(
+    chain_name: &str,
+    rpc_url: &str,
+    contracts: Vec<String>,
+    output_path: &Path,
+) -> Result<()> {
+    let provider = Provider::<Http>::try_from(rpc_url)
+        .context(format!("Failed to connect to {} RPC", chain_name))?;
 
     let contracts = contracts
         .into_iter()
@@ -74,11 +76,11 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
         .collect::<Vec<_>>();
 
     for contract in contracts {
-        println!("Processing contract {}", contract.address);
+        println!("Processing contract {} on {}", contract.address, chain_name);
         let contract_addr = match contract.address.parse::<Address>() {
             Ok(addr) => addr,
             Err(e) => {
-                println!("Failed to parse contract address: {}", e);
+                println!("Failed to parse contract address on {}: {}", chain_name, e);
                 continue;
             }
         };
@@ -128,7 +130,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
 
         // Save metadata
         let dir_path = output_path
-            .join("ethereum")
+            .join(chain_name)
             .join(format!("{:#x}", contract_addr))
             .join(token_id.to_string());
         fs::create_dir_all(&dir_path).await?;
@@ -143,7 +145,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
             println!("Downloading image from {}", image_url);
             fetch_and_save_content(
                 image_url,
-                "ethereum",
+                chain_name,
                 &format!("{:#x}", contract_addr),
                 &token_id.to_string(),
                 output_path,
@@ -156,7 +158,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
             println!("Downloading animation from {}", animation_url);
             fetch_and_save_content(
                 animation_url,
-                "ethereum",
+                chain_name,
                 &format!("{:#x}", contract_addr),
                 &token_id.to_string(),
                 output_path,
@@ -167,7 +169,7 @@ pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path)
 
         // Process any additional content after downloading all files
         crate::content::extensions::fetch_and_save_additional_content(
-            "ethereum",
+            chain_name,
             &format!("{:#x}", contract_addr),
             &token_id.to_string(),
             output_path,

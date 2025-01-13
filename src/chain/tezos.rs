@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use tezos_contract::ContractFetcher;
@@ -90,10 +90,13 @@ async fn get_ipfs_uri(
     }
 }
 
-pub async fn process_nfts(contracts: Vec<String>, output_path: &std::path::Path) -> Result<()> {
+pub async fn process_nfts(
+    rpc_url: &str,
+    contracts: Vec<String>,
+    output_path: &std::path::Path,
+) -> Result<()> {
     // Initialize Tezos RPC client
-    let rpc_url = std::env::var("TEZOS_RPC_URL").context("TEZOS_RPC_URL not set")?;
-    let rpc: TezosRpc<HttpClient> = TezosRpc::new(rpc_url);
+    let rpc: TezosRpc<HttpClient> = TezosRpc::new(rpc_url.to_string());
 
     let contracts = contracts
         .into_iter()

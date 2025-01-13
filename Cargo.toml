@@ -21,7 +21,6 @@ tezos-michelson = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
 tezos-rpc = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
 tracing = "0.1"
 tracing-subscriber = "0.3"
-dotenv = "0.15"
 hex = "0.4.3"
 scraper = "0.17"
 flate2 = "1.0"

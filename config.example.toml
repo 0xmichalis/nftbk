@@ -1,0 +1,19 @@
+[chains]
+
+[chains.rpc]
+ethereum = "https://mainnet.infura.io/v3/your_key"
+tezos = "https://mainnet.smartpy.io"
+
+[chains.is_evm]
+ethereum = true
+tezos = false
+
+[tokens]
+ethereum = [
+    "0x3D7E6A293C5ca4cD6721Df1A99683802331793C7:26",
+    "0x1D8629438f0Ce0DE787D48BEb3F153884B2F370d:12",
+    "0x2A86C5466f088caEbf94e071a77669BAe371CD87:25811853076941608055270457512038717433705462539422789705262203111341130500780"
+]
+tezos = [
+    "KT1DmEFfeqEC3nEx6bpWKqjNY8FF8RFrR3Gc:28"
+]

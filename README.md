@@ -9,27 +9,28 @@ CLI tool for backing up NFT metadata and content from Ethereum and Tezos NFT con
 
 ## Configuration
 
-1. Copy `config.toml.example` to `config.toml` file and specify which tokens (contract address + token id) to backup. 
+1. Copy `config.example.toml` to `config.toml` file and update as needed. 
 
 Example config:
 ```toml
-# List of NFT contract addresses to fetch metadata and content from
-[contracts]
+[chains]
 
-# Tokens in format: "contract_address:token_id"
+[chains.rpc]
+ethereum = "https://mainnet.infura.io/v3/your_key"
+tezos = "https://mainnet.smartpy.io"
+
+[chains.is_evm]
+ethereum = true
+tezos = false
+
+[tokens]
 ethereum = [
-    '0x3D7E6A293C5ca4cD6721Df1A99683802331793C7:26',
-    '0x1D8629438f0Ce0DE787D48BEb3F153884B2F370d:12'
+    "0x3D7E6A293C5ca4cD6721Df1A99683802331793C7:26",
+    "0x1D8629438f0Ce0DE787D48BEb3F153884B2F370d:12"
 ]
 tezos = [
-    'KT1DmEFfeqEC3nEx6bpWKqjNY8FF8RFrR3Gc:28'
+    "KT1DmEFfeqEC3nEx6bpWKqjNY8FF8RFrR3Gc:28"
 ]
-```
-
-2. Copy `.env.example` to `.env` and fill out as needed.
-```bash
-cp .env.example .env
-# Update .env accordingly ...
 ```
 
 ## Usage
