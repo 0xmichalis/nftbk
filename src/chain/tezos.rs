@@ -28,7 +28,7 @@ pub struct NFTMetadata {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTFormat {
     pub uri: String,
-    #[serde(rename = "fileName")]
+    #[serde(rename = "fileName", default)]
     pub file_name: String,
 }
 
@@ -132,13 +132,21 @@ pub async fn process_nfts(
             fs::write(&metadata_filename, serde_json::to_string_pretty(&metadata)?).await?;
             println!("Saved metadata to {}", metadata_filename.display());
 
+            // Get NFT name to use as fallback filename
+            let nft_name = metadata.name.as_deref().unwrap_or("untitled");
+
             // Collect all URIs that need to be downloaded
             let mut urls_to_download = Vec::new();
 
             // Add URIs from formats array with their filenames
             if let Some(formats) = &metadata.formats {
                 for format in formats {
-                    urls_to_download.push((format.uri.clone(), format.file_name.clone()));
+                    let file_name = if format.file_name.is_empty() {
+                        nft_name.to_string()
+                    } else {
+                        format.file_name.clone()
+                    };
+                    urls_to_download.push((format.uri.clone(), file_name));
                 }
             }
 
