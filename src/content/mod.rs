@@ -181,7 +181,7 @@ pub async fn fetch_and_save_content(
     } else {
         // Ensure HTML files have .html extension
         if !file_path.to_string_lossy().ends_with(".html") {
-            file_path = file_path.join(".html");
+            file_path = file_path.with_extension("html");
         }
         // For HTML content, download associated resources
         println!("Warning: Downloading HTML content from {}. The saved file may be incomplete as it might depend on additional resources or backend servers.", url);
