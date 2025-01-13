@@ -24,14 +24,8 @@ struct Args {
 
 #[derive(Debug, Deserialize)]
 struct Config {
-    chains: ChainConfig,
+    chains: HashMap<String, String>,
     tokens: TokenConfig,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChainConfig {
-    rpc: HashMap<String, String>,
-    is_evm: HashMap<String, bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,17 +66,10 @@ async fn main() -> Result<()> {
 
         let rpc_url = config
             .chains
-            .rpc
             .get(chain_name)
             .context(format!("No RPC URL configured for chain {}", chain_name))?;
 
-        let is_evm = config
-            .chains
-            .is_evm
-            .get(chain_name)
-            .context(format!("No chain type configured for chain {}", chain_name))?;
-
-        if *is_evm {
+        if chain_name != "tezos" {
             chain::evm::process_nfts(chain_name, rpc_url, contracts.clone(), &output_path).await?;
         } else {
             chain::tezos::process_nfts(rpc_url, contracts.clone(), &output_path).await?;

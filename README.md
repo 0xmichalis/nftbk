@@ -14,14 +14,8 @@ CLI tool for backing up NFT metadata and content from Ethereum and Tezos NFT con
 Example config:
 ```toml
 [chains]
-
-[chains.rpc]
 ethereum = "https://mainnet.infura.io/v3/your_key"
 tezos = "https://mainnet.smartpy.io"
-
-[chains.is_evm]
-ethereum = true
-tezos = false
 
 [tokens]
 ethereum = [
