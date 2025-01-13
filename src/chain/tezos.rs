@@ -141,27 +141,30 @@ pub async fn process_nfts(
             // Add URIs from formats array with their filenames
             if let Some(formats) = &metadata.formats {
                 for format in formats {
-                    let file_name = if format.file_name.is_empty() {
-                        nft_name.to_string()
-                    } else {
-                        format.file_name.clone()
-                    };
-                    urls_to_download.push((format.uri.clone(), file_name));
+                    if !format.uri.is_empty() {
+                        let file_name = if format.file_name.is_empty() {
+                            nft_name.to_string()
+                        } else {
+                            format.file_name.clone()
+                        };
+                        urls_to_download.push((format.uri.clone(), file_name));
+                    }
                 }
             }
 
-            if let Some(url) = &metadata.image {
-                urls_to_download.push((url.clone(), "image".to_string()));
-            }
-            if let Some(url) = &metadata.artifact_uri {
-                urls_to_download.push((url.clone(), "artifact".to_string()));
-            }
-            if let Some(url) = &metadata.display_uri {
-                urls_to_download.push((url.clone(), "display".to_string()));
-            }
-            if let Some(url) = &metadata.thumbnail_uri {
-                urls_to_download.push((url.clone(), "thumbnail".to_string()));
-            }
+            // Helper function to add non-empty URLs
+            let mut add_if_not_empty = |url: &Option<String>, name: &str| {
+                if let Some(url) = url {
+                    if !url.is_empty() {
+                        urls_to_download.push((url.clone(), name.to_string()));
+                    }
+                }
+            };
+
+            add_if_not_empty(&metadata.image, "image");
+            add_if_not_empty(&metadata.artifact_uri, "artifact");
+            add_if_not_empty(&metadata.display_uri, "display");
+            add_if_not_empty(&metadata.thumbnail_uri, "thumbnail");
 
             // Download all URLs, keeping track of what we've downloaded to avoid duplicates
             let mut downloaded = std::collections::HashSet::new();
