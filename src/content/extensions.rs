@@ -9,6 +9,11 @@ async fn extend_croquet_challenge_content(
     contract: &str,
     token_id: &str,
 ) -> Result<()> {
+    println!(
+        "Fetching additional content for Ethereum contract {} token {}",
+        contract, token_id
+    );
+
     // Create Build directory
     let build_dir = output_path
         .join("ethereum")
@@ -65,10 +70,6 @@ pub async fn fetch_and_save_additional_content(
     token_id: &str,
     _output_path: &Path,
 ) -> Result<()> {
-    println!(
-        "Fetching additional content for {} contract {} token {}",
-        chain, contract, token_id
-    );
     match (chain, contract, token_id) {
         (
             "ethereum",
