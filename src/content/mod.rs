@@ -48,22 +48,21 @@ async fn download_html_resources(
                     fs::create_dir_all(dir_path.join(parent)).await?;
                 }
 
+                // Clean up resource URL by removing query parameters
+                let clean_resource_url = resource_url.split('?').next().unwrap_or(resource_url);
+                let resource_path = dir_path.join(clean_resource_url);
+
+                // Skip if file already exists
+                if fs::try_exists(&resource_path).await? {
+                    println!("Resource already exists at {}", resource_path.display());
+                    continue;
+                }
+
                 // Download and save the resource
                 println!("Downloading resource: {}", absolute_url);
                 let client = reqwest::Client::new();
                 match client.get(&absolute_url).send().await {
                     Ok(response) => {
-                        // Clean up resource URL by removing query parameters
-                        let clean_resource_url =
-                            resource_url.split('?').next().unwrap_or(resource_url);
-                        let resource_path = dir_path.join(clean_resource_url);
-
-                        // Skip if file already exists
-                        if fs::try_exists(&resource_path).await? {
-                            println!("Resource already exists at {}", resource_path.display());
-                            continue;
-                        }
-
                         let content = response.bytes().await?;
                         fs::write(resource_path, content).await?;
                     }
@@ -98,7 +97,7 @@ async fn fetch_http_content(url: &str) -> Result<(Vec<u8>, bool)> {
     Ok((content, is_html))
 }
 
-pub async fn fetch_and_save_content(
+async fn get_filename(
     url: &str,
     chain: &str,
     contract_address: &str,
@@ -110,15 +109,6 @@ pub async fn fetch_and_save_content(
         .join(chain)
         .join(contract_address)
         .join(token_id);
-
-    // Get content based on URL type
-    let (content, is_html) = if url.starts_with("data:") {
-        let (content, _) = url::get_data_url_content(url)?;
-        (content, false) // Data URLs are treated as binary content
-    } else {
-        let content_url = get_url(url);
-        fetch_http_content(&content_url).await?
-    };
 
     // Determine filename
     let file_name = if let Some(name) = file_name {
@@ -145,28 +135,60 @@ pub async fn fetch_and_save_content(
             .unwrap_or_else(|| "content".to_string())
     };
 
-    let mut file_path = dir_path.join(&file_name);
+    let file_path = dir_path.join(&file_name);
 
-    // Ensure HTML files have .html extension
-    if is_html && !file_path.to_string_lossy().ends_with(".html") {
-        file_path = dir_path.join(format!("{}.html", file_name));
+    Ok(file_path)
+}
+
+pub async fn fetch_and_save_content(
+    url: &str,
+    chain: &str,
+    contract_address: &str,
+    token_id: &str,
+    output_path: &Path,
+    file_name: Option<&str>,
+) -> Result<PathBuf> {
+    let mut file_path = get_filename(
+        url,
+        chain,
+        contract_address,
+        token_id,
+        output_path,
+        file_name,
+    )
+    .await?;
+
+    // Check if file exists before downloading
+    if fs::try_exists(&file_path).await? {
+        println!("File already exists at {}", file_path.display());
+        return Ok(file_path);
     }
 
-    // Save content if file doesn't exist
-    if !fs::try_exists(&file_path).await? {
-        fs::create_dir_all(&dir_path).await?;
-
-        if is_html {
-            // For HTML content, download associated resources
-            println!("Warning: Downloading HTML content from {}. The saved file may be incomplete as it might depend on additional resources or backend servers.", url);
-            let content_str = String::from_utf8_lossy(&content);
-            let modified_html = download_html_resources(&content_str, url, &dir_path).await?;
-            fs::write(&file_path, modified_html).await?;
-        } else {
-            fs::write(&file_path, content).await?;
-        }
+    // Get content based on URL type
+    let (content, is_html) = if url.starts_with("data:") {
+        let (content, _) = url::get_data_url_content(url)?;
+        (content, false) // Data URLs are treated as binary content
     } else {
-        println!("File already exists at {}", file_path.display());
+        let content_url = get_url(url);
+        fetch_http_content(&content_url).await?
+    };
+
+    // Create directory and save content
+    fs::create_dir_all(file_path.parent().unwrap()).await?;
+
+    if !is_html {
+        fs::write(&file_path, content).await?;
+    } else {
+        // Ensure HTML files have .html extension
+        if !file_path.to_string_lossy().ends_with(".html") {
+            file_path = file_path.join(".html");
+        }
+        // For HTML content, download associated resources
+        println!("Warning: Downloading HTML content from {}. The saved file may be incomplete as it might depend on additional resources or backend servers.", url);
+        let content_str = String::from_utf8_lossy(&content);
+        let modified_html =
+            download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
+        fs::write(&file_path, modified_html).await?;
     }
 
     Ok(file_path)
