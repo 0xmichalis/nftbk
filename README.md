@@ -9,7 +9,7 @@ CLI tool for backing up NFT metadata and content from Ethereum and Tezos NFT con
 
 ## Configuration
 
-1. Copy `config.example.toml` to `config.toml` file and update as needed. 
+Copy `config.example.toml` to `config.toml` file and update as needed.
 
 Example config:
 ```toml
