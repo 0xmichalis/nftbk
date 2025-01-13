@@ -81,6 +81,23 @@ async fn download_html_resources(
     Ok(modified_html)
 }
 
+async fn fetch_http_content(url: &str) -> Result<(Vec<u8>, bool)> {
+    let client = reqwest::Client::new();
+    let response = client.get(url).send().await?;
+
+    // Check content type
+    let content_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown/unknown");
+
+    let is_html = content_type.contains("text/html") || content_type.contains("application/xhtml");
+    let content = response.bytes().await?.to_vec();
+
+    Ok((content, is_html))
+}
+
 pub async fn fetch_and_save_content(
     url: &str,
     chain: &str,
@@ -89,57 +106,64 @@ pub async fn fetch_and_save_content(
     output_path: &Path,
     file_name: Option<&str>,
 ) -> Result<PathBuf> {
-    // Try to extract filename from URL first, then fallback to provided file_name, then "content"
-    let file_name = Url::parse(url)
-        .ok()
-        .and_then(|url| {
-            url.path_segments()?
-                .filter(|s| !s.is_empty())
-                .last()
-                .map(|s| s.to_string())
-        })
-        .or_else(|| file_name.map(|s| s.to_string()))
-        .unwrap_or_else(|| "content".to_string());
-
     let dir_path = output_path
         .join(chain)
         .join(contract_address)
         .join(token_id);
+
+    // Get content based on URL type
+    let (content, is_html) = if url.starts_with("data:") {
+        let (content, _) = url::get_data_url_content(url)?;
+        (content, false) // Data URLs are treated as binary content
+    } else {
+        let content_url = get_url(url);
+        fetch_http_content(&content_url).await?
+    };
+
+    // Determine filename
+    let file_name = if let Some(name) = file_name {
+        name.to_string()
+    } else if url.starts_with("data:") {
+        // For data URLs, use content type as filename
+        let mime_type = url
+            .split(';')
+            .next()
+            .and_then(|s| s.split('/').last())
+            .unwrap_or("bin")
+            .to_string();
+        format!("content.{}", mime_type)
+    } else {
+        // For regular URLs, try to extract filename from path
+        Url::parse(url)
+            .ok()
+            .and_then(|url| {
+                url.path_segments()?
+                    .filter(|s| !s.is_empty())
+                    .last()
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| "content".to_string())
+    };
+
     let mut file_path = dir_path.join(&file_name);
 
-    // Check if file exists
+    // Ensure HTML files have .html extension
+    if is_html && !file_path.to_string_lossy().ends_with(".html") {
+        file_path = dir_path.join(format!("{}.html", file_name));
+    }
+
+    // Save content if file doesn't exist
     if !fs::try_exists(&file_path).await? {
-        // File doesn't exist, proceed with download
-        let content_url = get_url(url);
-        let client = reqwest::Client::new();
-        let response = client.get(&content_url).send().await?;
+        fs::create_dir_all(&dir_path).await?;
 
-        // Check content type
-        let content_type = response
-            .headers()
-            .get(reqwest::header::CONTENT_TYPE)
-            .and_then(|h| h.to_str().ok())
-            .unwrap_or("unknown/unknown");
-
-        let is_html =
-            content_type.contains("text/html") || content_type.contains("application/xhtml");
-
-        // Ensure HTML files have .html extension
-        if is_html && !file_path.to_string_lossy().ends_with(".html") {
-            file_path = dir_path.join(format!("{}.html", file_name));
-        }
-
-        let content = response.bytes().await?;
-
-        if !is_html {
-            fs::write(&file_path, content).await?;
-        } else {
+        if is_html {
             // For HTML content, download associated resources
             println!("Warning: Downloading HTML content from {}. The saved file may be incomplete as it might depend on additional resources or backend servers.", url);
-            fs::create_dir_all(&dir_path).await?;
             let content_str = String::from_utf8_lossy(&content);
             let modified_html = download_html_resources(&content_str, url, &dir_path).await?;
             fs::write(&file_path, modified_html).await?;
+        } else {
+            fs::write(&file_path, content).await?;
         }
     } else {
         println!("File already exists at {}", file_path.display());

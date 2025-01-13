@@ -121,12 +121,17 @@ pub async fn process_nfts(
 
         println!("Fetching token {} metadata from {}", &token_id, token_uri);
 
-        // Convert IPFS URLs to gateway URL if needed
-        let metadata_url = get_url(&token_uri);
-
-        // Fetch and save metadata
-        let client = reqwest::Client::new();
-        let metadata: NFTMetadata = client.get(&metadata_url).send().await?.json().await?;
+        // Handle metadata URL based on type
+        let metadata: NFTMetadata = if token_uri.starts_with("data:") {
+            // For data URLs, decode content directly
+            let (content, _) = crate::content::url::get_data_url_content(&token_uri)?;
+            serde_json::from_slice(&content)?
+        } else {
+            // For other URLs, fetch via HTTP
+            let metadata_url = get_url(&token_uri);
+            let client = reqwest::Client::new();
+            client.get(&metadata_url).send().await?.json().await?
+        };
 
         // Save metadata
         let dir_path = output_path
