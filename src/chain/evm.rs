@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs;
 
-use crate::content::{fetch_and_save_content, url::get_url};
+use crate::content::fetch_and_save_content;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -119,31 +119,20 @@ pub async fn process_nfts(
             }
         };
 
-        println!("Fetching token {} metadata from {}", &token_id, token_uri);
-
-        // Handle metadata URL based on type
-        let metadata: NFTMetadata = if token_uri.starts_with("data:") {
-            // For data URLs, decode content directly
-            let (content, _) = crate::content::url::get_data_url_content(&token_uri)?;
-            serde_json::from_slice(&content)?
-        } else {
-            // For other URLs, fetch via HTTP
-            let metadata_url = get_url(&token_uri);
-            let client = reqwest::Client::new();
-            client.get(&metadata_url).send().await?.json().await?
-        };
-
         // Save metadata
-        let dir_path = output_path
-            .join(chain_name)
-            .join(format!("{:#x}", contract_addr))
-            .join(token_id.to_string());
-        fs::create_dir_all(&dir_path).await?;
-        fs::write(
-            dir_path.join("metadata.json"),
-            serde_json::to_string_pretty(&metadata)?,
-        )
-        .await?;
+        println!("Fetching metadata from {}", token_uri);
+        let contract_address = format!("{:#x}", contract_addr);
+        let token_id_str = token_id.to_string();
+        let metadata_content = fetch_and_save_content(
+            &token_uri,
+            chain_name,
+            &contract_address,
+            &token_id_str,
+            output_path,
+            Some("metadata.json"),
+        );
+        let metadata_content_str = fs::read_to_string(metadata_content.await?).await?;
+        let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
 
         // Save linked content
         if let Some(image_url) = &metadata.image {
@@ -151,8 +140,8 @@ pub async fn process_nfts(
             fetch_and_save_content(
                 image_url,
                 chain_name,
-                &format!("{:#x}", contract_addr),
-                &token_id.to_string(),
+                &contract_address,
+                &token_id_str,
                 output_path,
                 Some("image"),
             )
@@ -164,8 +153,8 @@ pub async fn process_nfts(
             fetch_and_save_content(
                 animation_url,
                 chain_name,
-                &format!("{:#x}", contract_addr),
-                &token_id.to_string(),
+                &contract_address,
+                &token_id_str,
                 output_path,
                 Some("animation"),
             )

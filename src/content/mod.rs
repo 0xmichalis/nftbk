@@ -112,6 +112,7 @@ pub async fn fetch_and_save_content(
     }
     // TODO: Check whether the file already exists before overwriting
     // if the file is HTML.
+    println!("Saving {}", file_path.display());
     fs::write(&file_path, &content).await?;
 
     if is_html {

@@ -8,7 +8,7 @@ use tezos_rpc::client::TezosRpc;
 use tezos_rpc::http::default::HttpClient;
 use tokio::fs;
 
-use crate::content::{fetch_and_save_content, url::get_url};
+use crate::content::fetch_and_save_content;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -115,22 +115,16 @@ pub async fn process_nfts(
         if let Some(uri) = get_ipfs_uri(&rpc, &contract).await? {
             println!("Fetching metadata from {}", uri);
 
-            // Convert IPFS URLs to gateway URL if needed
-            let metadata_url = get_url(&uri);
-
-            // Fetch metadata
-            let client = reqwest::Client::new();
-            let metadata: NFTMetadata = client.get(&metadata_url).send().await?.json().await?;
-
-            // Save metadata
-            let dir_path = output_path
-                .join("tezos")
-                .join(&contract.address)
-                .join(&contract.token_id);
-            let metadata_filename = dir_path.join("metadata.json");
-            fs::create_dir_all(&dir_path).await?;
-            fs::write(&metadata_filename, serde_json::to_string_pretty(&metadata)?).await?;
-            println!("Saved metadata to {}", metadata_filename.display());
+            let metadata_content = fetch_and_save_content(
+                &uri,
+                "tezos",
+                &contract.address,
+                &contract.token_id,
+                output_path,
+                Some("metadata.json"),
+            );
+            let metadata_content_str = fs::read_to_string(metadata_content.await?).await?;
+            let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
 
             // Get NFT name to use as fallback filename
             let nft_name = metadata.name.as_deref().unwrap_or("untitled");
