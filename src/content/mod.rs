@@ -106,21 +106,19 @@ pub async fn fetch_and_save_content(
 
     // Create directory and save content
     fs::create_dir_all(file_path.parent().unwrap()).await?;
+    // Ensure HTML files have .html extension
+    if is_html && !file_path.to_string_lossy().ends_with(".html") {
+        file_path = file_path.with_extension("html");
+    }
+    // TODO: Check whether the file already exists before overwriting
+    // if the file is HTML.
+    fs::write(&file_path, &content).await?;
 
-    if !is_html {
-        fs::write(&file_path, content).await?;
-    } else {
-        // Ensure HTML files have .html extension
-        if !file_path.to_string_lossy().ends_with(".html") {
-            file_path = file_path.with_extension("html");
-        }
+    if is_html {
         // For HTML content, download associated resources
         println!("Warning: Downloading HTML content from {}. The saved file may be incomplete as it might depend on additional resources or backend servers.", url);
         let content_str = String::from_utf8_lossy(&content);
-        let modified_html =
-            download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
-        // TODO: Check whether the HTML file already exists before overwriting
-        fs::write(&file_path, modified_html).await?;
+        html::download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
     }
 
     Ok(file_path)

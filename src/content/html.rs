@@ -8,9 +8,8 @@ pub async fn download_html_resources(
     html_content: &str,
     base_url: &str,
     dir_path: &Path,
-) -> Result<String> {
+) -> Result<()> {
     let document = Html::parse_document(html_content);
-    let modified_html = html_content.to_string();
 
     // Define selectors for elements with src or href attributes
     let selectors = [
@@ -74,5 +73,5 @@ pub async fn download_html_resources(
         }
     }
 
-    Ok(modified_html)
+    Ok(())
 }
