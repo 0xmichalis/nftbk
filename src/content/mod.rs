@@ -8,21 +8,21 @@ pub mod html;
 pub mod url;
 use self::url::get_url;
 
-async fn fetch_http_content(url: &str) -> Result<(Vec<u8>, bool)> {
+async fn fetch_http_content(url: &str) -> Result<(Vec<u8>, String)> {
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?;
 
-    // Check content type
+    // Get content type, defaulting to "application/octet-stream" if not specified
     let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown/unknown");
+        .unwrap_or("application/octet-stream")
+        .to_string();
 
-    let is_html = content_type.contains("text/html") || content_type.contains("application/xhtml");
     let content = response.bytes().await?.to_vec();
 
-    Ok((content, is_html))
+    Ok((content, content_type))
 }
 
 async fn get_filename(
@@ -95,9 +95,9 @@ pub async fn fetch_and_save_content(
     }
 
     // Get content based on URL type
-    let (content, is_html) = if url.starts_with("data:") {
-        let (content, _) = url::get_data_url_content(url)?;
-        (content, false) // Data URLs are treated as binary content
+    let (mut content, content_type) = if url.starts_with("data:") {
+        let (content, mime_type) = url::get_data_url_content(url)?;
+        (content, format!("application/{}", mime_type))
     } else {
         let content_url = get_url(url);
         // TODO: Rotate IPFS gateways to handle rate limits
@@ -106,21 +106,26 @@ pub async fn fetch_and_save_content(
 
     // Create directory and save content
     fs::create_dir_all(file_path.parent().unwrap()).await?;
-    // Ensure HTML files have .html extension
-    if is_html && !file_path.to_string_lossy().ends_with(".html") {
-        file_path = file_path.with_extension("html");
-    }
-    // TODO: Check whether the file already exists before overwriting
-    // if the file is HTML.
-    println!("Saving {}", file_path.display());
-    fs::write(&file_path, &content).await?;
 
-    if is_html {
-        // For HTML content, download associated resources
-        println!("Warning: Downloading HTML content from {}. The saved file may be incomplete as it might depend on additional resources or backend servers.", url);
+    if content_type.contains("text/html") || content_type.contains("application/xhtml") {
+        if !file_path.to_string_lossy().ends_with(".html") {
+            file_path = file_path.with_extension("html");
+        }
+        println!("Warning: Downloading HTML content from {}. The saved files may be incomplete as they may have more dependencies.", url);
         let content_str = String::from_utf8_lossy(&content);
         html::download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
+    } else if content_type.contains("application/json") {
+        // Try to parse and format JSON content
+        if let Ok(content_str) = String::from_utf8(content.clone()) {
+            if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&content_str) {
+                content = serde_json::to_string_pretty(&json_value)?.into();
+            }
+        }
     }
+
+    // TODO: Check whether the file already exists before overwriting
+    // if the file is HTML.
+    fs::write(&file_path, &content).await?;
 
     Ok(file_path)
 }
