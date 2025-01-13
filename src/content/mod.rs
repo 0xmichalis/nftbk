@@ -61,6 +61,7 @@ async fn download_html_resources(
                 // Download and save the resource
                 println!("Downloading resource: {}", absolute_url);
                 let client = reqwest::Client::new();
+                // TODO: Handle resources with invalid URL schemes
                 match client.get(&absolute_url).send().await {
                     Ok(response) => {
                         let content = response.bytes().await?;
@@ -161,6 +162,8 @@ pub async fn fetch_and_save_content(
     // Check if file exists before downloading
     if fs::try_exists(&file_path).await? {
         println!("File already exists at {}", file_path.display());
+        // TODO: Instead of returning we should check whether we can
+        // download additional files, in case this is an HTML file
         return Ok(file_path);
     }
 
@@ -170,6 +173,7 @@ pub async fn fetch_and_save_content(
         (content, false) // Data URLs are treated as binary content
     } else {
         let content_url = get_url(url);
+        // TODO: Rotate IPFS gateways to handle rate limits
         fetch_http_content(&content_url).await?
     };
 
@@ -188,6 +192,7 @@ pub async fn fetch_and_save_content(
         let content_str = String::from_utf8_lossy(&content);
         let modified_html =
             download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
+        // TODO: Check whether the HTML file already exists before overwriting
         fs::write(&file_path, modified_html).await?;
     }
 
