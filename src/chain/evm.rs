@@ -56,6 +56,28 @@ struct ContractWithToken {
     token_id: String,
 }
 
+/// Get token URI from contract, trying both tokenURI and uri methods
+async fn get_token_uri(
+    contract_instance: &Contract<Provider<Http>>,
+    token_id: U256,
+) -> Result<String> {
+    match contract_instance
+        .method::<_, String>("tokenURI", token_id)?
+        .call()
+        .await
+    {
+        Ok(uri) => Ok(uri),
+        Err(e) => {
+            warn!("tokenURI failed: {}, trying uri...", e);
+            contract_instance
+                .method::<_, String>("uri", token_id)?
+                .call()
+                .await
+                .map_err(|e| anyhow::anyhow!("Both tokenURI and uri failed: {}", e))
+        }
+    }
+}
+
 pub async fn process_nfts(
     chain_name: &str,
     rpc_url: &str,
@@ -97,26 +119,12 @@ pub async fn process_nfts(
             }
         };
 
-        // Try both tokenURI and uri functions
-        let token_uri = match contract_instance
-            .method::<_, String>("tokenURI", token_id)?
-            .call()
-            .await
-        {
+        // Get token URI
+        let token_uri = match get_token_uri(&contract_instance, token_id).await {
             Ok(uri) => uri,
             Err(e) => {
-                warn!("tokenURI failed: {}, trying uri...", e);
-                match contract_instance
-                    .method::<_, String>("uri", token_id)?
-                    .call()
-                    .await
-                {
-                    Ok(uri) => uri,
-                    Err(e) => {
-                        error!("uri failed: {}, skipping token", e);
-                        continue;
-                    }
-                }
+                error!("Failed to get token URI: {}, skipping token", e);
+                continue;
             }
         };
 
