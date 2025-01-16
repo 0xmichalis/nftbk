@@ -56,25 +56,44 @@ struct ContractWithToken {
     token_id: String,
 }
 
-/// Get token URI from contract, trying both tokenURI and uri methods
+/// Get token URI from contract, trying both tokenURI and uri methods with exponential backoff
 async fn get_token_uri(
     contract_instance: &Contract<Provider<Http>>,
     token_id: U256,
 ) -> Result<String> {
+    let mut retries = 3;
+    let mut delay = std::time::Duration::from_millis(500);
+    let max_delay = std::time::Duration::from_secs(3);
+
+    // Try tokenURI with retries for rate limiting
+    while retries > 0 {
+        retries -= 1;
+        match contract_instance
+            .method::<_, String>("tokenURI", token_id)?
+            .call()
+            .await
+        {
+            Ok(uri) => return Ok(uri),
+            Err(e) => {
+                if e.to_string().contains("429") && delay < max_delay {
+                    tokio::time::sleep(delay).await;
+                    delay *= 2;
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+
+    // If tokenURI fails, try uri method
+    warn!("tokenURI failed, trying uri...");
     match contract_instance
-        .method::<_, String>("tokenURI", token_id)?
+        .method::<_, String>("uri", token_id)?
         .call()
         .await
     {
         Ok(uri) => Ok(uri),
-        Err(e) => {
-            warn!("tokenURI failed: {}, trying uri...", e);
-            contract_instance
-                .method::<_, String>("uri", token_id)?
-                .call()
-                .await
-                .map_err(|e| anyhow::anyhow!("Both tokenURI and uri failed: {}", e))
-        }
+        Err(e) => Err(anyhow::anyhow!("Both tokenURI and uri failed: {}", e)),
     }
 }
 
