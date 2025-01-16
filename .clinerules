@@ -6,9 +6,10 @@
 
 ## Code Changes
 
-- Ensure the code can be compiled
-- Ensure the code is formatted
-- Any clippy warnings are addressed
+- Ensure the code you have provided is complete
+- Ensure the project can be compiled
+- Ensure the project is formatted
+- Ensure that any clippy warnings are addressed
 - When writing an if/else clause, prefer putting the clause with most of the code in the else part to keep the whole conditional more readable
 - Avoid arrowized code when possible
 
@@ -17,3 +18,7 @@
 - Never commit sensitive files
 - Use environment variables for secrets
 - Keep credentials out of logs and output
+
+## Misc
+
+- When providing a solution, give me a score on a scale of 1-10 about how confident you are in the solution
