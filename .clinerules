@@ -7,9 +7,8 @@
 ## Code Changes
 
 - Ensure the code you have provided is complete
-- Ensure the project can be compiled
-- Ensure the project is formatted
-- Ensure that any clippy warnings are addressed
+- Ensure the project is formatted (cargo fmt --all)
+- Ensure that any clippy warnings are addressed (cargo clippy -- -D warnings)
 - When writing an if/else clause, prefer putting the clause with most of the code in the else part to keep the whole conditional more readable
 - Avoid arrowized code when possible
 
