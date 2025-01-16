@@ -1,13 +1,14 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs;
+use tracing::warn;
 
 mod chain;
 mod content;
-
-use serde::Deserialize;
+mod logging;
 
 // CLI Arguments
 #[derive(Parser, Debug)]
@@ -37,7 +38,7 @@ struct TokenConfig {
 #[tokio::main]
 async fn main() -> Result<()> {
     // Initialize logging
-    tracing_subscriber::fmt::init();
+    logging::init();
 
     // Parse command line arguments
     let args = Args::parse();
@@ -60,7 +61,7 @@ async fn main() -> Result<()> {
     // Process chains from config
     for (chain_name, contracts) in &config.tokens.chains {
         if contracts.is_empty() {
-            tracing::warn!("No contracts configured for chain {}", chain_name);
+            warn!("No contracts configured for chain {}", chain_name);
             continue;
         }
 

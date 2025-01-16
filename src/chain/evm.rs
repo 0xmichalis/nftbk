@@ -3,6 +3,7 @@ use ethers::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs;
+use tracing::{error, info, warn};
 
 use crate::content::fetch_and_save_content;
 
@@ -76,11 +77,11 @@ pub async fn process_nfts(
         .collect::<Vec<_>>();
 
     for contract in contracts {
-        println!("Processing contract {} on {}", contract.address, chain_name);
+        info!("Processing contract {} on {}", contract.address, chain_name);
         let contract_addr = match contract.address.parse::<Address>() {
             Ok(addr) => addr,
             Err(e) => {
-                println!("Failed to parse contract address on {}: {}", chain_name, e);
+                warn!("Failed to parse contract address on {}: {}", chain_name, e);
                 continue;
             }
         };
@@ -91,7 +92,7 @@ pub async fn process_nfts(
         let token_id = match ethers::types::U256::from_dec_str(&contract.token_id) {
             Ok(id) => id,
             Err(e) => {
-                println!("Failed to parse token ID: {}", e);
+                warn!("Failed to parse token ID: {}", e);
                 continue;
             }
         };
@@ -104,7 +105,7 @@ pub async fn process_nfts(
         {
             Ok(uri) => uri,
             Err(e) => {
-                println!("tokenURI failed: {}, trying uri...", e);
+                warn!("tokenURI failed: {}, trying uri...", e);
                 match contract_instance
                     .method::<_, String>("uri", token_id)?
                     .call()
@@ -112,7 +113,7 @@ pub async fn process_nfts(
                 {
                     Ok(uri) => uri,
                     Err(e) => {
-                        println!("uri failed: {}, skipping token", e);
+                        error!("uri failed: {}, skipping token", e);
                         continue;
                     }
                 }
@@ -120,7 +121,7 @@ pub async fn process_nfts(
         };
 
         // Save metadata
-        println!("Fetching metadata from {}", token_uri);
+        info!("Fetching metadata from {}", token_uri);
         let contract_address = format!("{:#x}", contract_addr);
         let token_id_str = token_id.to_string();
         let metadata_content = fetch_and_save_content(
@@ -136,7 +137,7 @@ pub async fn process_nfts(
 
         // Save linked content
         if let Some(image_url) = &metadata.image {
-            println!("Downloading image from {}", image_url);
+            info!("Downloading image from {}", image_url);
             fetch_and_save_content(
                 image_url,
                 chain_name,
@@ -149,7 +150,7 @@ pub async fn process_nfts(
         }
 
         if let Some(animation_url) = &metadata.animation_url {
-            println!("Downloading animation from {}", animation_url);
+            info!("Downloading animation from {}", animation_url);
             fetch_and_save_content(
                 animation_url,
                 chain_name,

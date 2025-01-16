@@ -7,6 +7,7 @@ use tezos_michelson::michelson::data;
 use tezos_rpc::client::TezosRpc;
 use tezos_rpc::http::default::HttpClient;
 use tokio::fs;
+use tracing::info;
 
 use crate::content::fetch_and_save_content;
 
@@ -110,10 +111,10 @@ pub async fn process_nfts(
         .collect::<Vec<_>>();
 
     for contract in contracts {
-        println!("Processing contract {}", contract.address);
+        info!("Processing contract {}", contract.address);
 
         if let Some(uri) = get_ipfs_uri(&rpc, &contract).await? {
-            println!("Fetching metadata from {}", uri);
+            info!("Fetching metadata from {}", uri);
 
             let metadata_content = fetch_and_save_content(
                 &uri,
@@ -165,7 +166,7 @@ pub async fn process_nfts(
             for (url, file_name) in urls_to_download {
                 // Only download if we haven't seen this exact URL + file_name combination
                 if downloaded.insert((url.clone(), file_name.clone())) {
-                    println!("Downloading content from {}", url);
+                    info!("Downloading content from {}", url);
                     fetch_and_save_content(
                         &url,
                         "tezos",

@@ -2,6 +2,7 @@ use ::url::Url;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tracing::{info, warn};
 
 pub mod extensions;
 pub mod html;
@@ -88,7 +89,7 @@ pub async fn fetch_and_save_content(
 
     // Check if file exists before downloading
     if fs::try_exists(&file_path).await? {
-        println!("File already exists at {}", file_path.display());
+        info!("File already exists at {}", file_path.display());
         // TODO: Instead of returning we should check whether we can
         // download additional files, in case this is an HTML file
         return Ok(file_path);
@@ -111,7 +112,7 @@ pub async fn fetch_and_save_content(
         if !file_path.to_string_lossy().ends_with(".html") {
             file_path = file_path.with_extension("html");
         }
-        println!("Warning: Downloading HTML content from {}. The saved files may be incomplete as they may have more dependencies.", url);
+        warn!("Downloading HTML content from {}. The saved files may be incomplete as they may have more dependencies.", url);
         let content_str = String::from_utf8_lossy(&content);
         html::download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
     } else if content_type.contains("application/json") {
@@ -125,6 +126,7 @@ pub async fn fetch_and_save_content(
 
     // TODO: Check whether the file already exists before overwriting
     // if the file is HTML.
+    info!("Saving {}", file_path.display());
     fs::write(&file_path, &content).await?;
 
     Ok(file_path)
