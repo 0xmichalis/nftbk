@@ -1,5 +1,11 @@
-use anyhow::{Context, Result};
-use ethers::prelude::*;
+use alloy::{
+    contract::{ContractInstance, Interface},
+    dyn_abi::DynSolValue,
+    primitives::{Address, U256},
+    providers::{ProviderBuilder, RootProvider},
+    transports::http::{Client, Http},
+};
+use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use tokio::fs;
@@ -56,44 +62,27 @@ struct ContractWithToken {
     token_id: String,
 }
 
-/// Get token URI from contract, trying both tokenURI and uri methods with exponential backoff
 async fn get_token_uri(
-    contract_instance: &Contract<Provider<Http>>,
+    contract: ContractInstance<Http<Client>, RootProvider<Http<Client>>>,
     token_id: U256,
 ) -> Result<String> {
-    let mut retries = 3;
-    let mut delay = std::time::Duration::from_millis(500);
-    let max_delay = std::time::Duration::from_secs(3);
-
-    // Try tokenURI with retries for rate limiting
-    while retries > 0 {
-        retries -= 1;
-        match contract_instance
-            .method::<_, String>("tokenURI", token_id)?
-            .call()
-            .await
-        {
-            Ok(uri) => return Ok(uri),
-            Err(e) => {
-                if e.to_string().contains("429") && delay < max_delay {
-                    tokio::time::sleep(delay).await;
-                    delay *= 2;
-                    continue;
-                }
-                break;
-            }
-        }
-    }
-
-    // If tokenURI fails, try uri method
-    warn!("tokenURI failed, trying uri...");
-    match contract_instance
-        .method::<_, String>("uri", token_id)?
+    // Try tokenURI first
+    let token_id = DynSolValue::from(token_id);
+    let result = contract
+        .function("tokenURI", &[token_id.clone()])?
         .call()
-        .await
-    {
-        Ok(uri) => Ok(uri),
-        Err(e) => Err(anyhow::anyhow!("Both tokenURI and uri failed: {}", e)),
+        .await;
+
+    match result {
+        Ok(data) => {
+            // Extract the first value and convert to string
+            Ok(data[0].as_str().unwrap_or_default().to_string())
+        }
+        Err(_) => {
+            // Fall back to uri if tokenURI fails
+            let data = contract.function("uri", &[token_id])?.call().await?;
+            Ok(data[0].as_str().unwrap_or_default().to_string())
+        }
     }
 }
 
@@ -103,8 +92,8 @@ pub async fn process_nfts(
     contracts: Vec<String>,
     output_path: &Path,
 ) -> Result<()> {
-    let provider = Provider::<Http>::try_from(rpc_url)
-        .context(format!("Failed to connect to {} RPC", chain_name))?;
+    let rpc_url = rpc_url.parse::<url::Url>()?;
+    let provider = ProviderBuilder::new().on_http(rpc_url);
 
     let contracts = contracts
         .into_iter()
@@ -126,11 +115,9 @@ pub async fn process_nfts(
                 continue;
             }
         };
-        let abi: ethers::abi::Abi = serde_json::from_str(NFT_ABI)?;
-        let contract_instance = Contract::new(contract_addr, abi, provider.clone().into());
 
         // Parse token ID into U256
-        let token_id = match ethers::types::U256::from_dec_str(&contract.token_id) {
+        let token_id = match U256::from_str_radix(&contract.token_id, 10) {
             Ok(id) => id,
             Err(e) => {
                 warn!("Failed to parse token ID: {}", e);
@@ -138,8 +125,11 @@ pub async fn process_nfts(
             }
         };
 
+        let abi: Interface = Interface::new(serde_json::from_str(NFT_ABI)?);
+        let contract_instance = ContractInstance::new(contract_addr, provider.clone(), abi.clone());
+
         // Get token URI
-        let token_uri = match get_token_uri(&contract_instance, token_id).await {
+        let token_uri = match get_token_uri(contract_instance, token_id).await {
             Ok(uri) => uri,
             Err(e) => {
                 error!("Failed to get token URI: {}, skipping token", e);
@@ -158,8 +148,9 @@ pub async fn process_nfts(
             &token_id_str,
             output_path,
             Some("metadata.json"),
-        );
-        let metadata_content_str = fs::read_to_string(metadata_content.await?).await?;
+        )
+        .await?;
+        let metadata_content_str = fs::read_to_string(metadata_content).await?;
         let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
 
         // Save linked content
