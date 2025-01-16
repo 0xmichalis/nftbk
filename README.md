@@ -27,6 +27,16 @@ tezos = [
 ]
 ```
 
+### Generate config from gallery.so
+
+1. Note down the username and gallery id you want to back up from [gallery.so](https://gallery.so). The gallery id is the last part of the URL when viewing a gallery, eg, `2RgusW2IT1qkSPKE15S2xTnArN4`  from [`https://gallery.so/michalis/galleries/2RgusW2IT1qkSPKE15S2xTnArN4`](https://gallery.so/michalis/galleries/2RgusW2IT1qkSPKE15S2xTnArN4).
+2. Run the following command to generate a config file:
+```bash
+GALLERY_ID=2RgusW2IT1qkSPKE15S2xTnArN4 \
+USERNAME=michalis \
+    python3 scripts/extract_gallery_tokens.py > config.toml
+```
+
 ## Usage
 
 ```bash
