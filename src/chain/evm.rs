@@ -8,7 +8,9 @@ use alloy::{
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
+use std::time::Duration;
 use tokio::fs;
+use tokio::time::sleep;
 use tracing::{error, info, warn};
 
 use crate::content::fetch_and_save_content;
@@ -62,27 +64,49 @@ struct ContractWithToken {
     token_id: String,
 }
 
+// Helper function to handle contract calls with retries
+async fn try_call_contract(
+    contract: &ContractInstance<Http<Client>, RootProvider<Http<Client>>>,
+    function_name: &str,
+    token_id: &DynSolValue,
+) -> Result<String> {
+    const MAX_RETRIES: u32 = 3;
+    const RETRY_DELAY_MS: u64 = 1000;
+
+    let mut attempts = 0;
+    loop {
+        match contract
+            .function(function_name, &[token_id.clone()])?
+            .call()
+            .await
+        {
+            Ok(data) => return Ok(data[0].as_str().unwrap_or_default().to_string()),
+            Err(e) => {
+                attempts += 1;
+                if attempts >= MAX_RETRIES {
+                    return Err(e.into());
+                }
+                // Check if error is HTTP 429
+                if e.to_string().contains("429") {
+                    sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                    continue;
+                }
+                return Err(e.into());
+            }
+        }
+    }
+}
+
 async fn get_token_uri(
     contract: ContractInstance<Http<Client>, RootProvider<Http<Client>>>,
     token_id: U256,
 ) -> Result<String> {
-    // Try tokenURI first
     let token_id = DynSolValue::from(token_id);
-    let result = contract
-        .function("tokenURI", &[token_id.clone()])?
-        .call()
-        .await;
 
-    match result {
-        Ok(data) => {
-            // Extract the first value and convert to string
-            Ok(data[0].as_str().unwrap_or_default().to_string())
-        }
-        Err(_) => {
-            // Fall back to uri if tokenURI fails
-            let data = contract.function("uri", &[token_id])?.call().await?;
-            Ok(data[0].as_str().unwrap_or_default().to_string())
-        }
+    // Try tokenURI first, fall back to uri
+    match try_call_contract(&contract, "tokenURI", &token_id).await {
+        Ok(uri) => Ok(uri),
+        Err(_) => try_call_contract(&contract, "uri", &token_id).await,
     }
 }
 
