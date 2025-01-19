@@ -1,14 +1,13 @@
 use alloy::{
-    contract::{ContractInstance, Interface},
-    dyn_abi::DynSolValue,
     primitives::{Address, U256},
     providers::{ProviderBuilder, RootProvider},
+    sol,
     transports::http::{Client, Http},
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::time::Duration;
+use std::{future::Future, path::Path};
 use tokio::fs;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
@@ -33,30 +32,15 @@ pub struct NFTAttribute {
     pub value: serde_json::Value,
 }
 
-// ERC721/ERC1155 minimal ABI for token URI and balance
-const NFT_ABI: &str = r#"[
-    {
-        "inputs": [{"name": "tokenId", "type": "uint256"}],
-        "name": "tokenURI",
-        "outputs": [{"name": "", "type": "string"}],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [{"name": "owner", "type": "address"}],
-        "name": "balanceOf",
-        "outputs": [{"name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function"
-    },
-    {
-        "inputs": [{"name": "id", "type": "uint256"}],
-        "name": "uri",
-        "outputs": [{"name": "", "type": "string"}],
-        "stateMutability": "view",
-        "type": "function"
+// ERC721/ERC1155 minimal ABI to get the token URI
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    interface INFT {
+        function tokenURI(uint256 tokenId) external view returns (string);
+        function uri(uint256 id) external view returns (string);
     }
-]"#;
+}
 
 #[derive(Debug)]
 struct ContractWithToken {
@@ -65,48 +49,50 @@ struct ContractWithToken {
 }
 
 // Helper function to handle contract calls with retries
-async fn try_call_contract(
-    contract: &ContractInstance<Http<Client>, RootProvider<Http<Client>>>,
-    function_name: &str,
-    token_id: &DynSolValue,
-) -> Result<String> {
+async fn try_call_contract<F, T>(mut f: F) -> Result<T>
+where
+    F: FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<T, alloy::contract::Error>> + Send>>,
+{
     const MAX_RETRIES: u32 = 3;
     const RETRY_DELAY_MS: u64 = 1000;
 
     let mut attempts = 0;
     loop {
-        match contract
-            .function(function_name, &[token_id.clone()])?
-            .call()
-            .await
-        {
-            Ok(data) => return Ok(data[0].as_str().unwrap_or_default().to_string()),
-            Err(e) => {
+        match f().await {
+            Ok(uri) => return Ok(uri),
+            Err(e) if e.to_string().contains("429") && attempts < MAX_RETRIES => {
                 attempts += 1;
-                if attempts >= MAX_RETRIES {
-                    return Err(e.into());
-                }
-                // Check if error is HTTP 429
-                if e.to_string().contains("429") {
-                    sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
-                    continue;
-                }
-                return Err(e.into());
+                sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                continue;
             }
+            Err(e) => return Err(e.into()),
         }
     }
 }
 
 async fn get_token_uri(
-    contract: ContractInstance<Http<Client>, RootProvider<Http<Client>>>,
+    contract_addr: Address,
+    provider: RootProvider<Http<Client>>,
     token_id: U256,
 ) -> Result<String> {
-    let token_id = DynSolValue::from(token_id);
+    let nft = INFT::new(contract_addr, provider);
 
-    // Try tokenURI first, fall back to uri
-    match try_call_contract(&contract, "tokenURI", &token_id).await {
-        Ok(uri) => Ok(uri),
-        Err(_) => try_call_contract(&contract, "uri", &token_id).await,
+    match try_call_contract(|| {
+        let nft = nft.clone();
+        Box::pin(async move { nft.tokenURI(token_id).call().await })
+    })
+    .await
+    {
+        Ok(uri) => Ok(uri._0),
+        Err(e) if !e.to_string().contains("429") => {
+            let uri = try_call_contract(|| {
+                let nft = nft.clone();
+                Box::pin(async move { nft.uri(token_id).call().await })
+            })
+            .await?;
+            Ok(uri._0)
+        }
+        Err(e) => Err(e),
     }
 }
 
@@ -149,11 +135,8 @@ pub async fn process_nfts(
             }
         };
 
-        let abi: Interface = Interface::new(serde_json::from_str(NFT_ABI)?);
-        let contract_instance = ContractInstance::new(contract_addr, provider.clone(), abi.clone());
-
         // Get token URI
-        let token_uri = match get_token_uri(contract_instance, token_id).await {
+        let token_uri = match get_token_uri(contract_addr, provider.clone(), token_id).await {
             Ok(uri) => uri,
             Err(e) => {
                 error!("Failed to get token URI: {}, skipping token", e);
