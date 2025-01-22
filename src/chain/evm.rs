@@ -1,4 +1,5 @@
 use alloy::{
+    contract::Error,
     primitives::{Address, U256},
     providers::{ProviderBuilder, RootProvider},
     sol,
@@ -48,14 +49,14 @@ struct ContractWithToken {
     token_id: String,
 }
 
-fn is_rate_limited(e: &alloy::contract::Error) -> bool {
+fn is_rate_limited(e: &Error) -> bool {
     e.to_string().contains("429")
 }
 
 // Helper function to handle contract calls with retries
-async fn try_call_contract<F, T>(mut f: F) -> Result<T, alloy::contract::Error>
+async fn try_call_contract<F, T>(mut f: F) -> Result<T, Error>
 where
-    F: FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<T, alloy::contract::Error>> + Send>>,
+    F: FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<T, Error>> + Send>>,
 {
     const MAX_RETRIES: u32 = 3;
     const RETRY_DELAY_MS: u64 = 1000;
