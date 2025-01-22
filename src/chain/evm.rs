@@ -48,8 +48,12 @@ struct ContractWithToken {
     token_id: String,
 }
 
+fn is_rate_limited(e: &alloy::contract::Error) -> bool {
+    e.to_string().contains("429")
+}
+
 // Helper function to handle contract calls with retries
-async fn try_call_contract<F, T>(mut f: F) -> Result<T>
+async fn try_call_contract<F, T>(mut f: F) -> Result<T, alloy::contract::Error>
 where
     F: FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<T, alloy::contract::Error>> + Send>>,
 {
@@ -60,12 +64,12 @@ where
     loop {
         match f().await {
             Ok(uri) => return Ok(uri),
-            Err(e) if e.to_string().contains("429") && attempts < MAX_RETRIES => {
+            Err(e) if is_rate_limited(&e) && attempts < MAX_RETRIES => {
                 attempts += 1;
                 sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
                 continue;
             }
-            Err(e) => return Err(e.into()),
+            Err(e) => return Err(e),
         }
     }
 }
@@ -84,7 +88,7 @@ async fn get_token_uri(
     .await
     {
         Ok(uri) => Ok(uri._0),
-        Err(e) if !e.to_string().contains("429") => {
+        Err(e) if !is_rate_limited(&e) => {
             let uri = try_call_contract(|| {
                 let nft = nft.clone();
                 Box::pin(async move { nft.uri(token_id).call().await })
@@ -92,7 +96,7 @@ async fn get_token_uri(
             .await?;
             Ok(uri._0)
         }
-        Err(e) => Err(e),
+        Err(e) => Err(e.into()),
     }
 }
 
