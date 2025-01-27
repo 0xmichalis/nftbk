@@ -54,9 +54,9 @@ fn is_rate_limited(e: &Error) -> bool {
 }
 
 // Helper function to handle contract calls with retries
-async fn try_call_contract<F, T>(mut f: F) -> Result<T, Error>
+async fn try_call_contract<Fut, T>(mut f: impl FnMut() -> Fut) -> Result<T, Error>
 where
-    F: FnMut() -> std::pin::Pin<Box<dyn Future<Output = Result<T, Error>> + Send>>,
+    Fut: Future<Output = Result<T, Error>> + Send,
 {
     const MAX_RETRIES: u32 = 3;
     const RETRY_DELAY_MS: u64 = 1000;
@@ -84,7 +84,7 @@ async fn get_token_uri(
 
     match try_call_contract(|| {
         let nft = nft.clone();
-        Box::pin(async move { nft.tokenURI(token_id).call().await })
+        async move { nft.tokenURI(token_id).call().await }
     })
     .await
     {
@@ -92,7 +92,7 @@ async fn get_token_uri(
         Err(e) if !is_rate_limited(&e) => {
             let uri = try_call_contract(|| {
                 let nft = nft.clone();
-                Box::pin(async move { nft.uri(token_id).call().await })
+                async move { nft.uri(token_id).call().await }
             })
             .await?;
             Ok(uri._0)
