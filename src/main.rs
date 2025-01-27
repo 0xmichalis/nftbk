@@ -9,6 +9,7 @@ use tracing::warn;
 mod chain;
 mod content;
 mod logging;
+mod url;
 
 // CLI Arguments
 #[derive(Parser, Debug)]

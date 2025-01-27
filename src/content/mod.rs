@@ -1,12 +1,13 @@
+use crate::url::{
+    get_data_url_content, get_data_url_mime_type, get_last_path_segment, get_url, is_data_url,
+};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{info, warn};
-use url::{get_data_url_mime_type, get_last_path_segment, get_url, is_data_url};
 
 pub mod extensions;
 pub mod html;
-pub mod url;
 
 async fn fetch_http_content(url: &str) -> Result<(Vec<u8>, String)> {
     let client = reqwest::Client::new();
@@ -83,7 +84,7 @@ pub async fn fetch_and_save_content(
 
     // Get content based on URL type
     let (mut content, content_type) = if is_data_url(url) {
-        let (content, mime_type) = url::get_data_url_content(url)?;
+        let (content, mime_type) = get_data_url_content(url)?;
         (content, format!("application/{}", mime_type))
     } else {
         let content_url = get_url(url);
