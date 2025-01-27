@@ -1,13 +1,12 @@
-use ::url::Url;
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{info, warn};
+use url::{get_data_url_mime_type, get_last_path_segment, get_url, is_data_url};
 
 pub mod extensions;
 pub mod html;
 pub mod url;
-use self::url::get_url;
 
 async fn fetch_http_content(url: &str) -> Result<(Vec<u8>, String)> {
     let client = reqwest::Client::new();
@@ -32,7 +31,7 @@ async fn get_filename(
     contract_address: &str,
     token_id: &str,
     output_path: &Path,
-    file_name: Option<&str>,
+    default_file_name: Option<&str>,
 ) -> Result<PathBuf> {
     let dir_path = output_path
         .join(chain)
@@ -40,28 +39,15 @@ async fn get_filename(
         .join(token_id);
 
     // Determine filename
-    let file_name = if let Some(name) = file_name {
+    let file_name = if let Some(name) = default_file_name {
         name.to_string()
-    } else if url.starts_with("data:") {
+    } else if is_data_url(url) {
         // For data URLs, use content type as filename
-        let mime_type = url
-            .split(';')
-            .next()
-            .and_then(|s| s.split('/').last())
-            .unwrap_or("bin")
-            .to_string();
+        let mime_type = get_data_url_mime_type(url);
         format!("content.{}", mime_type)
     } else {
         // For regular URLs, try to extract filename from path
-        Url::parse(url)
-            .ok()
-            .and_then(|url| {
-                url.path_segments()?
-                    .filter(|s| !s.is_empty())
-                    .last()
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_else(|| "content".to_string())
+        get_last_path_segment(url, "content")
     };
 
     let file_path = dir_path.join(&file_name);
@@ -96,7 +82,7 @@ pub async fn fetch_and_save_content(
     }
 
     // Get content based on URL type
-    let (mut content, content_type) = if url.starts_with("data:") {
+    let (mut content, content_type) = if is_data_url(url) {
         let (content, mime_type) = url::get_data_url_content(url)?;
         (content, format!("application/{}", mime_type))
     } else {
