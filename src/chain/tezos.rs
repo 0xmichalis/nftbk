@@ -9,7 +9,7 @@ use tezos_rpc::http::default::HttpClient;
 use tokio::fs;
 use tracing::info;
 
-use crate::content::fetch_and_save_content;
+use crate::content::{fetch_and_save_content, Options};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -122,7 +122,11 @@ pub async fn process_nfts(
                 &contract.address,
                 &contract.token_id,
                 output_path,
-                Some("metadata.json"),
+                Options {
+                    overriden_filename: Some("metadata.json".to_string()),
+                    fallback_filename: None,
+                    fallback_extension: None,
+                },
             );
             let metadata_content_str = fs::read_to_string(metadata_content.await?).await?;
             let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
@@ -173,7 +177,11 @@ pub async fn process_nfts(
                         &contract.address,
                         &contract.token_id,
                         output_path,
-                        Some(&file_name),
+                        Options {
+                            overriden_filename: Some(file_name),
+                            fallback_filename: None,
+                            fallback_extension: None,
+                        },
                     )
                     .await?;
                 }

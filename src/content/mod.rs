@@ -26,13 +26,19 @@ async fn fetch_http_content(url: &str) -> Result<(Vec<u8>, String)> {
     Ok((content, content_type))
 }
 
+pub struct Options {
+    pub overriden_filename: Option<String>,
+    pub fallback_filename: Option<String>,
+    pub fallback_extension: Option<String>,
+}
+
 async fn get_filename(
     url: &str,
     chain: &str,
     contract_address: &str,
     token_id: &str,
     output_path: &Path,
-    default_file_name: Option<&str>,
+    options: Options,
 ) -> Result<PathBuf> {
     let dir_path = output_path
         .join(chain)
@@ -40,18 +46,34 @@ async fn get_filename(
         .join(token_id);
 
     // Determine filename
-    let file_name = if let Some(name) = default_file_name {
+    let mut filename = if let Some(name) = options.overriden_filename {
         name.to_string()
     } else if is_data_url(url) {
         // For data URLs, use content type as filename
         let mime_type = get_data_url_mime_type(url);
-        format!("content.{}", mime_type)
+        format!(
+            "{}.{}",
+            options.fallback_filename.unwrap_or("content".to_string()),
+            mime_type
+        )
     } else {
         // For regular URLs, try to extract filename from path
-        get_last_path_segment(url, "content")
+        get_last_path_segment(
+            url,
+            options
+                .fallback_filename
+                .unwrap_or("content".to_string())
+                .as_str(),
+        )
     };
 
-    let file_path = dir_path.join(&file_name);
+    if let Some(extension) = options.fallback_extension {
+        if !filename.contains('.') {
+            filename = format!("{}.{}", filename, extension);
+        }
+    }
+
+    let file_path = dir_path.join(&filename);
 
     Ok(file_path)
 }
@@ -62,17 +84,10 @@ pub async fn fetch_and_save_content(
     contract_address: &str,
     token_id: &str,
     output_path: &Path,
-    file_name: Option<&str>,
+    options: Options,
 ) -> Result<PathBuf> {
-    let mut file_path = get_filename(
-        url,
-        chain,
-        contract_address,
-        token_id,
-        output_path,
-        file_name,
-    )
-    .await?;
+    let mut file_path =
+        get_filename(url, chain, contract_address, token_id, output_path, options).await?;
 
     // Check if file exists before downloading
     if fs::try_exists(&file_path).await? {

@@ -13,24 +13,47 @@ use tokio::fs;
 use tokio::time::sleep;
 use tracing::{error, info, warn};
 
-use crate::content::fetch_and_save_content;
+use crate::content::{
+    extensions::fetch_and_save_additional_content, fetch_and_save_content, Options,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
     pub name: Option<String>,
     pub description: Option<String>,
     pub image: Option<String>,
+    #[serde(default)]
+    pub image_details: Option<Details>,
     pub animation_url: Option<String>,
+    #[serde(default)]
+    pub animation_details: Option<Details>,
     pub external_url: Option<String>,
     pub attributes: Option<Vec<NFTAttribute>>,
-    #[serde(flatten)]
-    pub extra: serde_json::Value,
+    pub media: Option<Media>,
+    pub content: Option<Media>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Details {
+    Structured { format: String },
+    Raw(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTAttribute {
     pub trait_type: String,
     pub value: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Media {
+    pub uri: String,
+    pub dimensions: Option<String>,
+    pub size: Option<String>,
+    #[serde(rename = "mimeType")]
+    pub mime_type: Option<String>,
+    pub mime: Option<String>,
 }
 
 // ERC721/ERC1155 minimal ABI to get the token URI
@@ -101,6 +124,79 @@ async fn get_token_uri(
     }
 }
 
+fn get_extension_from_mime(mime: &str) -> Option<String> {
+    match mime.split('/').last() {
+        Some("gltf-binary") => Some("glb".to_string()),
+        Some(ext) => Some(ext.to_string()),
+        None => None,
+    }
+}
+
+fn get_extension_from_media(media: &Media) -> Option<String> {
+    if let Some(mime_type) = &media.mime_type {
+        return get_extension_from_mime(mime_type);
+    }
+    if let Some(mime) = &media.mime {
+        return get_extension_from_mime(mime);
+    }
+    None
+}
+
+fn parse_details(details: &Details) -> String {
+    match details {
+        Details::Structured { format } => format.to_lowercase(),
+        // Ugly but apparently some metadata is not structured properly
+        // eg. AMC's Oración
+        Details::Raw(raw_string) => serde_json::from_str::<serde_json::Value>(raw_string)
+            .unwrap()
+            .get("format")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .to_string(),
+    }
+}
+
+fn get_uri_and_extension_from_media(media: &Media, fallback_uri: &str) -> (String, Option<String>) {
+    let mut uri = media.uri.to_string();
+    if uri.is_empty() {
+        uri = fallback_uri.to_string();
+    }
+    (uri, get_extension_from_media(media))
+}
+
+fn get_uri_and_extension_from_metadata(
+    metadata: &NFTMetadata,
+    fallback_uri: &str,
+    check_image_details: bool,
+    check_animation_details: bool,
+) -> (String, Option<String>) {
+    if !check_image_details && !check_animation_details {
+        panic!("Need to check the extension of either an image or animation");
+    }
+    if let Some(media) = &metadata.media {
+        return get_uri_and_extension_from_media(media, fallback_uri);
+    }
+    if let Some(content) = &metadata.content {
+        return get_uri_and_extension_from_media(content, fallback_uri);
+    }
+    if check_image_details && metadata.image_details.is_some() {
+        let format = parse_details(metadata.image_details.as_ref().unwrap());
+        return (
+            fallback_uri.to_string(),
+            match format.as_str() {
+                "jpeg" => Some("jpg".to_string()),
+                other => Some(other.to_string()),
+            },
+        );
+    }
+    if check_animation_details && metadata.animation_details.is_some() {
+        let format = parse_details(metadata.animation_details.as_ref().unwrap());
+        return (fallback_uri.to_string(), Some(format));
+    }
+    (fallback_uri.to_string(), None)
+}
+
 pub async fn process_nfts(
     chain_name: &str,
     rpc_url: &str,
@@ -159,7 +255,11 @@ pub async fn process_nfts(
             &contract_address,
             &token_id_str,
             output_path,
-            Some("metadata.json"),
+            Options {
+                overriden_filename: Some("metadata.json".to_string()),
+                fallback_filename: None,
+                fallback_extension: None,
+            },
         )
         .await?;
         let metadata_content_str = fs::read_to_string(metadata_content).await?;
@@ -167,33 +267,45 @@ pub async fn process_nfts(
 
         // Save linked content
         if let Some(image_url) = &metadata.image {
+            let (image_url, extension) =
+                get_uri_and_extension_from_metadata(&metadata, image_url, true, false);
             info!("Downloading image from {}", image_url);
             fetch_and_save_content(
-                image_url,
+                &image_url,
                 chain_name,
                 &contract_address,
                 &token_id_str,
                 output_path,
-                Some("image"),
+                Options {
+                    overriden_filename: None,
+                    fallback_filename: Some("image".to_string()),
+                    fallback_extension: extension,
+                },
             )
             .await?;
         }
 
         if let Some(animation_url) = &metadata.animation_url {
+            let (animation_url, extension) =
+                get_uri_and_extension_from_metadata(&metadata, animation_url, false, true);
             info!("Downloading animation from {}", animation_url);
             fetch_and_save_content(
-                animation_url,
+                &animation_url,
                 chain_name,
                 &contract_address,
                 &token_id_str,
                 output_path,
-                Some("animation"),
+                Options {
+                    overriden_filename: None,
+                    fallback_filename: Some("animation".to_string()),
+                    fallback_extension: extension,
+                },
             )
             .await?;
         }
 
         // Process any additional content after downloading all files
-        crate::content::extensions::fetch_and_save_additional_content(
+        fetch_and_save_additional_content(
             chain_name,
             &format!("{:#x}", contract_addr),
             &token_id.to_string(),
