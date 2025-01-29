@@ -47,7 +47,7 @@ struct ContractWithToken {
     token_id: String,
 }
 
-async fn get_ipfs_uri(
+async fn get_uri(
     rpc: &TezosRpc<HttpClient>,
     contract: &ContractWithToken,
 ) -> Result<Option<String>> {
@@ -115,7 +115,7 @@ pub async fn process_nfts(
     for contract in contracts {
         info!("Processing contract {}", contract.address);
 
-        if let Some(uri) = get_ipfs_uri(&rpc, &contract).await? {
+        if let Some(uri) = get_uri(&rpc, &contract).await? {
             info!("Fetching metadata from {}", uri);
 
             let metadata_content = fetch_and_save_content(
