@@ -1,6 +1,12 @@
 .PHONY: all
-all:
+all: fmt clippy test
+
+.PHONY: fmt
+fmt:
 	cargo fmt --all
+
+.PHONY: clippy
+clippy:
 	cargo clippy -- -D warnings
 
 .PHONY: test
