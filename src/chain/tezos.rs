@@ -143,14 +143,16 @@ pub async fn process_nfts(
             // contain more information about the resource that is downloaded.
             if let Some(formats) = &metadata.formats {
                 for format in formats {
-                    if !format.uri.is_empty() {
-                        let file_name = if format.file_name.is_empty() {
-                            nft_name.to_string()
-                        } else {
-                            format.file_name.clone()
-                        };
-                        urls_to_download.push((format.uri.clone(), file_name));
+                    if format.uri.is_empty() {
+                        continue;
                     }
+
+                    let file_name = if format.file_name.is_empty() {
+                        nft_name.to_string()
+                    } else {
+                        format.file_name.clone()
+                    };
+                    urls_to_download.push((format.uri.clone(), file_name));
                 }
             }
 
