@@ -22,9 +22,8 @@ pub async fn download_html_resources(
     for (selector, attr) in selectors.iter() {
         for element in document.select(selector) {
             if let Some(resource_url) = element.value().attr(attr) {
-                // Skip absolute URLs, data URLs, and javascript
-                if resource_url.starts_with("http")
-                    || resource_url.starts_with("data:")
+                // Skip data URLs and javascript
+                if resource_url.starts_with("data:")
                     || resource_url.starts_with("javascript:")
                     || resource_url.starts_with("#")
                 {
