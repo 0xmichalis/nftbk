@@ -78,6 +78,25 @@ async fn get_filename(
     Ok(file_path)
 }
 
+fn detect_media_extension(content: &[u8]) -> Option<&'static str> {
+    // Check for common image/video formats
+    match content {
+        // PNG
+        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, ..] => Some("png"),
+        // JPEG
+        [0xFF, 0xD8, 0xFF, ..] => Some("jpg"),
+        // GIF
+        [b'G', b'I', b'F', b'8', b'9', b'a', ..] => Some("gif"),
+        // WEBP
+        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some("webp"),
+        // MP4
+        [0x00, 0x00, 0x00, _, 0x66, 0x74, 0x79, 0x70, 0x6D, 0x70, 0x34, 0x32, ..] => Some("mp4"),
+        // QuickTime MOV
+        [0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20, ..] => Some("mov"),
+        _ => None,
+    }
+}
+
 pub async fn fetch_and_save_content(
     url: &str,
     chain: &str,
@@ -123,6 +142,15 @@ pub async fn fetch_and_save_content(
             if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&content_str) {
                 content = serde_json::to_string_pretty(&json_value)?.into();
             }
+        }
+    }
+
+    // After the HTML/JSON handling block, add media extension detection:
+    // Check for media files if no extension detected
+    if file_path.extension().is_none() {
+        if let Some(ext) = detect_media_extension(&content) {
+            file_path = file_path.with_extension(ext);
+            info!("Detected media extension: {}", ext);
         }
     }
 
