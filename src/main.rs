@@ -5,7 +5,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tokio::fs;
-use tracing::warn;
+use tracing::{info, warn};
 
 mod chain;
 mod content;
@@ -81,6 +81,8 @@ async fn main() -> Result<()> {
             chain::tezos::process_nfts(rpc_url, contracts.clone(), &output_path).await?;
         }
     }
+
+    info!("Backup complete. Files saved in {}", output_path.display());
 
     Ok(())
 }
