@@ -91,10 +91,10 @@ mod tests {
 
     #[test]
     fn test_get_data_url_content_json() {
-        let data_url = "data:application/json;base64,eyJuYW1lIjogIlRlc3QifQ==";
-        let (content, ext) = get_data_url_content(data_url).unwrap();
-        assert_eq!(String::from_utf8_lossy(&content), r#"{"name": "Test"}"#);
-        assert_eq!(ext, "json");
+        let data_url = "data:application/json;base64,eyAidGVzdCI6IDEyMyB9"; // base64 encoded '{ "test": 123 }'
+        let (content, mime_type) = get_data_url_content(data_url).unwrap();
+        assert_eq!(String::from_utf8_lossy(&content), "{ \"test\": 123 }");
+        assert_eq!(mime_type, "application/json");
     }
 
     #[test]
@@ -212,8 +212,9 @@ mod tests {
 
     #[test]
     fn test_get_data_url_content_empty_mime() {
-        let (content, ext) = get_data_url_content("data:;base64,SGVsbG8=").unwrap();
-        assert_eq!(content, b"Hello");
-        assert_eq!(ext, "bin");
+        let data_url = "data:;base64,dGVzdCBjb250ZW50"; // base64 encoded 'test content'
+        let (content, mime_type) = get_data_url_content(data_url).unwrap();
+        assert_eq!(String::from_utf8_lossy(&content), "test content");
+        assert_eq!(mime_type, "application/octet-stream");
     }
 }
