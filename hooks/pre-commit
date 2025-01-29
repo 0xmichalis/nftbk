@@ -1,0 +1,7 @@
+#!/bin/bash
+set -e
+
+make all
+
+# Exit with make's exit code
+exit $?

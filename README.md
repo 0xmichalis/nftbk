@@ -63,16 +63,14 @@ nft_backup/
 
 ## Contribute
 
+Copy the pre-commit hook to .git/hooks/pre-commit:
+
 ```bash
-# Build code
-cargo build
+cp hooks/pre-commit .git/hooks/pre-commit
+```
 
-# Format code
-cargo fmt --all
+Now `make all` will run everytime you commit. Otherwise, you can run it manually:
 
-# Run clippy lints
-cargo clippy -- -D warnings
-
-# Run tests
-cargo test
+```bash
+make all
 ```
