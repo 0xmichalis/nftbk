@@ -182,13 +182,7 @@ fn get_uri_and_extension_from_metadata(
     }
     if check_image_details && metadata.image_details.is_some() {
         let format = parse_details(metadata.image_details.as_ref().unwrap());
-        return (
-            fallback_uri.to_string(),
-            match format.as_str() {
-                "jpeg" => Some("jpg".to_string()),
-                other => Some(other.to_string()),
-            },
-        );
+        return (fallback_uri.to_string(), Some(format));
     }
     if check_animation_details && metadata.animation_details.is_some() {
         let format = parse_details(metadata.animation_details.as_ref().unwrap());
