@@ -118,8 +118,7 @@ pub async fn fetch_and_save_content(
 
     // Get content based on URL type
     let (mut content, content_type) = if is_data_url(url) {
-        let (content, mime_type) = get_data_url_content(url)?;
-        (content, format!("application/{}", mime_type))
+        get_data_url_content(url)?
     } else {
         let content_url = get_url(url);
         // TODO: Rotate IPFS gateways to handle rate limits

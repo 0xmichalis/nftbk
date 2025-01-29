@@ -41,9 +41,9 @@ pub fn get_data_url_content(url: &str) -> Result<(Vec<u8>, String)> {
 
     // Determine file extension based on MIME type
     let extension = if mime_type.is_empty() {
-        "bin".to_string()
+        "application/octet-stream".to_string()
     } else {
-        mime_type.split('/').last().unwrap_or("bin").to_string()
+        mime_type
     };
 
     Ok((content, extension))
