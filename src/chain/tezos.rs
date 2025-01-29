@@ -138,6 +138,9 @@ pub async fn process_nfts(
             let mut urls_to_download = Vec::new();
 
             // Add URIs from formats array with their filenames
+            // It's important to add the formats first, because the rest of the links may be
+            // in the formats array and we prefer to iterate over formats first because they
+            // contain more information about the resource that is downloaded.
             if let Some(formats) = &metadata.formats {
                 for format in formats {
                     if !format.uri.is_empty() {
@@ -168,23 +171,27 @@ pub async fn process_nfts(
             // Download all URLs, keeping track of what we've downloaded to avoid duplicates
             let mut downloaded = std::collections::HashSet::new();
             for (url, file_name) in urls_to_download {
-                // Only download if we haven't seen this exact URL + file_name combination
-                if downloaded.insert((url.clone(), file_name.clone())) {
-                    info!("Downloading content from {}", url);
-                    fetch_and_save_content(
-                        &url,
-                        "tezos",
-                        &contract.address,
-                        &contract.token_id,
-                        output_path,
-                        Options {
-                            overriden_filename: Some(file_name),
-                            fallback_filename: None,
-                            fallback_extension: None,
-                        },
-                    )
-                    .await?;
+                // Only download if we haven't seen this URL before
+                let inserted = downloaded.insert(url.clone());
+                if !inserted {
+                    info!("Skipping duplicate content from {}", url);
+                    continue;
                 }
+
+                info!("Downloading content from {}", url);
+                fetch_and_save_content(
+                    &url,
+                    "tezos",
+                    &contract.address,
+                    &contract.token_id,
+                    output_path,
+                    Options {
+                        overriden_filename: Some(file_name),
+                        fallback_filename: None,
+                        fallback_extension: None,
+                    },
+                )
+                .await?;
             }
 
             // Process any additional content after downloading all files
