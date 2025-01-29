@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use logging::LogLevel;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -22,6 +23,9 @@ struct Args {
     /// Optional output directory path (defaults to current directory)
     #[arg(short, long)]
     output_path: Option<PathBuf>,
+
+    #[arg(short, long, value_enum, default_value = "info")]
+    log_level: LogLevel,
 }
 
 #[derive(Debug, Deserialize)]
@@ -38,11 +42,11 @@ struct TokenConfig {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
-    logging::init();
-
     // Parse command line arguments
     let args = Args::parse();
+
+    // Initialize logging
+    logging::init(args.log_level);
 
     // Use provided output path or current directory as base
     let base_path = args.output_path.unwrap_or_else(|| PathBuf::from("."));
