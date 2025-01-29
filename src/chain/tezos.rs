@@ -9,7 +9,9 @@ use tezos_rpc::http::default::HttpClient;
 use tokio::fs;
 use tracing::info;
 
-use crate::content::{fetch_and_save_content, Options};
+use crate::content::{
+    extensions::fetch_and_save_additional_content, fetch_and_save_content, Options,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -197,7 +199,7 @@ pub async fn process_nfts(
             }
 
             // Process any additional content after downloading all files
-            crate::content::extensions::fetch_and_save_additional_content(
+            fetch_and_save_additional_content(
                 "tezos",
                 &contract.address,
                 &contract.token_id,
