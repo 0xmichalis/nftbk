@@ -4,7 +4,7 @@ use crate::url::{
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tracing::{info, warn};
+use tracing::{debug, info};
 
 pub mod extensions;
 pub mod html;
@@ -110,7 +110,7 @@ pub async fn fetch_and_save_content(
 
     // Check if file exists before downloading
     if fs::try_exists(&file_path).await? {
-        info!("File already exists at {}", file_path.display());
+        debug!("File already exists at {}", file_path.display());
         // TODO: Instead of returning we should check whether we can
         // download additional files, in case this is an HTML file
         return Ok(file_path);
@@ -132,7 +132,7 @@ pub async fn fetch_and_save_content(
         if !file_path.to_string_lossy().ends_with(".html") {
             file_path = file_path.with_extension("html");
         }
-        warn!("Downloading HTML content from {}. The saved files may be incomplete as they may have more dependencies.", url);
+        debug!("Downloading HTML content from {}. The saved files may be incomplete as they may have more dependencies.", url);
         let content_str = String::from_utf8_lossy(&content);
         html::download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
     } else if content_type.contains("application/json") {
@@ -149,12 +149,12 @@ pub async fn fetch_and_save_content(
     if file_path.extension().is_none() {
         if let Some(ext) = detect_media_extension(&content) {
             file_path = file_path.with_extension(ext);
-            info!("Detected media extension: {}", ext);
+            debug!("Detected media extension: {}", ext);
         }
     }
 
     // TODO: Check whether the file already exists before overwriting
-    // if the file is HTML.
+    // if the file is HTML or its extension was automatically detected.
     info!("Saving {}", file_path.display());
     fs::write(&file_path, &content).await?;
 

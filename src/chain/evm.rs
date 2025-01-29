@@ -11,7 +11,7 @@ use std::time::Duration;
 use std::{future::Future, path::Path};
 use tokio::fs;
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{debug, error, warn};
 
 use crate::content::{
     extensions::fetch_and_save_additional_content, fetch_and_save_content, Options,
@@ -212,7 +212,7 @@ pub async fn process_nfts(
         .collect::<Vec<_>>();
 
     for contract in contracts {
-        info!("Processing contract {} on {}", contract.address, chain_name);
+        debug!("Processing contract {} on {}", contract.address, chain_name);
         let contract_addr = match contract.address.parse::<Address>() {
             Ok(addr) => addr,
             Err(e) => {
@@ -240,7 +240,7 @@ pub async fn process_nfts(
         };
 
         // Save metadata
-        info!("Fetching metadata from {}", token_uri);
+        debug!("Fetching metadata from {}", token_uri);
         let contract_address = format!("{:#x}", contract_addr);
         let token_id_str = token_id.to_string();
         let metadata_content = fetch_and_save_content(
@@ -263,7 +263,7 @@ pub async fn process_nfts(
         if let Some(image_url) = &metadata.image {
             let (image_url, extension) =
                 get_uri_and_extension_from_metadata(&metadata, image_url, true, false);
-            info!("Downloading image from {}", image_url);
+            debug!("Downloading image from {}", image_url);
             fetch_and_save_content(
                 &image_url,
                 chain_name,
@@ -282,7 +282,7 @@ pub async fn process_nfts(
         if let Some(animation_url) = &metadata.animation_url {
             let (animation_url, extension) =
                 get_uri_and_extension_from_metadata(&metadata, animation_url, false, true);
-            info!("Downloading animation from {}", animation_url);
+            debug!("Downloading animation from {}", animation_url);
             fetch_and_save_content(
                 &animation_url,
                 chain_name,

@@ -3,14 +3,14 @@ use flate2::read::GzDecoder;
 use std::io::Read;
 use std::path::Path;
 use tokio::fs;
-use tracing::info;
+use tracing::{debug, info};
 
 async fn extend_croquet_challenge_content(
     output_path: &Path,
     contract: &str,
     token_id: &str,
 ) -> Result<()> {
-    info!(
+    debug!(
         "Fetching additional content for Ethereum contract {} token {}",
         contract, token_id
     );
@@ -39,11 +39,11 @@ async fn extend_croquet_challenge_content(
 
         // Skip if file already exists
         if fs::try_exists(&file_path).await? {
-            info!("File already exists at {}", file_path.display());
+            debug!("File already exists at {}", file_path.display());
             continue;
         }
 
-        info!("Downloading {} as {}", url, target_file);
+        info!("Saving {} as {}", url, target_file);
         let response = client.get(&url).send().await?;
         let content = response.bytes().await?;
 

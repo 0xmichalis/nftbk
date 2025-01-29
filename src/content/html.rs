@@ -2,7 +2,7 @@ use anyhow::Result;
 use scraper::{Html, Selector};
 use std::path::Path;
 use tokio::fs;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use url::Url;
 
 pub async fn download_html_resources(
@@ -50,21 +50,22 @@ pub async fn download_html_resources(
 
                 // Skip if file already exists
                 if fs::try_exists(&resource_path).await? {
-                    info!("Resource already exists at {}", resource_path.display());
+                    debug!("Resource already exists at {}", resource_path.display());
                     continue;
                 }
 
                 // Download and save the resource
-                info!("Downloading resource: {}", absolute_url);
+                debug!("Downloading HTML resource: {}", absolute_url);
                 let client = reqwest::Client::new();
                 // TODO: Handle resources with invalid URL schemes
                 match client.get(&absolute_url).send().await {
                     Ok(response) => {
+                        info!("Saving HTML resource at {}", resource_path.display());
                         let content = response.bytes().await?;
                         fs::write(resource_path, content).await?;
                     }
                     Err(e) => {
-                        warn!("Failed to download resource {}: {}", absolute_url, e);
+                        warn!("Failed to download HTML resource {}: {}", absolute_url, e);
                     }
                 }
             }
