@@ -111,8 +111,6 @@ pub async fn fetch_and_save_content(
     // Check if file exists before downloading
     if fs::try_exists(&file_path).await? {
         debug!("File already exists at {}", file_path.display());
-        // TODO: Instead of returning we should check whether we can
-        // download additional files, in case this is an HTML file
         return Ok(file_path);
     }
 
@@ -153,8 +151,12 @@ pub async fn fetch_and_save_content(
         }
     }
 
-    // TODO: Check whether the file already exists before overwriting
-    // if the file is HTML or its extension was automatically detected.
+    // Check if file exists again before downloading
+    if fs::try_exists(&file_path).await? {
+        debug!("File already exists at {}", file_path.display());
+        return Ok(file_path);
+    }
+
     info!("Saving {}", file_path.display());
     fs::write(&file_path, &content).await?;
 
