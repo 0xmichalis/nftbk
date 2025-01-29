@@ -1,3 +1,4 @@
+use crate::url::get_url;
 use anyhow::Result;
 use scraper::{Html, Selector};
 use std::path::Path;
@@ -31,12 +32,19 @@ pub async fn download_html_resources(
                 }
 
                 // Construct absolute URL for the resource
-                let absolute_url = if resource_url.starts_with("//") {
+                let mut absolute_url = if resource_url.starts_with("//") {
                     format!("https:{}", resource_url)
                 } else {
                     let base = Url::parse(base_url)?;
-                    base.join(resource_url)?.to_string()
+                    match base.join(resource_url) {
+                        Ok(url) => url.to_string(),
+                        Err(_) => get_url(resource_url), // Try using get_url as fallback
+                    }
                 };
+
+                if absolute_url.starts_with("ipfs://") {
+                    absolute_url = get_url(&absolute_url);
+                }
 
                 // Create subdirectory structure
                 let resource_path = Path::new(resource_url);
@@ -57,7 +65,6 @@ pub async fn download_html_resources(
                 // Download and save the resource
                 debug!("Downloading HTML resource: {}", absolute_url);
                 let client = reqwest::Client::new();
-                // TODO: Handle resources with invalid URL schemes
                 match client.get(&absolute_url).send().await {
                     Ok(response) => {
                         info!("Saving HTML resource at {}", resource_path.display());
