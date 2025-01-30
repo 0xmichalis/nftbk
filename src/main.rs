@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use logging::LogLevel;
 use serde::Deserialize;
-use std::collections::HashMap;
 use std::path::PathBuf;
+use std::{collections::HashMap, time::Instant};
 use tokio::fs;
 use tracing::{info, warn};
 
@@ -63,12 +63,19 @@ async fn main() -> Result<()> {
         .context("Failed to read config file")?;
     let config: Config = toml::from_str(&config_content).context("Failed to parse config file")?;
 
+    let start = Instant::now();
+
     // Process chains from config
     for (chain_name, contracts) in &config.tokens.chains {
         if contracts.is_empty() {
             warn!("No contracts configured for chain {}", chain_name);
             continue;
         }
+        info!(
+            "Processing {} contracts on {} ...",
+            contracts.len(),
+            chain_name
+        );
 
         let rpc_url = config
             .chains
@@ -82,7 +89,11 @@ async fn main() -> Result<()> {
         }
     }
 
-    info!("Backup complete. Files saved in {}", output_path.display());
+    info!(
+        "Backup complete in {:?}s. Files saved in {}",
+        start.elapsed().as_secs(),
+        output_path.display()
+    );
 
     Ok(())
 }
