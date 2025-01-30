@@ -31,6 +31,7 @@ pub struct NFTMetadata {
     pub attributes: Option<Vec<NFTAttribute>>,
     pub media: Option<Media>,
     pub content: Option<Media>,
+    pub assets: Option<Assets>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,6 +55,11 @@ pub struct Media {
     #[serde(rename = "mimeType")]
     pub mime_type: Option<String>,
     pub mime: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Assets {
+    pub glb: Option<String>,
 }
 
 // ERC721/ERC1155 minimal ABI to get the token URI
@@ -188,6 +194,11 @@ fn get_uri_and_extension_from_metadata(
     if check_animation_details && metadata.animation_details.is_some() {
         let format = parse_details(metadata.animation_details.as_ref().unwrap());
         return (fallback_uri.to_string(), Some(format));
+    }
+    if let Some(assets) = &metadata.assets {
+        if let Some(glb) = &assets.glb {
+            return (glb.to_string(), Some("glb".to_string()));
+        }
     }
     (fallback_uri.to_string(), None)
 }
