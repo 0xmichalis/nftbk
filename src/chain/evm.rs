@@ -255,7 +255,7 @@ pub async fn process_nfts(
         debug!("Fetching metadata from {}", token_uri);
         let contract_address = format!("{:#x}", contract_addr);
         let token_id_str = token_id.to_string();
-        let metadata_content = fetch_and_save_content(
+        let metadata_content = match fetch_and_save_content(
             &token_uri,
             chain_name,
             &contract_address,
@@ -267,7 +267,15 @@ pub async fn process_nfts(
                 fallback_extension: None,
             },
         )
-        .await?;
+        .await
+        {
+            Ok(content) => content,
+            Err(e) => {
+                error!("Failed to fetch metadata: {}", e);
+                continue;
+            }
+        };
+
         let metadata_content_str = fs::read_to_string(metadata_content).await?;
         let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
 

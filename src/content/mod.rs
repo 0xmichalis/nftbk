@@ -13,6 +13,15 @@ async fn fetch_http_content(url: &str) -> Result<(Vec<u8>, String)> {
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?;
 
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to fetch content from {} (status: {})",
+            url,
+            status
+        ));
+    }
+
     let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
