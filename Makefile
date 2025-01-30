@@ -11,12 +11,12 @@ clippy:
 
 .PHONY: test
 test:
-	cargo test
+	cargo test -- $(filter-out $@,$(MAKECMDGOALS))
 
 .PHONY: check
 check:
-	cargo check
+	cargo check -- $(filter-out $@,$(MAKECMDGOALS))
 
 .PHONY: run
 run:
-	cargo run
+	cargo run -- $(filter-out $@,$(MAKECMDGOALS))
