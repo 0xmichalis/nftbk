@@ -11,7 +11,7 @@ clippy:
 
 .PHONY: test
 test:
-	cargo test -- $(filter-out $@,$(MAKECMDGOALS))
+	cargo test
 
 .PHONY: check
 check:

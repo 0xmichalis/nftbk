@@ -127,7 +127,6 @@ pub async fn process_nfts(
                 Options {
                     overriden_filename: Some("metadata.json".to_string()),
                     fallback_filename: None,
-                    fallback_extension: None,
                 },
             );
             let metadata_content_str = fs::read_to_string(metadata_content.await?).await?;
@@ -192,7 +191,6 @@ pub async fn process_nfts(
                     Options {
                         overriden_filename: Some(file_name),
                         fallback_filename: None,
-                        fallback_extension: None,
                     },
                 )
                 .await?;

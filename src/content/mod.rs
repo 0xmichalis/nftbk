@@ -1,7 +1,6 @@
-use crate::url::{
-    get_data_url_content, get_data_url_mime_type, get_last_path_segment, get_url, is_data_url,
-};
+use crate::url::{get_data_url, get_last_path_segment, get_url, is_data_url};
 use anyhow::Result;
+use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{debug, info};
@@ -9,7 +8,7 @@ use tracing::{debug, info};
 pub mod extensions;
 pub mod html;
 
-async fn fetch_http_content(url: &str) -> Result<(Vec<u8>, String)> {
+async fn fetch_http_content(url: &str) -> Result<Vec<u8>> {
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?;
 
@@ -22,22 +21,14 @@ async fn fetch_http_content(url: &str) -> Result<(Vec<u8>, String)> {
         ));
     }
 
-    let content_type = response
-        .headers()
-        .get(reqwest::header::CONTENT_TYPE)
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-
     let content = response.bytes().await?.to_vec();
 
-    Ok((content, content_type))
+    Ok(content)
 }
 
 pub struct Options {
     pub overriden_filename: Option<String>,
     pub fallback_filename: Option<String>,
-    pub fallback_extension: Option<String>,
 }
 
 async fn get_filename(
@@ -54,16 +45,10 @@ async fn get_filename(
         .join(token_id);
 
     // Determine filename
-    let mut filename = if let Some(name) = options.overriden_filename {
+    let filename = if let Some(name) = options.overriden_filename {
         name.to_string()
     } else if is_data_url(url) {
-        // For data URLs, use content type as filename
-        let mime_type = get_data_url_mime_type(url);
-        format!(
-            "{}.{}",
-            options.fallback_filename.unwrap_or("content".to_string()),
-            mime_type
-        )
+        options.fallback_filename.unwrap_or("content".to_string())
     } else {
         // For regular URLs, try to extract filename from path
         get_last_path_segment(
@@ -74,12 +59,6 @@ async fn get_filename(
                 .as_str(),
         )
     };
-
-    if let Some(extension) = options.fallback_extension {
-        if !filename.contains('.') {
-            filename = format!("{}.{}", filename, extension);
-        }
-    }
 
     let file_path = dir_path.join(&filename);
 
@@ -101,6 +80,16 @@ fn detect_media_extension(content: &[u8]) -> Option<&'static str> {
         [0x00, 0x00, 0x00, _, 0x66, 0x74, 0x79, 0x70, 0x6D, 0x70, 0x34, 0x32, ..] => Some("mp4"),
         // QuickTime MOV
         [0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20, ..] => Some("mov"),
+        // HTML
+        [b'<', b'h', b't', b'm', b'l', ..] => Some("html"),
+        // HTML starting with <!DOCTYPE html
+        [0x3C, 0x21, 0x44, 0x4F, 0x43, 0x54, 0x59, 0x50, 0x45, 0x20, 0x68, 0x74, 0x6D, 0x6C, ..] => {
+            Some("html")
+        }
+        // JSON
+        [b'{', ..] => Some("json"),
+        // GLB
+        [0x47, 0x4C, 0x42, 0x0D, 0x0A, 0x1A, 0x0A, ..] => Some("glb"),
         _ => None,
     }
 }
@@ -123,8 +112,8 @@ pub async fn fetch_and_save_content(
     }
 
     // Get content based on URL type
-    let (mut content, content_type) = if is_data_url(url) {
-        get_data_url_content(url)?
+    let mut content = if is_data_url(url) {
+        get_data_url(url).unwrap()
     } else {
         let content_url = get_url(url);
         // TODO: Rotate IPFS gateways to handle rate limits
@@ -134,29 +123,24 @@ pub async fn fetch_and_save_content(
     // Create directory and save content
     fs::create_dir_all(file_path.parent().unwrap()).await?;
 
-    if content_type.contains("text/html") || content_type.contains("application/xhtml") {
-        if !file_path.to_string_lossy().ends_with(".html") {
-            file_path = file_path.with_extension("html");
-        }
-        debug!("Downloading HTML content from {}. The saved files may be incomplete as they may have more dependencies.", url);
-        let content_str = String::from_utf8_lossy(&content);
-        html::download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
-    } else if content_type.contains("application/json") {
-        // Try to parse and format JSON content
-        if let Ok(content_str) = String::from_utf8(content.clone()) {
-            if let Ok(json_value) = serde_json::from_str::<serde_json::Value>(&content_str) {
-                content = serde_json::to_string_pretty(&json_value)?.into();
-            }
-        }
-    }
-
-    // After the HTML/JSON handling block, add media extension detection:
-    // Check for media files if no extension detected
+    // Detect media extension if no extension is present
     if file_path.extension().is_none() {
         if let Some(ext) = detect_media_extension(&content) {
             file_path = file_path.with_extension(ext);
             debug!("Detected media extension: {}", ext);
         }
+    }
+
+    match file_path.extension().unwrap_or_default().to_str() {
+        Some("json") => {
+            let json_value: Value = serde_json::from_slice(&content)?;
+            content = serde_json::to_string_pretty(&json_value)?.into();
+        }
+        Some("html") => {
+            let content_str = String::from_utf8_lossy(&content);
+            html::download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
+        }
+        _ => {}
     }
 
     // Check if file exists again before downloading

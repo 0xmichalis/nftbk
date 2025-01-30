@@ -1,22 +1,12 @@
 use ::url::Url;
-use anyhow::Result;
 use base64::Engine;
 
 pub fn is_data_url(url: &str) -> bool {
     url.starts_with("data:")
 }
 
-pub fn get_data_url_mime_type(url: &str) -> String {
-    url.trim_start_matches("data:")
-        .split(';')
-        .next()
-        .and_then(|s| s.split('/').last())
-        .unwrap_or("bin")
-        .to_string()
-}
-
 /// Extract content from a data URL
-fn get_data_url(url: &str) -> Option<(String, Vec<u8>)> {
+pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
     if !is_data_url(url) {
         return None;
     }
@@ -26,20 +16,11 @@ fn get_data_url(url: &str) -> Option<(String, Vec<u8>)> {
         return None;
     }
 
-    let mime_part = parts[0].trim_start_matches("data:").trim_end_matches(";");
     let data = base64::engine::general_purpose::STANDARD
         .decode(parts[1])
         .ok()?;
 
-    Some((mime_part.to_string(), data))
-}
-
-/// Get content from a data URL, returns the content and suggested file extension
-pub fn get_data_url_content(url: &str) -> Result<(Vec<u8>, String)> {
-    let (mime_type, content) =
-        get_data_url(url).ok_or_else(|| anyhow::anyhow!("Invalid data URL format"))?;
-
-    Ok((content, mime_type))
+    Some(data)
 }
 
 /// Converts IPFS URLs to use a gateway, otherwise returns the original URL
@@ -83,23 +64,20 @@ mod tests {
     }
 
     #[test]
-    fn test_get_data_url_content_json() {
+    fn test_get_data_url_json() {
         let data_url = "data:application/json;base64,eyAidGVzdCI6IDEyMyB9"; // base64 encoded '{ "test": 123 }'
-        let (content, mime_type) = get_data_url_content(data_url).unwrap();
+        let content = get_data_url(data_url).unwrap();
         assert_eq!(String::from_utf8_lossy(&content), "{ \"test\": 123 }");
-        assert_eq!(mime_type, "application/json");
     }
 
     #[test]
-    fn test_get_data_url_content_invalid() {
-        let result = get_data_url_content("data:text/plain;base64,invalid@@base64");
-        assert!(result.is_err());
+    fn test_get_data_url_invalid() {
+        assert!(get_data_url("data:text/plain;base64,invalid@@base64").is_none());
     }
 
     #[test]
-    fn test_get_data_url_content_not_data_url() {
-        let result = get_data_url_content("https://example.com/image.png");
-        assert!(result.is_err());
+    fn test_get_data_url_not_data_url() {
+        assert!(get_data_url("https://example.com/image.png").is_none());
     }
 
     #[test]
@@ -113,42 +91,15 @@ mod tests {
     }
 
     #[test]
-    fn test_get_data_url_mime_type() {
-        assert_eq!(
-            get_data_url_mime_type("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAA"),
-            "png"
-        );
-        assert_eq!(
-            get_data_url_mime_type("data:text/plain;charset=UTF-8;base64,SGVsbG8="),
-            "plain"
-        );
-        assert_eq!(
-            get_data_url_mime_type("data:application/vnd.custom+json;base64,eyJhIjogMn0="),
-            "vnd.custom+json"
-        );
-        assert_eq!(
-            get_data_url_mime_type("data:invalidmime;base64,SGVsbG8="),
-            "invalidmime"
-        );
-    }
+    fn test_get_data_url_base64() {
+        let content = get_data_url("data:text/plain;base64,SGVsbG8gd29ybGQ=").unwrap();
+        assert_eq!(content, b"Hello world");
 
-    #[test]
-    fn test_get_data_url() {
-        // Valid base64 URL
-        let (mime, data) = get_data_url("data:text/plain;base64,SGVsbG8gd29ybGQ=").unwrap();
-        assert_eq!(mime, "text/plain");
-        assert_eq!(data, b"Hello world");
-
-        // URL without base64 marker
         assert!(get_data_url("data:image/png,rawdata").is_none());
-
-        // Invalid base64 data
         assert!(get_data_url("data:text/plain;base64,Invalid@Base64!").is_none());
 
-        // Empty data
-        let (mime, data) = get_data_url("data:text/plain;base64,").unwrap();
-        assert_eq!(mime, "text/plain");
-        assert!(data.is_empty());
+        let empty = get_data_url("data:text/plain;base64,").unwrap();
+        assert!(empty.is_empty());
     }
 
     #[test]
@@ -194,20 +145,5 @@ mod tests {
             get_last_path_segment("https://example.com/docs#section1", "fallback"),
             "docs"
         );
-    }
-
-    #[test]
-    fn test_get_data_url_content_non_base64() {
-        // URL with missing base64 marker
-        let result = get_data_url_content("data:text/plain,HelloWorld");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_get_data_url_content_empty_mime() {
-        let data_url = "data:;base64,dGVzdCBjb250ZW50"; // base64 encoded 'test content'
-        let (content, mime_type) = get_data_url_content(data_url).unwrap();
-        assert_eq!(String::from_utf8_lossy(&content), "test content");
-        assert_eq!(mime_type, "");
     }
 }

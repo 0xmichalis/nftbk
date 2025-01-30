@@ -11,7 +11,7 @@ use std::time::Duration;
 use std::{future::Future, path::Path};
 use tokio::fs;
 use tokio::time::sleep;
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use crate::content::{
     extensions::fetch_and_save_additional_content, fetch_and_save_content, Options,
@@ -22,23 +22,12 @@ pub struct NFTMetadata {
     pub name: Option<String>,
     pub description: Option<String>,
     pub image: Option<String>,
-    #[serde(default)]
-    pub image_details: Option<Details>,
     pub animation_url: Option<String>,
-    #[serde(default)]
-    pub animation_details: Option<Details>,
     pub external_url: Option<String>,
     pub attributes: Option<Vec<NFTAttribute>>,
     pub media: Option<Media>,
     pub content: Option<Media>,
     pub assets: Option<Assets>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum Details {
-    Structured { format: String },
-    Raw(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -50,11 +39,6 @@ pub struct NFTAttribute {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Media {
     pub uri: String,
-    pub dimensions: Option<String>,
-    pub size: Option<String>,
-    #[serde(rename = "mimeType")]
-    pub mime_type: Option<String>,
-    pub mime: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -138,77 +122,35 @@ async fn get_token_uri(
     Ok(uri)
 }
 
-fn get_extension_from_mime(mime: &str) -> Option<String> {
-    match mime.split('/').last() {
-        Some("gltf-binary") => Some("glb".to_string()),
-        Some("octet-stream") => None,
-        Some(ext) => Some(ext.to_string()),
-        None => None,
-    }
-}
-
-fn get_extension_from_media(media: &Media) -> Option<String> {
-    if let Some(mime_type) = &media.mime_type {
-        return get_extension_from_mime(mime_type);
-    }
-    if let Some(mime) = &media.mime {
-        return get_extension_from_mime(mime);
-    }
-    None
-}
-
-fn parse_details(details: &Details) -> String {
-    match details {
-        Details::Structured { format } => format.to_lowercase(),
-        // Ugly but apparently some metadata is not structured properly
-        // eg. AMC's Oración
-        Details::Raw(raw_string) => serde_json::from_str::<serde_json::Value>(raw_string)
-            .unwrap()
-            .get("format")
-            .unwrap()
-            .as_str()
-            .unwrap()
-            .to_string(),
-    }
-}
-
-fn get_uri_and_extension_from_media(media: &Media, fallback_uri: &str) -> (String, Option<String>) {
+fn get_uri_from_media(media: &Media, fallback_uri: &str) -> String {
     let mut uri = media.uri.to_string();
     if uri.is_empty() {
         uri = fallback_uri.to_string();
     }
-    (uri, get_extension_from_media(media))
+    uri
 }
 
-fn get_uri_and_extension_from_metadata(
+fn get_uri_from_metadata(
     metadata: &NFTMetadata,
     fallback_uri: &str,
     check_image_details: bool,
     check_animation_details: bool,
-) -> (String, Option<String>) {
+) -> String {
     if !check_image_details && !check_animation_details {
         panic!("Need to check the extension of either an image or animation");
     }
     if let Some(media) = &metadata.media {
-        return get_uri_and_extension_from_media(media, fallback_uri);
+        return get_uri_from_media(media, fallback_uri);
     }
     if let Some(content) = &metadata.content {
-        return get_uri_and_extension_from_media(content, fallback_uri);
-    }
-    if check_image_details && metadata.image_details.is_some() {
-        let format = parse_details(metadata.image_details.as_ref().unwrap());
-        return (fallback_uri.to_string(), Some(format));
-    }
-    if check_animation_details && metadata.animation_details.is_some() {
-        let format = parse_details(metadata.animation_details.as_ref().unwrap());
-        return (fallback_uri.to_string(), Some(format));
+        return get_uri_from_media(content, fallback_uri);
     }
     if let Some(assets) = &metadata.assets {
         if let Some(glb) = &assets.glb {
-            return (glb.to_string(), Some("glb".to_string()));
+            return glb.to_string();
         }
     }
-    (fallback_uri.to_string(), None)
+    fallback_uri.to_string()
 }
 
 pub async fn process_nfts(
@@ -236,7 +178,7 @@ pub async fn process_nfts(
         let contract_addr = match contract.address.parse::<Address>() {
             Ok(addr) => addr,
             Err(e) => {
-                warn!("Failed to parse contract address on {}: {}", chain_name, e);
+                error!("Failed to parse contract address on {}: {}", chain_name, e);
                 continue;
             }
         };
@@ -245,7 +187,7 @@ pub async fn process_nfts(
         let token_id = match U256::from_str_radix(&contract.token_id, 10) {
             Ok(id) => id,
             Err(e) => {
-                warn!("Failed to parse token ID: {}", e);
+                error!("Failed to parse token ID: {}", e);
                 continue;
             }
         };
@@ -254,7 +196,7 @@ pub async fn process_nfts(
         let token_uri = match get_token_uri(contract_addr, provider.clone(), token_id).await {
             Ok(uri) => uri,
             Err(e) => {
-                error!("Failed to get token URI: {}, skipping token", e);
+                error!("Failed to get token URI: {}", e);
                 continue;
             }
         };
@@ -272,7 +214,6 @@ pub async fn process_nfts(
             Options {
                 overriden_filename: Some("metadata.json".to_string()),
                 fallback_filename: None,
-                fallback_extension: None,
             },
         )
         .await
@@ -289,8 +230,7 @@ pub async fn process_nfts(
 
         // Save linked content
         if let Some(image_url) = &metadata.image {
-            let (image_url, extension) =
-                get_uri_and_extension_from_metadata(&metadata, image_url, true, false);
+            let image_url = get_uri_from_metadata(&metadata, image_url, true, false);
             debug!("Downloading image from {}", image_url);
             fetch_and_save_content(
                 &image_url,
@@ -301,15 +241,13 @@ pub async fn process_nfts(
                 Options {
                     overriden_filename: None,
                     fallback_filename: Some("image".to_string()),
-                    fallback_extension: extension,
                 },
             )
             .await?;
         }
 
         if let Some(animation_url) = &metadata.animation_url {
-            let (animation_url, extension) =
-                get_uri_and_extension_from_metadata(&metadata, animation_url, false, true);
+            let animation_url = get_uri_from_metadata(&metadata, animation_url, false, true);
             debug!("Downloading animation from {}", animation_url);
             fetch_and_save_content(
                 &animation_url,
@@ -320,7 +258,6 @@ pub async fn process_nfts(
                 Options {
                     overriden_filename: None,
                     fallback_filename: Some("animation".to_string()),
-                    fallback_extension: extension,
                 },
             )
             .await?;
