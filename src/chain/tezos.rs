@@ -128,8 +128,9 @@ pub async fn process_nfts(
                     overriden_filename: Some("metadata.json".to_string()),
                     fallback_filename: None,
                 },
-            );
-            let metadata_content_str = fs::read_to_string(metadata_content.await?).await?;
+            )
+            .await?;
+            let metadata_content_str = fs::read_to_string(metadata_content).await?;
             let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
 
             // Get NFT name to use as fallback filename
