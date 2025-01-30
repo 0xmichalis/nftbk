@@ -108,10 +108,10 @@ async fn get_token_uri(
     contract_addr: Address,
     provider: RootProvider<Http<Client>>,
     token_id: U256,
-) -> Result<String> {
+) -> Result<String, Error> {
     let nft = INFT::new(contract_addr, provider);
 
-    match try_call_contract(|| {
+    let uri = match try_call_contract(|| {
         let nft = nft.clone();
         async move { nft.tokenURI(token_id).call().await }
     })
@@ -126,8 +126,16 @@ async fn get_token_uri(
             .await?;
             Ok(uri._0)
         }
-        Err(e) => Err(e.into()),
+        Err(e) => Err(e),
+    }?;
+
+    // Handle OpenSea's URI pattern
+    if uri.contains("/api.opensea.io/") && uri.contains("{id}") {
+        let hex_token_id = format!("{:x}", token_id);
+        return Ok(uri.replace("{id}", &hex_token_id));
     }
+
+    Ok(uri)
 }
 
 fn get_extension_from_mime(mime: &str) -> Option<String> {
