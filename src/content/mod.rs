@@ -96,6 +96,7 @@ fn detect_media_extension(content: &[u8]) -> Option<&'static str> {
         [b'{', ..] => Some("json"),
         // GLB
         [0x47, 0x4C, 0x42, 0x0D, 0x0A, 0x1A, 0x0A, ..] => Some("glb"),
+        [0x67, 0x6C, 0x54, 0x46, 0x02, 0x00, 0x00, 0x00, ..] => Some("glb"),
         _ => None,
     }
 }
