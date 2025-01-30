@@ -122,35 +122,34 @@ async fn get_token_uri(
     Ok(uri)
 }
 
-fn get_uri_from_media(media: &Media, fallback_uri: &str) -> String {
-    let mut uri = media.uri.to_string();
-    if uri.is_empty() {
-        uri = fallback_uri.to_string();
-    }
-    uri
-}
+fn collect_urls_to_download(metadata: &NFTMetadata) -> Vec<(String, String)> {
+    let mut urls_to_download = Vec::new();
 
-fn get_uri_from_metadata(
-    metadata: &NFTMetadata,
-    fallback_uri: &str,
-    check_image_details: bool,
-    check_animation_details: bool,
-) -> String {
-    if !check_image_details && !check_animation_details {
-        panic!("Need to check the extension of either an image or animation");
-    }
+    let mut add_if_not_empty = |url: &str, name: &str| {
+        if !url.is_empty() {
+            urls_to_download.push((url.to_string(), name.to_string()));
+        }
+    };
+
     if let Some(media) = &metadata.media {
-        return get_uri_from_media(media, fallback_uri);
+        add_if_not_empty(&media.uri, "media");
     }
     if let Some(content) = &metadata.content {
-        return get_uri_from_media(content, fallback_uri);
+        add_if_not_empty(&content.uri, "content");
     }
     if let Some(assets) = &metadata.assets {
         if let Some(glb) = &assets.glb {
-            return glb.to_string();
+            add_if_not_empty(glb, "glb");
         }
     }
-    fallback_uri.to_string()
+    if let Some(image) = &metadata.image {
+        add_if_not_empty(image, "image");
+    }
+    if let Some(animation_url) = &metadata.animation_url {
+        add_if_not_empty(animation_url, "animation");
+    }
+
+    urls_to_download
 }
 
 pub async fn process_nfts(
@@ -225,39 +224,31 @@ pub async fn process_nfts(
             }
         };
 
+        // Iterate over metadata to gather all URLs to download
         let metadata_content_str = fs::read_to_string(metadata_content).await?;
         let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
+        let urls_to_download = collect_urls_to_download(&metadata);
 
-        // Save linked content
-        if let Some(image_url) = &metadata.image {
-            let image_url = get_uri_from_metadata(&metadata, image_url, true, false);
-            debug!("Downloading image from {}", image_url);
+        // Download all URLs, keeping track of what we've downloaded to avoid duplicates
+        let mut downloaded = std::collections::HashSet::new();
+        for (url, file_name) in urls_to_download {
+            // Only download if we haven't seen this URL before
+            let inserted = downloaded.insert(url.clone());
+            if !inserted {
+                debug!("Skipping duplicate {} from {}", file_name, url);
+                continue;
+            }
+
+            debug!("Downloading {} from {}", file_name, url);
             fetch_and_save_content(
-                &image_url,
+                &url,
                 chain_name,
                 &contract_address,
                 &token_id_str,
                 output_path,
                 Options {
                     overriden_filename: None,
-                    fallback_filename: Some("image".to_string()),
-                },
-            )
-            .await?;
-        }
-
-        if let Some(animation_url) = &metadata.animation_url {
-            let animation_url = get_uri_from_metadata(&metadata, animation_url, false, true);
-            debug!("Downloading animation from {}", animation_url);
-            fetch_and_save_content(
-                &animation_url,
-                chain_name,
-                &contract_address,
-                &token_id_str,
-                output_path,
-                Options {
-                    overriden_filename: None,
-                    fallback_filename: Some("animation".to_string()),
+                    fallback_filename: Some(file_name.clone()),
                 },
             )
             .await?;
