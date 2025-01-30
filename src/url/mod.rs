@@ -11,6 +11,13 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
         return None;
     }
 
+    // Handle JSON data URLs
+    if url.starts_with("data:application/json;utf8,") {
+        let json_content = url.trim_start_matches("data:application/json;utf8,");
+        return Some(json_content.as_bytes().to_vec());
+    }
+
+    // Handle base64 encoded data URLs
     let parts: Vec<&str> = url.splitn(2, "base64,").collect();
     if parts.len() != 2 {
         return None;
@@ -65,9 +72,18 @@ mod tests {
 
     #[test]
     fn test_get_data_url_json() {
+        // Test base64 encoded JSON
         let data_url = "data:application/json;base64,eyAidGVzdCI6IDEyMyB9"; // base64 encoded '{ "test": 123 }'
         let content = get_data_url(data_url).unwrap();
         assert_eq!(String::from_utf8_lossy(&content), "{ \"test\": 123 }");
+
+        // Test utf8 encoded JSON
+        let utf8_url = r#"data:application/json;utf8,{"name":"BEAR","attributes":[{"trait_type":"name","value":"BEAR"}]}"#;
+        let content = get_data_url(utf8_url).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&content),
+            r#"{"name":"BEAR","attributes":[{"trait_type":"name","value":"BEAR"}]}"#
+        );
     }
 
     #[test]
