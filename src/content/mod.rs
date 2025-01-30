@@ -77,11 +77,15 @@ fn detect_media_extension(content: &[u8]) -> Option<&'static str> {
         [b'G', b'I', b'F', b'8', b'7', b'a', ..] => Some("gif"),
         // WEBP
         [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some("webp"),
+        // MP3
+        [0x49, 0x44, 0x33, ..] => Some("mp3"),
         // MP4
         [0x00, 0x00, 0x00, _, 0x66, 0x74, 0x79, 0x70, 0x6D, 0x70, 0x34, 0x32, ..] => Some("mp4"),
         [0x00, 0x00, 0x00, _, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D, ..] => Some("mp4"),
         // QuickTime MOV
         [0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20, ..] => Some("mov"),
+        // MPG
+        [0x00, 0x00, 0x01, 0xBA, ..] => Some("mpg"),
         // HTML
         [b'<', b'h', b't', b'm', b'l', ..] => Some("html"),
         // HTML starting with <!DOCTYPE html
