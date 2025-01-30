@@ -74,6 +74,7 @@ fn detect_media_extension(content: &[u8]) -> Option<&'static str> {
         [0xFF, 0xD8, 0xFF, ..] => Some("jpg"),
         // GIF
         [b'G', b'I', b'F', b'8', b'9', b'a', ..] => Some("gif"),
+        [b'G', b'I', b'F', b'8', b'7', b'a', ..] => Some("gif"),
         // WEBP
         [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some("webp"),
         // MP4
