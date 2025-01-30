@@ -39,14 +39,7 @@ pub fn get_data_url_content(url: &str) -> Result<(Vec<u8>, String)> {
     let (mime_type, content) =
         get_data_url(url).ok_or_else(|| anyhow::anyhow!("Invalid data URL format"))?;
 
-    // Determine file extension based on MIME type
-    let extension = if mime_type.is_empty() {
-        "application/octet-stream".to_string()
-    } else {
-        mime_type
-    };
-
-    Ok((content, extension))
+    Ok((content, mime_type))
 }
 
 /// Converts IPFS URLs to use a gateway, otherwise returns the original URL
@@ -215,6 +208,6 @@ mod tests {
         let data_url = "data:;base64,dGVzdCBjb250ZW50"; // base64 encoded 'test content'
         let (content, mime_type) = get_data_url_content(data_url).unwrap();
         assert_eq!(String::from_utf8_lossy(&content), "test content");
-        assert_eq!(mime_type, "application/octet-stream");
+        assert_eq!(mime_type, "");
     }
 }

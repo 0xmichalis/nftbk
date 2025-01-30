@@ -127,6 +127,7 @@ async fn get_token_uri(
 fn get_extension_from_mime(mime: &str) -> Option<String> {
     match mime.split('/').last() {
         Some("gltf-binary") => Some("glb".to_string()),
+        Some("octet-stream") => None,
         Some(ext) => Some(ext.to_string()),
         None => None,
     }

@@ -13,12 +13,11 @@ async fn fetch_http_content(url: &str) -> Result<(Vec<u8>, String)> {
     let client = reqwest::Client::new();
     let response = client.get(url).send().await?;
 
-    // Get content type, defaulting to "application/octet-stream" if not specified
     let content_type = response
         .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|h| h.to_str().ok())
-        .unwrap_or("application/octet-stream")
+        .unwrap_or("")
         .to_string();
 
     let content = response.bytes().await?.to_vec();
