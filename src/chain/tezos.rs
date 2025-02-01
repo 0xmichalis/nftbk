@@ -7,7 +7,7 @@ use tezos_michelson::michelson::data;
 use tezos_rpc::client::TezosRpc;
 use tezos_rpc::http::default::HttpClient;
 use tokio::fs;
-use tracing::debug;
+use tracing::{debug, error};
 
 use crate::content::{
     extensions::fetch_and_save_additional_content, fetch_and_save_content, Options,
@@ -113,99 +113,108 @@ pub async fn process_nfts(
         .collect::<Vec<_>>();
 
     for contract in contracts {
-        debug!("Processing contract {}", contract.address);
+        debug!(
+            "Processing contract {} on tezos (token ID {})",
+            contract.address, contract.token_id
+        );
+        let token_uri = match get_uri(&rpc, &contract).await? {
+            None => {
+                error!(
+                    "Failed to get token URI for contract {} (token ID {})",
+                    contract.address, contract.token_id
+                );
+                continue;
+            }
+            Some(uri) => uri,
+        };
 
-        if let Some(uri) = get_uri(&rpc, &contract).await? {
-            debug!("Fetching metadata from {}", uri);
+        debug!("Fetching metadata from {}", token_uri);
+        let metadata_content = fetch_and_save_content(
+            &token_uri,
+            "tezos",
+            &contract.address,
+            &contract.token_id,
+            output_path,
+            Options {
+                overriden_filename: Some("metadata.json".to_string()),
+                fallback_filename: None,
+            },
+        )
+        .await?;
+        let metadata_content_str = fs::read_to_string(metadata_content).await?;
+        let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
 
-            let metadata_content = fetch_and_save_content(
-                &uri,
+        // Get NFT name to use as fallback filename
+        let nft_name = metadata.name.as_deref().unwrap_or("untitled");
+
+        // Collect all URIs that need to be downloaded
+        let mut urls_to_download = Vec::new();
+
+        // Add URIs from formats array with their filenames
+        // It's important to add the formats first, because the rest of the links may be
+        // in the formats array and we prefer to iterate over formats first because they
+        // contain more information about the resource that is downloaded.
+        if let Some(formats) = &metadata.formats {
+            for format in formats {
+                if format.uri.is_empty() {
+                    continue;
+                }
+                let file_name = if format.file_name.is_empty() {
+                    nft_name.to_string()
+                } else {
+                    format.file_name.clone()
+                };
+                urls_to_download.push((format.uri.clone(), file_name));
+            }
+        }
+
+        // Helper function to add non-empty URLs
+        let mut add_if_not_empty = |url: &Option<String>, name: &str| {
+            if let Some(url) = url {
+                if !url.is_empty() {
+                    urls_to_download.push((url.clone(), name.to_string()));
+                }
+            }
+        };
+
+        add_if_not_empty(&metadata.image, "image");
+        add_if_not_empty(&metadata.artifact_uri, "artifact");
+        add_if_not_empty(&metadata.display_uri, "display");
+        add_if_not_empty(&metadata.thumbnail_uri, "thumbnail");
+
+        // Download all URLs, keeping track of what we've downloaded to avoid duplicates
+        let mut downloaded = std::collections::HashSet::new();
+        for (url, file_name) in urls_to_download {
+            // Only download if we haven't seen this URL before
+            let inserted = downloaded.insert(url.clone());
+            if !inserted {
+                debug!("Skipping duplicate {} from {}", file_name, url);
+                continue;
+            }
+
+            debug!("Downloading {} from {}", file_name, url);
+            fetch_and_save_content(
+                &url,
                 "tezos",
                 &contract.address,
                 &contract.token_id,
                 output_path,
                 Options {
-                    overriden_filename: Some("metadata.json".to_string()),
+                    overriden_filename: Some(file_name),
                     fallback_filename: None,
                 },
             )
             .await?;
-            let metadata_content_str = fs::read_to_string(metadata_content).await?;
-            let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
-
-            // Get NFT name to use as fallback filename
-            let nft_name = metadata.name.as_deref().unwrap_or("untitled");
-
-            // Collect all URIs that need to be downloaded
-            let mut urls_to_download = Vec::new();
-
-            // Add URIs from formats array with their filenames
-            // It's important to add the formats first, because the rest of the links may be
-            // in the formats array and we prefer to iterate over formats first because they
-            // contain more information about the resource that is downloaded.
-            if let Some(formats) = &metadata.formats {
-                for format in formats {
-                    if format.uri.is_empty() {
-                        continue;
-                    }
-
-                    let file_name = if format.file_name.is_empty() {
-                        nft_name.to_string()
-                    } else {
-                        format.file_name.clone()
-                    };
-                    urls_to_download.push((format.uri.clone(), file_name));
-                }
-            }
-
-            // Helper function to add non-empty URLs
-            let mut add_if_not_empty = |url: &Option<String>, name: &str| {
-                if let Some(url) = url {
-                    if !url.is_empty() {
-                        urls_to_download.push((url.clone(), name.to_string()));
-                    }
-                }
-            };
-
-            add_if_not_empty(&metadata.image, "image");
-            add_if_not_empty(&metadata.artifact_uri, "artifact");
-            add_if_not_empty(&metadata.display_uri, "display");
-            add_if_not_empty(&metadata.thumbnail_uri, "thumbnail");
-
-            // Download all URLs, keeping track of what we've downloaded to avoid duplicates
-            let mut downloaded = std::collections::HashSet::new();
-            for (url, file_name) in urls_to_download {
-                // Only download if we haven't seen this URL before
-                let inserted = downloaded.insert(url.clone());
-                if !inserted {
-                    debug!("Skipping duplicate {} from {}", file_name, url);
-                    continue;
-                }
-
-                debug!("Downloading {} from {}", file_name, url);
-                fetch_and_save_content(
-                    &url,
-                    "tezos",
-                    &contract.address,
-                    &contract.token_id,
-                    output_path,
-                    Options {
-                        overriden_filename: Some(file_name),
-                        fallback_filename: None,
-                    },
-                )
-                .await?;
-            }
-
-            // Process any additional content after downloading all files
-            fetch_and_save_additional_content(
-                "tezos",
-                &contract.address,
-                &contract.token_id,
-                output_path,
-            )
-            .await?;
         }
+
+        // Process any additional content after downloading all files
+        fetch_and_save_additional_content(
+            "tezos",
+            &contract.address,
+            &contract.token_id,
+            output_path,
+        )
+        .await?;
     }
 
     Ok(())

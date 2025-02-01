@@ -173,7 +173,10 @@ pub async fn process_nfts(
         .collect::<Vec<_>>();
 
     for contract in contracts {
-        debug!("Processing contract {} on {}", contract.address, chain_name);
+        debug!(
+            "Processing contract {} on {} (token ID {})",
+            contract.address, chain_name, contract.token_id
+        );
         let contract_addr = match contract.address.parse::<Address>() {
             Ok(addr) => addr,
             Err(e) => {
