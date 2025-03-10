@@ -4,3 +4,4 @@
 config.toml
 *.config.toml
 /nft_backup*
+*.json
