@@ -2,7 +2,16 @@ import json
 from typing import Dict, List
 import requests
 import os
+import argparse
 
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Extract tokens from Gallery.so")
+    parser.add_argument("--raw", action="store_true", help="Print raw response data and exit")
+    return parser.parse_args()
+
+
+args = parse_args()
 
 gallery_id = os.getenv("GALLERY_ID")
 if not gallery_id:
@@ -112,8 +121,12 @@ def generate_toml(tokens: Dict[str, List[str]]) -> str:
 
 if __name__ == "__main__":
     response = requests.post(url, json=payload, headers=headers)
-
     data = response.json()
     
+    # Print raw response if --raw flag is set
+    if args.raw:
+        print(json.dumps(data, indent=2))
+        exit(0)
+
     tokens = extract_tokens(data)
     print(generate_toml(tokens))
