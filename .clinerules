@@ -21,3 +21,44 @@
 ## Misc
 
 - When providing a solution, give me a score on a scale of 1-10 about how confident you are in the solution
+
+## Project-Specific Patterns
+
+### Code Organization
+- Maintain the modular architecture with clear separation of concerns
+- Keep chain-specific implementations isolated in dedicated modules
+- Follow the established error handling patterns with detailed logging
+
+### NFT Processing
+- Use the established content processing pipeline for consistency
+
+### URL Handling
+- Use the URL module for all URL normalization and parsing
+- Convert IPFS URLs to HTTP gateway URLs using the get_url function
+- Handle data URLs using the is_data_url and get_data_url functions
+
+### Content Detection
+- Use binary pattern matching to detect file types
+- Apply appropriate file extensions based on detected content types
+- Handle HTML content specially to extract embedded resources
+
+### Configuration
+- Use TOML for configuration files
+- Support both manual configuration and gallery.so integration
+- Keep API keys and sensitive information in environment variables
+
+### Output Structure
+- Maintain the established directory structure for NFT backups:
+  ```
+  nft_backup/
+    ├── [chain]/
+    │   └── [contract_address]/
+    │       └── [token_id]/
+    │           ├── artifact.*
+    │           └── metadata.json
+  ```
+
+### Error Handling
+- Use anyhow for error context
+- Implement retry logic for rate-limited API calls
+- Log errors but continue processing other tokens
