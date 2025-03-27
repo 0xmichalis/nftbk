@@ -35,7 +35,7 @@ pub async fn find_path_with_known_extension(path: &Path) -> Result<Option<PathBu
                     let entry_path = entry.path();
                     if entry_path
                         .file_stem()
-                        .map_or(false, |s| s.to_string_lossy() == stem)
+                        .is_some_and(|s| s.to_string_lossy() == stem)
                         && has_known_extension(&entry_path)
                     {
                         return Ok(Some(entry_path));
