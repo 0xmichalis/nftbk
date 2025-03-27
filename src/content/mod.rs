@@ -65,42 +65,6 @@ async fn get_filename(
     Ok(file_path)
 }
 
-fn detect_media_extension(content: &[u8]) -> Option<&'static str> {
-    // Check for common image/video formats
-    match content {
-        // PNG
-        [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, ..] => Some("png"),
-        // JPEG
-        [0xFF, 0xD8, 0xFF, ..] => Some("jpg"),
-        // GIF
-        [b'G', b'I', b'F', b'8', b'9', b'a', ..] => Some("gif"),
-        [b'G', b'I', b'F', b'8', b'7', b'a', ..] => Some("gif"),
-        // WEBP
-        [b'R', b'I', b'F', b'F', _, _, _, _, b'W', b'E', b'B', b'P', ..] => Some("webp"),
-        // MP3
-        [0x49, 0x44, 0x33, ..] => Some("mp3"),
-        // MP4
-        [0x00, 0x00, 0x00, _, 0x66, 0x74, 0x79, 0x70, 0x6D, 0x70, 0x34, 0x32, ..] => Some("mp4"),
-        [0x00, 0x00, 0x00, _, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D, ..] => Some("mp4"),
-        // QuickTime MOV
-        [0x00, 0x00, 0x00, 0x14, 0x66, 0x74, 0x79, 0x70, 0x71, 0x74, 0x20, 0x20, ..] => Some("mov"),
-        // MPG
-        [0x00, 0x00, 0x01, 0xBA, ..] => Some("mpg"),
-        // HTML
-        [b'<', b'h', b't', b'm', b'l', ..] => Some("html"),
-        // HTML starting with <!DOCTYPE html
-        [0x3C, 0x21, 0x44, 0x4F, 0x43, 0x54, 0x59, 0x50, 0x45, 0x20, 0x68, 0x74, 0x6D, 0x6C, ..] => {
-            Some("html")
-        }
-        // JSON
-        [b'{', ..] => Some("json"),
-        // GLB
-        [0x47, 0x4C, 0x42, 0x0D, 0x0A, 0x1A, 0x0A, ..] => Some("glb"),
-        [0x67, 0x6C, 0x54, 0x46, 0x02, 0x00, 0x00, 0x00, ..] => Some("glb"),
-        _ => None,
-    }
-}
-
 async fn try_exists(path: &Path) -> Result<Option<PathBuf>> {
     // If the file exists with exact path, return early
     if fs::try_exists(path).await? {
@@ -150,7 +114,7 @@ pub async fn fetch_and_save_content(
     fs::create_dir_all(file_path.parent().unwrap()).await?;
 
     // Always detect media extension from content and append it if not already present
-    if let Some(detected_ext) = detect_media_extension(&content) {
+    if let Some(detected_ext) = extensions::detect_media_extension(&content) {
         // Only append extension if path doesn't already have a known extension
         if !extensions::has_known_extension(&file_path) {
             let current_path_str = file_path.to_string_lossy();
