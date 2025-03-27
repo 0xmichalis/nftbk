@@ -101,38 +101,23 @@ fn detect_media_extension(content: &[u8]) -> Option<&'static str> {
     }
 }
 
-async fn try_exists(path: &Path) -> Result<bool> {
+async fn try_exists(path: &Path) -> Result<Option<PathBuf>> {
     // If the file exists with exact path, return early
     if fs::try_exists(path).await? {
-        return Ok(true);
+        debug!("File exists at exact path: {}", path.display());
+        return Ok(Some(path.to_path_buf()));
     }
 
-    // If the file already has an extension then we know it does not exist
-    if path.extension().is_some() {
-        return Ok(false);
+    // If the file already has a known extension then we know it does not exist
+    if let Some(existing_path) = extensions::find_path_with_known_extension(path).await? {
+        debug!(
+            "File exists with known extension: {}",
+            existing_path.display()
+        );
+        return Ok(Some(existing_path));
     }
 
-    // If the file has no extension we can check parent directory for files with same stem.
-    // For now we ignore any matches but it may be that we need to change this in the future.
-    let file_stem = path.file_stem().unwrap().to_string_lossy().to_string();
-    if let Some(parent) = path.parent() {
-        if fs::try_exists(parent).await? {
-            let mut dir = fs::read_dir(parent).await?;
-            while let Some(entry) = dir.next_entry().await? {
-                if let Some(existing_stem) = entry.path().file_stem() {
-                    if existing_stem.to_string_lossy() == file_stem {
-                        debug!(
-                            "File already exists with extension: {}",
-                            entry.path().display()
-                        );
-                        return Ok(true);
-                    }
-                }
-            }
-        }
-    }
-
-    Ok(false)
+    Ok(None)
 }
 
 pub async fn fetch_and_save_content(
@@ -146,10 +131,10 @@ pub async fn fetch_and_save_content(
     let mut file_path =
         get_filename(url, chain, contract_address, token_id, output_path, options).await?;
 
-    // Check if file exists (with any extension)
-    if try_exists(&file_path).await? {
-        debug!("File already exists at {}", file_path.display());
-        return Ok(file_path);
+    // Check if file exists (with any extension) using base path
+    if let Some(existing_path) = try_exists(&file_path).await? {
+        debug!("File already exists at {}", existing_path.display());
+        return Ok(existing_path);
     }
 
     // Get content based on URL type
@@ -164,11 +149,13 @@ pub async fn fetch_and_save_content(
     // Create directory and save content
     fs::create_dir_all(file_path.parent().unwrap()).await?;
 
-    // Detect media extension if no extension is present
-    if file_path.extension().is_none() {
-        if let Some(ext) = detect_media_extension(&content) {
-            debug!("Detected media extension: {}", ext);
-            file_path = file_path.with_extension(ext);
+    // Always detect media extension from content and append it if not already present
+    if let Some(detected_ext) = detect_media_extension(&content) {
+        // Only append extension if path doesn't already have a known extension
+        if !extensions::has_known_extension(&file_path) {
+            let current_path_str = file_path.to_string_lossy();
+            debug!("Appending detected media extension: {}", detected_ext);
+            file_path = PathBuf::from(format!("{}.{}", current_path_str, detected_ext));
         }
     }
 

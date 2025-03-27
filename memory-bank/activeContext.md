@@ -33,6 +33,7 @@ The most recent work has focused on:
 3. **Content Processing**:
    - Enhanced media type detection
    - Support for various URL formats and protocols
+   - Fixed issue with file extension detection for filenames containing dots (e.g., "faux.parenting")
 
 ## Active Decisions
 

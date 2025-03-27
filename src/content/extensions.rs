@@ -1,9 +1,54 @@
 use anyhow::Result;
 use flate2::read::GzDecoder;
+use std::ffi::OsStr;
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::{debug, info};
+
+/// List of known media file extensions that we handle
+const KNOWN_EXTENSIONS: &[&str] = &[
+    "png", "jpg", "jpeg", "gif", "webp", "mp3", "mp4", "mov", "mpg", "html", "json", "glb",
+];
+
+/// Checks if a path has a known media file extension
+pub fn has_known_extension(path: &Path) -> bool {
+    if let Some(ext) = path.extension().and_then(OsStr::to_str) {
+        KNOWN_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+    } else {
+        false
+    }
+}
+
+/// Gets a path with a known extension in the same directory, if one exists
+pub async fn find_path_with_known_extension(path: &Path) -> Result<Option<PathBuf>> {
+    if let Some(parent) = path.parent() {
+        // Get the appropriate stem based on whether the path has a known extension
+        let search_stem = if has_known_extension(path) {
+            path.file_stem().map(|s| s.to_string_lossy().to_string())
+        } else {
+            // If path doesn't have a known extension, use the whole filename as stem
+            path.file_name().map(|s| s.to_string_lossy().to_string())
+        };
+
+        if let Some(stem) = search_stem {
+            if fs::try_exists(parent).await? {
+                let mut dir = fs::read_dir(parent).await?;
+                while let Some(entry) = dir.next_entry().await? {
+                    let entry_path = entry.path();
+                    if entry_path
+                        .file_stem()
+                        .map_or(false, |s| s.to_string_lossy() == stem)
+                        && has_known_extension(&entry_path)
+                    {
+                        return Ok(Some(entry_path));
+                    }
+                }
+            }
+        }
+    }
+    Ok(None)
+}
 
 async fn extend_croquet_challenge_content(
     output_path: &Path,

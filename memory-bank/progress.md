@@ -70,6 +70,9 @@ The project is in a functional state with core features implemented and working.
    - Current solution: Contract-specific extensions for known cases
    - Future enhancement: More flexible extension mechanism
 
+4. ~~**File Extension Detection**: Files with names containing dots (e.g., "faux.parenting") were not getting proper media type detection.~~
+   - ✅ Fixed: Now always detecting media type from content and applying the correct extension regardless of the original filename
+
 ## Recent Milestones
 
 1. ✅ **Multi-Chain Support**: Added support for multiple Ethereum-based chains
