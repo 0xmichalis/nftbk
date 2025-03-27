@@ -13,9 +13,7 @@ use tokio::fs;
 use tokio::time::sleep;
 use tracing::{debug, error};
 
-use crate::content::{
-    extensions::fetch_and_save_additional_content, fetch_and_save_content, Options,
-};
+use crate::content::{extra::fetch_and_save_extra_content, fetch_and_save_content, Options};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -258,7 +256,7 @@ pub async fn process_nfts(
         }
 
         // Process any additional content after downloading all files
-        fetch_and_save_additional_content(
+        fetch_and_save_extra_content(
             chain_name,
             &format!("{:#x}", contract_addr),
             &token_id.to_string(),

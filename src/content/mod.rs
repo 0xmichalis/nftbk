@@ -6,6 +6,7 @@ use tokio::fs;
 use tracing::{debug, info};
 
 pub mod extensions;
+pub mod extra;
 pub mod html;
 
 async fn fetch_http_content(url: &str) -> Result<Vec<u8>> {
