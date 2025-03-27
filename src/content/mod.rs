@@ -114,10 +114,9 @@ pub async fn fetch_and_save_content(
     // Create directory and save content
     fs::create_dir_all(file_path.parent().unwrap()).await?;
 
-    // Always detect media extension from content and append it if not already present
-    if let Some(detected_ext) = extensions::detect_media_extension(&content) {
-        // Only append extension if path doesn't already have a known extension
-        if !extensions::has_known_extension(&file_path) {
+    // Detect media extension from content if not already known from the filename
+    if !extensions::has_known_extension(&file_path) {
+        if let Some(detected_ext) = extensions::detect_media_extension(&content) {
             let current_path_str = file_path.to_string_lossy();
             debug!("Appending detected media extension: {}", detected_ext);
             file_path = PathBuf::from(format!("{}.{}", current_path_str, detected_ext));
