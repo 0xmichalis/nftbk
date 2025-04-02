@@ -206,8 +206,14 @@ pub async fn process_nfts(
         }
 
         // Process any additional content after downloading all files
-        fetch_and_save_extra_content("tezos", &contract.address, &contract.token_id, output_path)
-            .await?;
+        fetch_and_save_extra_content(
+            "tezos",
+            &contract.address,
+            &contract.token_id,
+            output_path,
+            metadata.artifact_uri.as_deref(),
+        )
+        .await?;
     }
 
     Ok(())

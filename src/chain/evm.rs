@@ -261,6 +261,7 @@ pub async fn process_nfts(
             &format!("{:#x}", contract_addr),
             &token_id.to_string(),
             output_path,
+            None,
         )
         .await?;
     }

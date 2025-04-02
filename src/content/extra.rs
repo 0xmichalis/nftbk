@@ -3,7 +3,9 @@ use flate2::read::GzDecoder;
 use std::io::Read;
 use std::path::Path;
 use tokio::fs;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
+
+use crate::url::get_url;
 
 async fn fetch_croquet_challenge_content(
     output_path: &Path,
@@ -43,7 +45,6 @@ async fn fetch_croquet_challenge_content(
             continue;
         }
 
-        info!("Saving {} as {}", url, target_file);
         let response = client.get(&url).send().await?;
         let content = response.bytes().await?;
 
@@ -58,6 +59,68 @@ async fn fetch_croquet_challenge_content(
         };
 
         fs::write(file_path, final_content).await?;
+        info!("Saved {} from {}", target_file, url);
+    }
+
+    Ok(())
+}
+
+async fn fetch_the_fisherman_content(
+    output_path: &Path,
+    contract: &str,
+    token_id: &str,
+    artifact_url: &str,
+) -> Result<()> {
+    debug!(
+        "Fetching additional content for Tezos contract {} token {}",
+        contract, token_id
+    );
+
+    // Create token directory
+    let token_dir = output_path.join("tezos").join(contract).join(token_id);
+    fs::create_dir_all(&token_dir).await?;
+
+    // Files to download
+    let files = [
+        "0.png",
+        "1.png",
+        "2.png",
+        "4.png",
+        "5.png",
+        "6.png",
+        "7.png",
+        "8.png",
+        "10.png",
+        "11.png",
+        "13.png",
+        "14.png",
+        "sound1.mp3",
+        "sound2.mp3",
+        "IBMCGAthin.ttf",
+    ];
+
+    // Download each file
+    let client = reqwest::Client::new();
+    for file in files {
+        let url = format!("{}/{}", artifact_url.trim_end_matches('/'), file);
+        let file_path = token_dir.join(file);
+
+        // Skip if file already exists
+        if fs::try_exists(&file_path).await? {
+            debug!("File already exists at {}", file_path.display());
+            continue;
+        }
+
+        match client.get(&url).send().await {
+            Ok(response) => {
+                let content = response.bytes().await?;
+                fs::write(&file_path, content).await?;
+                info!("Saved {} from {}", file, url);
+            }
+            Err(e) => {
+                warn!("Failed to download {}: {}", file, e);
+            }
+        }
     }
 
     Ok(())
@@ -69,14 +132,24 @@ pub async fn fetch_and_save_extra_content(
     chain: &str,
     contract: &str,
     token_id: &str,
-    _output_path: &Path,
+    output_path: &Path,
+    artifact_url: Option<&str>,
 ) -> Result<()> {
     match (chain, contract, token_id) {
         (
             "ethereum",
             "0x2a86c5466f088caebf94e071a77669bae371cd87",
             "25811853076941608055270457512038717433705462539422789705262203111341130500780",
-        ) => fetch_croquet_challenge_content(_output_path, contract, token_id).await,
+        ) => fetch_croquet_challenge_content(output_path, contract, token_id).await,
+        ("tezos", "KT1UcASzQxiWprSmsvpStsxtAZzaRJWR78gz", "4") if artifact_url.is_some() => {
+            fetch_the_fisherman_content(
+                output_path,
+                contract,
+                token_id,
+                &get_url(artifact_url.unwrap()),
+            )
+            .await
+        }
         // Default case - no extension needed
         _ => Ok(()),
     }
