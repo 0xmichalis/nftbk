@@ -32,8 +32,14 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
 
 /// Converts IPFS URLs to use a gateway, otherwise returns the original URL
 pub fn get_url(url: &str) -> String {
+    // Handle ipfs:// protocol URLs
     if url.starts_with("ipfs://") {
         format!("https://ipfs.io/ipfs/{}", url.trim_start_matches("ipfs://"))
+    }
+    // Handle raw IPFS hashes (Qm... or bafy... format)
+    // TODO: Use a proper IPFS library to validate formats
+    else if url.starts_with("Qm") && url.len() == 46 || url.starts_with("bafy") {
+        format!("https://ipfs.io/ipfs/{}", url)
     } else {
         url.to_string()
     }
@@ -62,6 +68,27 @@ mod tests {
             get_url(ipfs_url),
             "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco"
         );
+    }
+
+    #[test]
+    fn test_get_url_raw_ipfs_hash() {
+        // Test Qm... hash format
+        let raw_hash = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+        assert_eq!(
+            get_url(raw_hash),
+            "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco"
+        );
+
+        // Test bafy... hash format
+        let bafy_hash = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+        assert_eq!(
+            get_url(bafy_hash),
+            "https://ipfs.io/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+        );
+
+        // Test non-IPFS hash
+        let non_ipfs = "QmInvalidHash";
+        assert_eq!(get_url(non_ipfs), non_ipfs);
     }
 
     #[test]
