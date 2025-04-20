@@ -220,7 +220,10 @@ pub async fn process_nfts(
         {
             Ok(content) => content,
             Err(e) => {
-                error!("Failed to fetch metadata: {}", e);
+                error!(
+                    "Failed to fetch metadata from {} ({}:{}): {}",
+                    token_uri, contract_address, token_id_str, e
+                );
                 continue;
             }
         };
