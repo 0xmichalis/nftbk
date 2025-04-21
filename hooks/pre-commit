@@ -3,5 +3,8 @@ set -e
 
 make all
 
-# Exit with make's exit code
-exit $?
+# Add any changes made by make back to the staging area
+# The downside of this is that it will also add the changes
+# made by the user to the staging area which may not be what
+# we want but it's better than nothing.
+git add -u
