@@ -22,10 +22,39 @@ pub struct NFTMetadata {
     pub image: Option<String>,
     pub animation_url: Option<String>,
     pub external_url: Option<String>,
+    #[serde(default)]
+    #[serde(deserialize_with = "deserialize_attributes")]
     pub attributes: Option<Vec<NFTAttribute>>,
     pub media: Option<Media>,
     pub content: Option<Media>,
     pub assets: Option<Assets>,
+}
+
+// Helper enum to deserialize both formats
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AttributesFormat {
+    Array(Vec<NFTAttribute>),
+    // Used by KnownOrigin
+    Map(std::collections::HashMap<String, serde_json::Value>),
+}
+
+fn deserialize_attributes<'de, D>(deserializer: D) -> Result<Option<Vec<NFTAttribute>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    match Option::<AttributesFormat>::deserialize(deserializer)? {
+        Some(AttributesFormat::Map(map)) => {
+            // Convert map to Vec<NFTAttribute>
+            Ok(Some(
+                map.into_iter()
+                    .map(|(trait_type, value)| NFTAttribute { trait_type, value })
+                    .collect(),
+            ))
+        }
+        Some(AttributesFormat::Array(attrs)) => Ok(Some(attrs)),
+        None => Ok(None),
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
