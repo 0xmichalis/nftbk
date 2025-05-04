@@ -66,28 +66,21 @@ async fn get_filename(
     Ok(file_path)
 }
 
-async fn try_exists(path: &Path, url: &str) -> Result<Option<PathBuf>> {
+async fn try_exists(path: &Path) -> Result<Option<PathBuf>> {
     // If the file exists with exact path, return early
     if fs::try_exists(path).await? {
         debug!("File exists at exact path: {}", path.display());
         return Ok(Some(path.to_path_buf()));
     }
 
-    // Extract last path segment from URL
-    let last_segment = url.split('/').next_back().unwrap_or("");
-    if let Some(dot_pos) = last_segment.rfind('.') {
-        // Looks like a filename with an extension
-        if dot_pos > 0 && dot_pos < last_segment.len() - 1 {
-            let parent = path.parent().unwrap_or_else(|| Path::new("."));
-            let file_path = parent.join(last_segment);
-            if fs::try_exists(&file_path).await? {
-                debug!("File exists at: {}", file_path.display());
-                return Ok(Some(file_path));
-            } else {
-                debug!("File does not exist at: {}", file_path.display());
-                return Ok(None);
-            }
-        }
+    // If the path ends with a known extension and the file does not exist, then
+    // we know the file does not exist and needs to be downloaded.
+    if extensions::has_known_extension(path) {
+        debug!(
+            "File with known extension does not exist: {}",
+            path.display()
+        );
+        return Ok(None);
     }
 
     // If the URL does not contain a file extension then we can use an additional heuristic
@@ -117,7 +110,7 @@ pub async fn fetch_and_save_content(
         get_filename(url, chain, contract_address, token_id, output_path, options).await?;
 
     // Check if file exists (with any extension) using base path and url
-    if let Some(existing_path) = try_exists(&file_path, url).await? {
+    if let Some(existing_path) = try_exists(&file_path).await? {
         debug!("File already exists at {}", existing_path.display());
         return Ok(existing_path);
     }
