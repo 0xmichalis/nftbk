@@ -66,14 +66,31 @@ async fn get_filename(
     Ok(file_path)
 }
 
-async fn try_exists(path: &Path) -> Result<Option<PathBuf>> {
+async fn try_exists(path: &Path, url: &str) -> Result<Option<PathBuf>> {
     // If the file exists with exact path, return early
     if fs::try_exists(path).await? {
         debug!("File exists at exact path: {}", path.display());
         return Ok(Some(path.to_path_buf()));
     }
 
-    // If the file already has a known extension then we know it does not exist
+    // Extract last path segment from URL
+    let last_segment = url.split('/').next_back().unwrap_or("");
+    if let Some(dot_pos) = last_segment.rfind('.') {
+        // Looks like a filename with an extension
+        if dot_pos > 0 && dot_pos < last_segment.len() - 1 {
+            let parent = path.parent().unwrap_or_else(|| Path::new("."));
+            let file_path = parent.join(last_segment);
+            if fs::try_exists(&file_path).await? {
+                debug!("File exists at: {}", file_path.display());
+                return Ok(Some(file_path));
+            } else {
+                debug!("File does not exist at: {}", file_path.display());
+                return Ok(None);
+            }
+        }
+    }
+
+    // Fallback to old logic: check for any file with a known extension
     if let Some(existing_path) = extensions::find_path_with_known_extension(path).await? {
         debug!(
             "File exists with known extension: {}",
@@ -96,8 +113,8 @@ pub async fn fetch_and_save_content(
     let mut file_path =
         get_filename(url, chain, contract_address, token_id, output_path, options).await?;
 
-    // Check if file exists (with any extension) using base path
-    if let Some(existing_path) = try_exists(&file_path).await? {
+    // Check if file exists (with any extension) using base path and url
+    if let Some(existing_path) = try_exists(&file_path, url).await? {
         debug!("File already exists at {}", existing_path.display());
         return Ok(existing_path);
     }
