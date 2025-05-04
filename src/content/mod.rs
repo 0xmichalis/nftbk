@@ -90,7 +90,10 @@ async fn try_exists(path: &Path, url: &str) -> Result<Option<PathBuf>> {
         }
     }
 
-    // Fallback to old logic: check for any file with a known extension
+    // If the URL does not contain a file extension then we can use an additional heuristic
+    // to check if the file exists by checking for any existing file with a known extension.
+    // This is not foolproof and may need to be reconsidered in the future but for now it is
+    // needed because sometimes we add the extension to the filename after the fact.
     if let Some(existing_path) = extensions::find_path_with_known_extension(path).await? {
         debug!(
             "File exists with known extension: {}",
