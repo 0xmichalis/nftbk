@@ -20,6 +20,8 @@ pub struct NFTMetadata {
     pub name: Option<String>,
     pub description: Option<String>,
     pub image: Option<String>,
+    #[serde(alias = "imageUrl")]
+    pub image_url: Option<String>,
     pub animation_url: Option<String>,
     pub external_url: Option<String>,
     #[serde(default)]
@@ -171,6 +173,9 @@ fn collect_urls_to_download(metadata: &NFTMetadata) -> Vec<(String, String)> {
     }
     if let Some(image) = &metadata.image {
         add_if_not_empty(image, "image");
+    }
+    if let Some(image_url) = &metadata.image_url {
+        add_if_not_empty(image_url, "image");
     }
     if let Some(animation_url) = &metadata.animation_url {
         add_if_not_empty(animation_url, "animation");
