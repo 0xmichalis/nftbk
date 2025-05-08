@@ -33,7 +33,14 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
 /// Converts IPFS URLs to use a gateway, otherwise returns the original URL
 pub fn get_url(url: &str) -> String {
     // Handle ipfs:// protocol URLs
-    if url.starts_with("ipfs://") {
+    if url.starts_with("ipfs://ipfs/") {
+        // Handle erroneous ipfs://ipfs/... URLs
+        // Saw this pattern in the Makersplace contract
+        format!(
+            "https://ipfs.io/ipfs/{}",
+            url.trim_start_matches("ipfs://ipfs/")
+        )
+    } else if url.starts_with("ipfs://") {
         format!("https://ipfs.io/ipfs/{}", url.trim_start_matches("ipfs://"))
     }
     // Handle raw IPFS hashes (Qm... or bafy... format)
@@ -187,6 +194,15 @@ mod tests {
         assert_eq!(
             get_last_path_segment("https://example.com/docs#section1", "fallback"),
             "docs"
+        );
+    }
+
+    #[test]
+    fn test_get_url_erroneous_ipfs_ipfs() {
+        let bad_ipfs_url = "ipfs://ipfs/QmdVGrVGuymQRaPxPhVBbCQS2VJ2aZmUMHHubuMnbunTFq";
+        assert_eq!(
+            get_url(bad_ipfs_url),
+            "https://ipfs.io/ipfs/QmdVGrVGuymQRaPxPhVBbCQS2VJ2aZmUMHHubuMnbunTFq"
         );
     }
 }
