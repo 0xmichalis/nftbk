@@ -10,9 +10,6 @@ use clap::Parser;
 use dotenv::dotenv;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use nftbk::api::{BackupRequest, BackupResponse, StatusResponse};
-use nftbk::backup::{self, BackupConfig, ChainConfig, TokenConfig};
-use nftbk::logging::{self, LogLevel};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -22,6 +19,10 @@ use tokio::fs::File;
 use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, warn};
+
+use nftbk::api::{BackupRequest, BackupResponse, StatusResponse};
+use nftbk::backup::{self, BackupConfig, ChainConfig, TokenConfig};
+use nftbk::logging::{self, LogLevel};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]

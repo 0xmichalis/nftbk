@@ -2,16 +2,17 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use dotenv::dotenv;
 use flate2::read::GzDecoder;
-use nftbk::api::{BackupResponse, ChainTokens, StatusResponse};
-use nftbk::backup::{backup_from_config, BackupConfig, ChainConfig, TokenConfig};
-use nftbk::logging;
-use nftbk::logging::LogLevel;
 use reqwest::Client;
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::time::Duration;
 use tar::Archive;
 use tokio::fs;
+
+use nftbk::api::{BackupResponse, ChainTokens, StatusResponse};
+use nftbk::backup::{backup_from_config, BackupConfig, ChainConfig, TokenConfig};
+use nftbk::logging;
+use nftbk::logging::LogLevel;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
