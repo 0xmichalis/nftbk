@@ -1,25 +1,27 @@
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::{
     body::Body,
-    extract::{Path, State},
-    response::IntoResponse,
+    extract::{Path as AxumPath, State},
+    response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use clap::Parser;
+use dotenv::dotenv;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use nftbk::api::{BackupRequest, BackupResponse, StatusResponse};
 use nftbk::backup::{self, BackupConfig, ChainConfig, TokenConfig};
+use nftbk::logging::{self, LogLevel};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
-use tracing::{info, Level};
+use tracing::{error, info, warn};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -72,7 +74,7 @@ impl AppState {
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Address to listen on (default: 127.0.0.1:8080)
-    #[arg(short, long, default_value = "127.0.0.1:8080")]
+    #[arg(long, default_value = "127.0.0.1:8080")]
     listen: String,
 
     /// Path to the NFT chains configuration file (default: config_chains.toml)
@@ -82,17 +84,21 @@ struct Args {
     /// Base directory for backups (default: /tmp)
     #[arg(long, default_value = "/tmp")]
     base_dir: String,
+
+    #[arg(short, long, value_enum, default_value = "info")]
+    log_level: LogLevel,
 }
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt().with_max_level(Level::INFO).init();
+    dotenv().ok();
     let args = Args::parse();
+    logging::init(args.log_level);
     let state = AppState::new(&args.chain_config, &args.base_dir).await;
     let app = Router::new()
-        .route("/backup", post(submit_backup))
-        .route("/backup/:task_id/status", get(get_status))
-        .route("/backup/:task_id/download", get(download_zip))
+        .route("/backup", post(handle_backup))
+        .route("/backup/:task_id/status", get(handle_status))
+        .route("/backup/:task_id/download", get(handle_download))
         .with_state(state);
     let addr: SocketAddr = args.listen.parse().expect("Invalid listen address");
     info!("Listening on {}", addr);
@@ -110,7 +116,7 @@ fn compute_task_id(tokens: &[String]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-async fn submit_backup(
+async fn handle_backup(
     State(state): State<AppState>,
     Json(req): Json<BackupRequest>,
 ) -> impl IntoResponse {
@@ -138,11 +144,31 @@ async fn submit_backup(
     }
     let task_id = compute_task_id(&all_tokens);
     let mut tasks = state.tasks.lock().await;
-    if let Some(_task) = tasks.get(&task_id) {
-        info!("Duplicate backup request, returning existing task_id");
-        return Json(BackupResponse { task_id }).into_response();
+
+    // Check if task exists and its status
+    if let Some(task) = tasks.get(&task_id) {
+        match task.status {
+            TaskStatus::InProgress => {
+                info!(
+                    "Duplicate backup request, returning existing task_id {}",
+                    task_id
+                );
+                return Json(BackupResponse { task_id }).into_response();
+            }
+            TaskStatus::Done => {
+                info!(
+                    "Backup already completed, returning existing task_id {}",
+                    task_id
+                );
+                return Json(BackupResponse { task_id }).into_response();
+            }
+            TaskStatus::Error(_) => {
+                info!("Previous backup failed, rerunning task {}", task_id);
+            }
+        }
     }
-    // Insert as pending
+
+    // Insert/update as pending
     tasks.insert(
         task_id.clone(),
         TaskInfo {
@@ -152,22 +178,87 @@ async fn submit_backup(
         },
     );
     drop(tasks); // Release lock before spawning
-                 // Spawn background job
+
+    // Spawn background job
     let state_clone = state.clone();
-    let req_clone = req.clone();
     let task_id_clone = task_id.clone();
     tokio::task::spawn_blocking(move || {
-        tokio::runtime::Handle::current().block_on(run_backup_job(
-            state_clone,
-            task_id_clone,
-            req_clone,
-        ))
+        tokio::runtime::Handle::current().block_on(run_backup_job(state_clone, task_id_clone, req))
     });
+
     info!("Started backup task {}", task_id);
     Json(BackupResponse { task_id }).into_response()
 }
 
+/// Helper function to compute SHA256 of a file
+async fn compute_file_sha256(path: &Path) -> Result<String, std::io::Error> {
+    let contents = tokio::fs::read(path).await?;
+    let hash = Sha256::digest(&contents);
+    Ok(format!("{:x}", hash))
+}
+
+/// Helper function to get backup archive and checksum paths for a given task
+fn get_zipped_backup_paths(base_dir: &str, task_id: &str) -> (PathBuf, PathBuf) {
+    let zip_path = PathBuf::from(format!("{}/nftbk-{}.tar.gz", base_dir, task_id));
+    let checksum_path = zip_path.with_extension("sha256");
+    (zip_path, checksum_path)
+}
+
+/// Helper function to check if a backup exists on disk and is not corrupted
+async fn check_backup_on_disk(base_dir: &str, task_id: &str) -> Option<PathBuf> {
+    let (path, checksum_path) = get_zipped_backup_paths(base_dir, task_id);
+
+    // First check if both files exist
+    match (
+        tokio::fs::try_exists(&path).await,
+        tokio::fs::try_exists(&checksum_path).await,
+    ) {
+        (Ok(true), Ok(true)) => {
+            // Read stored checksum
+            let stored_checksum = match tokio::fs::read_to_string(&checksum_path).await {
+                Ok(checksum) => checksum,
+                Err(e) => {
+                    warn!("Failed to read checksum file for {}: {}", path.display(), e);
+                    return None;
+                }
+            };
+
+            // Compute current checksum
+            let current_checksum = match compute_file_sha256(&path).await {
+                Ok(checksum) => checksum,
+                Err(e) => {
+                    warn!("Failed to compute checksum for {}: {}", path.display(), e);
+                    return None;
+                }
+            };
+
+            if stored_checksum.trim() != current_checksum {
+                warn!(
+                    "Backup archive {} is corrupted: checksum mismatch",
+                    path.display()
+                );
+                return None;
+            }
+
+            Some(path)
+        }
+        _ => None,
+    }
+}
+
 async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
+    // First check if backup already exists on disk
+    if let Some(zip_path) = check_backup_on_disk(&state.base_dir, &task_id).await {
+        // Update task state to reflect the existing backup
+        let mut tasks = state.tasks.lock().await;
+        if let Some(task) = tasks.get_mut(&task_id) {
+            task.status = TaskStatus::Done;
+            task.zip_path = Some(zip_path);
+        }
+        info!("Found existing backup for task {}", task_id);
+        return;
+    }
+
     // Build TokenConfig from request
     let mut token_map = std::collections::HashMap::new();
     for entry in req {
@@ -193,6 +284,7 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
     };
     let backup_result = backup::backup_from_config(backup_cfg).await;
     if let Err(e) = backup_result {
+        error!("Backup {task_id} failed: {}", e);
         let mut tasks = state.tasks.lock().await;
         if let Some(task) = tasks.get_mut(&task_id) {
             task.status = TaskStatus::Error(format!("Backup failed: {}", e));
@@ -200,8 +292,10 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
         return;
     }
     // Zip the output dir
-    let zip_path = format!("{}/{}.tar.gz", state.base_dir, task_id);
-    let tar_gz = std::fs::File::create(&zip_path);
+    let (zip_pathbuf, checksum_path) = get_zipped_backup_paths(&state.base_dir, &task_id);
+    let zip_path = zip_pathbuf.to_str().unwrap();
+    info!("Zipping backup at {}", zip_path);
+    let tar_gz = std::fs::File::create(zip_path);
     if let Err(e) = tar_gz {
         let mut tasks = state.tasks.lock().await;
         if let Some(task) = tasks.get_mut(&task_id) {
@@ -212,7 +306,7 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
     let tar_gz = tar_gz.unwrap();
     let enc = GzEncoder::new(tar_gz, Compression::default());
     let mut tar = tar::Builder::new(enc);
-    if let Err(e) = tar.append_dir_all("nft_backup", &out_path) {
+    if let Err(e) = tar.append_dir_all(".", &out_path) {
         let mut tasks = state.tasks.lock().await;
         if let Some(task) = tasks.get_mut(&task_id) {
             task.status = TaskStatus::Error(format!("Failed to tar dir: {}", e));
@@ -226,51 +320,97 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
         }
         return;
     }
-    // Update task
+    // Update task and write checksum
     let mut tasks = state.tasks.lock().await;
     if let Some(task) = tasks.get_mut(&task_id) {
+        match compute_file_sha256(&zip_pathbuf).await {
+            Ok(checksum) => {
+                if let Err(e) = tokio::fs::write(&checksum_path, checksum).await {
+                    error!("Failed to write checksum file: {}", e);
+                    task.status = TaskStatus::Error("Failed to write checksum file".to_string());
+                    return;
+                }
+            }
+            Err(e) => {
+                error!("Failed to compute checksum: {}", e);
+                task.status = TaskStatus::Error("Failed to compute checksum".to_string());
+                return;
+            }
+        }
         task.status = TaskStatus::Done;
-        task.zip_path = Some(PathBuf::from(&zip_path));
+        task.zip_path = Some(zip_pathbuf);
     }
+    info!("Backup {} ready", task_id);
+
+    // At this point we should delete the unzipped directory to save space
+    // if let Err(e) = tokio::fs::remove_dir_all(&out_path).await {
+    //     error!("Failed to delete unzipped directory: {}", e);
+    // }
 }
 
-async fn get_status(
+async fn handle_status(
     State(state): State<AppState>,
-    Path(task_id): Path<String>,
+    AxumPath(task_id): AxumPath<String>,
 ) -> Result<Json<StatusResponse>, axum::http::StatusCode> {
+    // First check in-memory state
     let tasks = state.tasks.lock().await;
-    let Some(task) = tasks.get(&task_id) else {
-        return Err(axum::http::StatusCode::NOT_FOUND);
-    };
-    let (status, error) = match &task.status {
-        TaskStatus::InProgress => ("in_progress", None),
-        TaskStatus::Done => ("done", None),
-        TaskStatus::Error(e) => ("error", Some(e.clone())),
-    };
-    Ok(Json(StatusResponse {
-        status: status.to_string(),
-        error,
-    }))
+    if let Some(task) = tasks.get(&task_id) {
+        let (status, error) = match &task.status {
+            TaskStatus::InProgress => ("in_progress", None),
+            TaskStatus::Done => ("done", None),
+            TaskStatus::Error(e) => ("error", Some(e.clone())),
+        };
+        return Ok(Json(StatusResponse {
+            status: status.to_string(),
+            error,
+        }));
+    }
+
+    // If not in memory, check if backup exists on disk
+    if check_backup_on_disk(&state.base_dir, &task_id)
+        .await
+        .is_some()
+    {
+        return Ok(Json(StatusResponse {
+            status: "done".to_string(),
+            error: None,
+        }));
+    }
+
+    Err(axum::http::StatusCode::NOT_FOUND)
 }
 
-async fn download_zip(
+async fn handle_download(
     State(state): State<AppState>,
-    Path(task_id): Path<String>,
+    AxumPath(task_id): AxumPath<String>,
 ) -> impl IntoResponse {
+    // First check in-memory state
     let tasks = state.tasks.lock().await;
-    let Some(task) = tasks.get(&task_id) else {
-        return (StatusCode::NOT_FOUND, Body::from("Task not found")).into_response();
-    };
-    if !matches!(task.status, TaskStatus::Done) {
-        return (StatusCode::ACCEPTED, Body::from("Task not completed yet")).into_response();
+    if let Some(task) = tasks.get(&task_id) {
+        if !matches!(task.status, TaskStatus::Done) {
+            return (StatusCode::ACCEPTED, Body::from("Task not completed yet")).into_response();
+        }
+        let Some(ref zip_path) = task.zip_path else {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Body::from("No zip file found"),
+            )
+                .into_response();
+        };
+        return serve_zip_file(zip_path, &task_id).await;
     }
-    let Some(ref zip_path) = task.zip_path else {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Body::from("No zip file found"),
-        )
-            .into_response();
-    };
+    drop(tasks);
+
+    // If not in memory, check if backup exists on disk
+    if let Some(zip_path) = check_backup_on_disk(&state.base_dir, &task_id).await {
+        return serve_zip_file(&zip_path, &task_id).await;
+    }
+
+    (StatusCode::NOT_FOUND, Body::from("Task not found")).into_response()
+}
+
+/// Helper function to serve a zip file with proper headers
+async fn serve_zip_file(zip_path: &PathBuf, task_id: &str) -> Response {
     let file = match File::open(zip_path).await {
         Ok(file) => file,
         Err(_) => {

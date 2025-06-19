@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use clap::Parser;
+use dotenv::dotenv;
 use flate2::read::GzDecoder;
 use nftbk::api::{BackupResponse, ChainTokens, StatusResponse};
 use nftbk::backup::{backup_from_config, BackupConfig, ChainConfig, TokenConfig};
@@ -117,7 +118,6 @@ async fn backup_from_server(
         tokio::time::sleep(Duration::from_secs(10)).await;
     }
 
-    // Download the zip
     let download_url = format!("{}/backup/{}/download", server, backup_resp.task_id);
     let resp = client
         .get(&download_url)
@@ -129,6 +129,7 @@ async fn backup_from_server(
     }
     let bytes = resp.bytes().await.context("Failed to read zip bytes")?;
     let output_path = output_path.unwrap_or_else(|| PathBuf::from("."));
+
     println!("Extracting backup to {}...", output_path.display());
     // Extract tar.gz from bytes
     let gz = GzDecoder::new(Cursor::new(bytes));
@@ -142,6 +143,7 @@ async fn backup_from_server(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    dotenv().ok();
     let args = Args::parse();
     logging::init(args.log_level);
 
