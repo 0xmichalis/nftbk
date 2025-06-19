@@ -37,40 +37,26 @@ USERNAME=michalis \
     python3 scripts/extract_gallery_tokens.py > config.toml
 ```
 
+## Project Structure
+
+- Library code is in `src/lib.rs` and can be reused by both CLI and server.
+- CLI entrypoint is in `src/main.rs` (binary: `nftbk-cli`).
+- Server entrypoint will be in `src/server.rs` (binary: `nftbk-server`).
+
+To run the CLI:
+
+```
+cargo run --bin nftbk-cli -- [args]
+```
+
+To run the server (planned):
+
+```
+cargo run --bin nftbk-server
+```
+
 ## Usage
 
 ```bash
 cargo run
-```
-
-## Output Structure
-
-All content is saved in an `nft_backup` directory within the specified output path:
-
-```
-nft_backup/
-  ├── ethereum/
-  │   └── contract_address/
-  │       └── token_id/
-  │           ├── artifact.*
-  │           └── metadata.json
-  └── tezos/
-      └── contract_address/
-          └── token_id/
-              ├── artifact.*
-              └── metadata.json
-```
-
-## Contribute
-
-Copy the pre-commit hook to .git/hooks/pre-commit:
-
-```bash
-cp hooks/pre-commit .git/hooks/pre-commit
-```
-
-Now `make all` will run everytime you commit. Otherwise, you can run it manually:
-
-```bash
-make all
 ```

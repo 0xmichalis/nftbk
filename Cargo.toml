@@ -27,3 +27,11 @@ hex = "0.4.3"
 scraper = "0.17"
 flate2 = "1.0"
 base64 = "0.21"
+
+[lib]
+name = "nftbk"
+path = "src/lib.rs"
+
+[[bin]]
+name = "nftbk-cli"
+path = "src/main.rs"

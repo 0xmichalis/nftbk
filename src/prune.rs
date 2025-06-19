@@ -4,13 +4,13 @@ use std::path::Path;
 use tokio::fs;
 use tracing::info;
 
-use crate::Config;
+use crate::TokenConfig;
 
 /// Prune directories in the backup folder that are not part of the config
-pub async fn prune_missing_directories(output_path: &Path, config: &Config) -> Result<()> {
+pub async fn prune_missing_directories(output_path: &Path, config: &TokenConfig) -> Result<()> {
     // Build map of valid token IDs per contract per chain
     let mut valid_tokens: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
-    for (chain, contracts) in &config.tokens.chains {
+    for (chain, contracts) in &config.chains {
         for contract_token in contracts {
             if let Some((contract, token_id)) = contract_token.split_once(':') {
                 valid_tokens
