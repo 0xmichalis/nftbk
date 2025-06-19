@@ -1,6 +1,6 @@
 # nftbk
 
-CLI tool for backing up NFT metadata and content from Ethereum and Tezos NFT contracts.
+A library, server, and CLI tool for backing up NFT metadata and content from EVM and Tezos NFT contracts.
 
 ## Prerequisites
 
