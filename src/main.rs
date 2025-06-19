@@ -9,9 +9,13 @@ use tokio::fs;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Path to the NFT contracts configuration file (default: config.toml)
-    #[arg(short, long, default_value = "config.toml")]
-    config_path: PathBuf,
+    /// Path to the NFT chains configuration file (default: config_chains.toml)
+    #[arg(short = 'c', long, default_value = "config_chains.toml")]
+    chains_config_path: PathBuf,
+
+    /// Path to the NFT tokens configuration file (default: config_tokens.toml)
+    #[arg(short = 't', long, default_value = "config_tokens.toml")]
+    tokens_config_path: PathBuf,
 
     /// Optional output directory path (defaults to current directory)
     #[arg(short, long)]
@@ -25,23 +29,23 @@ struct Args {
     prune_missing: bool,
 }
 
-#[derive(serde::Deserialize)]
-struct FileConfig {
-    chains: std::collections::HashMap<String, String>,
-    tokens: TokenConfig,
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
     logging::init(args.log_level);
-    let config_content = fs::read_to_string(&args.config_path)
+
+    let chains_content = fs::read_to_string(&args.chains_config_path)
         .await
-        .context("Failed to read config file")?;
-    let file_config: FileConfig =
-        toml::from_str(&config_content).context("Failed to parse config file")?;
-    let chain_config = ChainConfig(file_config.chains);
-    let token_config = file_config.tokens;
+        .context("Failed to read chains config file")?;
+    let chain_config: ChainConfig =
+        toml::from_str(&chains_content).context("Failed to parse chains config file")?;
+
+    let tokens_content = fs::read_to_string(&args.tokens_config_path)
+        .await
+        .context("Failed to read tokens config file")?;
+    let token_config: TokenConfig =
+        toml::from_str(&tokens_content).context("Failed to parse tokens config file")?;
+
     let backup_config = BackupConfig {
         chain_config,
         token_config,

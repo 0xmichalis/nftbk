@@ -12,7 +12,7 @@ pub mod logging;
 pub mod prune;
 pub mod url;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ChainConfig(pub HashMap<String, String>);
 
 #[derive(Debug, Deserialize)]

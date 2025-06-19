@@ -17,6 +17,10 @@ test:
 check:
 	cargo check -- $(filter-out $@,$(MAKECMDGOALS))
 
-.PHONY: run
-run:
-	cargo run -- $(filter-out $@,$(MAKECMDGOALS))
+.PHONY: run-cli
+run-cli:
+	cargo run --bin nftbk-cli -- $(filter-out $@,$(MAKECMDGOALS))
+
+.PHONY: run-server
+run-server:
+	cargo run --bin nftbk-server -- $(filter-out $@,$(MAKECMDGOALS))

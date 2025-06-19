@@ -1,11 +1,3 @@
-[chains]
-ethereum = "https://mainnet.infura.io/v3/API_KEY"
-tezos = "https://mainnet.smartpy.io"
-zora = "https://rpc.zora.energy"
-base = "https://mainnet.base.org"
-arbitrum = "https://1rpc.io/arb"
-
-[tokens]
 ethereum = [
     "0x3D7E6A293C5ca4cD6721Df1A99683802331793C7:26",
     "0x1D8629438f0Ce0DE787D48BEb3F153884B2F370d:12",
@@ -13,4 +5,4 @@ ethereum = [
 ]
 tezos = [
     "KT1DmEFfeqEC3nEx6bpWKqjNY8FF8RFrR3Gc:28"
-]
+] 

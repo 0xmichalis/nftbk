@@ -9,15 +9,22 @@ CLI tool for backing up NFT metadata and content from Ethereum and Tezos NFT con
 
 ## Configuration
 
-Copy `config.example.toml` to `config.toml` file and update as needed.
+Two configuration files are used:
+- `config_chains.toml`: Contains RPC URLs for different chains
+- `config_tokens.toml`: Contains the NFT tokens to back up
 
-Example config:
+Copy `config.example.chains.toml` to `config_chains.toml` and `config.example.tokens.toml` to `config_tokens.toml`, then update as needed.
+
+Example configs:
+
+`config_chains.toml`:
 ```toml
-[chains]
 ethereum = "https://mainnet.infura.io/v3/your_key"
 tezos = "https://mainnet.smartpy.io"
+```
 
-[tokens]
+`config_tokens.toml`:
+```toml
 ethereum = [
     "0x3D7E6A293C5ca4cD6721Df1A99683802331793C7:26",
     "0x1D8629438f0Ce0DE787D48BEb3F153884B2F370d:12"
@@ -34,14 +41,10 @@ tezos = [
 ```bash
 GALLERY_ID=2RgusW2IT1qkSPKE15S2xTnArN4 \
 USERNAME=michalis \
-    python3 scripts/extract_gallery_tokens.py > config.toml
+    python3 scripts/extract_gallery_tokens.py > config_tokens.toml
 ```
 
-## Project Structure
-
-- Library code is in `src/lib.rs` and can be reused by both CLI and server.
-- CLI entrypoint is in `src/main.rs` (binary: `nftbk-cli`).
-- Server entrypoint will be in `src/server.rs` (binary: `nftbk-server`).
+## Run
 
 To run the CLI:
 
@@ -49,14 +52,8 @@ To run the CLI:
 cargo run --bin nftbk-cli -- [args]
 ```
 
-To run the server (planned):
+To run the server:
 
 ```
-cargo run --bin nftbk-server
-```
-
-## Usage
-
-```bash
-cargo run
+cargo run --bin nftbk-server -- [args]
 ```

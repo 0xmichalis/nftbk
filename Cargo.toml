@@ -27,6 +27,14 @@ hex = "0.4.3"
 scraper = "0.17"
 flate2 = "1.0"
 base64 = "0.21"
+axum = "0.7"
+tower = "0.4"
+tokio-util = "0.7"
+sha2 = "0.10"
+uuid = { version = "1.4", features = ["v4"] }
+hyper = { version = "1.0", features = ["full"] }
+tempfile = "3.10"
+tar = "0.4"
 
 [lib]
 name = "nftbk"
@@ -35,3 +43,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "nftbk-cli"
 path = "src/main.rs"
+
+[[bin]]
+name = "nftbk-server"
+path = "src/server.rs"

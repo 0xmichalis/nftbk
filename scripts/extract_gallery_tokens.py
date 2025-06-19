@@ -102,14 +102,6 @@ def generate_toml(tokens: Dict[str, List[str]]) -> str:
     """Generate TOML config output"""
     lines = []
 
-    lines.append("[chains]")
-    lines.append("ethereum = \"https://mainnet.infura.io/v3/API_KEY\"")
-    lines.append("tezos = \"https://mainnet.smartpy.io\"")
-    lines.append("zora = \"https://rpc.zora.energy\"")
-    lines.append("base = \"https://mainnet.base.org\"")
-    lines.append("arbitrum = \"https://1rpc.io/arb\"\n")
-    
-    lines.append("[tokens]")
     for chain, token_list in tokens.items():
         if token_list:
             lines.append(f"{chain} = [")
