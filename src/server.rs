@@ -9,8 +9,8 @@ use axum::{
 use clap::Parser;
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use nftbk::api::{BackupRequest, BackupResponse, StatusResponse};
 use nftbk::backup::{self, BackupConfig, ChainConfig, TokenConfig};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -20,25 +20,6 @@ use tokio::fs::File;
 use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
 use tracing::{info, Level};
-
-#[derive(Debug, Deserialize, Clone)]
-struct ChainTokens {
-    chain: String,
-    tokens: Vec<String>,
-}
-
-type BackupRequest = Vec<ChainTokens>;
-
-#[derive(Debug, Serialize)]
-struct BackupResponse {
-    task_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct StatusResponse {
-    status: String,
-    error: Option<String>,
-}
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]

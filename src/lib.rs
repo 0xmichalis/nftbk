@@ -6,6 +6,7 @@ use std::time::Instant;
 use tokio::fs;
 use tracing::{info, warn};
 
+pub mod api;
 pub mod chain;
 pub mod content;
 pub mod logging;
