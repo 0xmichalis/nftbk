@@ -24,7 +24,6 @@ use nftbk::api::{BackupRequest, BackupResponse, StatusResponse};
 use nftbk::backup::{self, BackupConfig, ChainConfig, TokenConfig};
 use nftbk::logging::{self, LogLevel};
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 enum TaskStatus {
     InProgress,
@@ -35,8 +34,6 @@ enum TaskStatus {
 #[derive(Debug, Clone)]
 struct TaskInfo {
     status: TaskStatus,
-    #[allow(dead_code)]
-    tokens: Vec<String>,
     zip_path: Option<PathBuf>,
 }
 
@@ -175,7 +172,6 @@ async fn handle_backup(
         task_id.clone(),
         TaskInfo {
             status: TaskStatus::InProgress,
-            tokens: all_tokens.clone(),
             zip_path: None,
         },
     );
