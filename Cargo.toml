@@ -42,7 +42,7 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "nftbk-cli"
-path = "src/main.rs"
+path = "src/cli.rs"
 
 [[bin]]
 name = "nftbk-server"
