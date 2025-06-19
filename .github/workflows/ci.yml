@@ -9,12 +9,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
+  build-test:
     name: Build and Test
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v3
+    - uses: actions/checkout@v4
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -36,8 +36,34 @@ jobs:
     - name: Clippy
       run: cargo clippy -- -D warnings
 
-    - name: Build
-      run: cargo build --verbose
+    - name: Check
+      run: cargo check --verbose
 
     - name: Run tests
       run: cargo test --verbose
+
+  docker-publish:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    needs: build-test # Only run after successful build and test
+    if: github.ref == 'refs/heads/main' # Only run on main branch
+
+    permissions:
+      packages: write # Required for GHCR push
+      contents: read
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Log in to GHCR
+      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+    - name: Build Docker image
+      run: |
+        IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nftbk-server
+        docker build -t $IMAGE_NAME:latest .
+
+    - name: Push to GHCR
+      run: |
+        IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nftbk-server
+        docker push $IMAGE_NAME:latest

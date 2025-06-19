@@ -1,0 +1,18 @@
+# Ignore nft_backup directories anywhere in the tree
+**/nft_backup*
+
+# Cursor-specific
+.cursor/
+memory-bank/
+
+# Common files/directories to ignore
+hooks/
+scripts/
+target/
+.git/
+.github/
+.gitignore
+.env*
+Dockerfile
+.dockerignore
+README.md 
