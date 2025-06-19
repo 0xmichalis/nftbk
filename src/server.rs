@@ -21,7 +21,7 @@ use std::sync::Arc;
 use tokio::fs::File;
 use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 #[allow(dead_code)]
 #[derive(Debug, Clone)]
@@ -147,7 +147,7 @@ async fn handle_backup(
 
     // Check if task exists and its status
     if let Some(task) = tasks.get(&task_id) {
-        match task.status {
+        match &task.status {
             TaskStatus::InProgress => {
                 info!(
                     "Duplicate backup request, returning existing task_id {}",
@@ -162,8 +162,9 @@ async fn handle_backup(
                 );
                 return Json(BackupResponse { task_id }).into_response();
             }
-            TaskStatus::Error(_) => {
-                info!("Previous backup failed, rerunning task {}", task_id);
+            TaskStatus::Error(e) => {
+                info!("Previous backup failed for task {}: {}", task_id, e);
+                info!("Rerunning backup task {}", task_id);
             }
         }
     }
@@ -215,6 +216,7 @@ async fn check_backup_on_disk(base_dir: &str, task_id: &str) -> Option<PathBuf> 
     ) {
         (Ok(true), Ok(true)) => {
             // Read stored checksum
+            info!("Checking backup on disk for task {}", task_id);
             let stored_checksum = match tokio::fs::read_to_string(&checksum_path).await {
                 Ok(checksum) => checksum,
                 Err(e) => {
@@ -224,6 +226,7 @@ async fn check_backup_on_disk(base_dir: &str, task_id: &str) -> Option<PathBuf> 
             };
 
             // Compute current checksum
+            debug!("Computing backup checksum for task {}", task_id);
             let current_checksum = match compute_file_sha256(&path).await {
                 Ok(checksum) => checksum,
                 Err(e) => {
@@ -247,6 +250,9 @@ async fn check_backup_on_disk(base_dir: &str, task_id: &str) -> Option<PathBuf> 
 }
 
 async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
+    let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
+    let out_path = PathBuf::from(&out_dir);
+
     // First check if backup already exists on disk
     if let Some(zip_path) = check_backup_on_disk(&state.base_dir, &task_id).await {
         // Update task state to reflect the existing backup
@@ -256,6 +262,11 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
             task.zip_path = Some(zip_path);
         }
         info!("Found existing backup for task {}", task_id);
+
+        // Delete the unzipped directory to save space
+        if let Err(e) = tokio::fs::remove_dir_all(&out_path).await {
+            error!("Failed to delete unzipped directory: {}", e);
+        }
         return;
     }
 
@@ -266,8 +277,6 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
     }
     let token_config = TokenConfig { chains: token_map };
     // Prepare output dir
-    let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
-    let out_path = PathBuf::from(&out_dir);
     if let Err(e) = tokio::fs::create_dir_all(&out_path).await {
         let mut tasks = state.tasks.lock().await;
         if let Some(task) = tasks.get_mut(&task_id) {
@@ -342,10 +351,10 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
     }
     info!("Backup {} ready", task_id);
 
-    // At this point we should delete the unzipped directory to save space
-    // if let Err(e) = tokio::fs::remove_dir_all(&out_path).await {
-    //     error!("Failed to delete unzipped directory: {}", e);
-    // }
+    // Delete the unzipped directory to save space
+    if let Err(e) = tokio::fs::remove_dir_all(&out_path).await {
+        error!("Failed to delete unzipped directory: {}", e);
+    }
 }
 
 async fn handle_status(
