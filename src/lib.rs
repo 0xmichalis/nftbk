@@ -27,6 +27,7 @@ pub struct BackupConfig {
     pub token_config: TokenConfig,
     pub output_path: Option<PathBuf>,
     pub prune_missing: bool,
+    pub exit_on_error: bool,
 }
 
 pub mod backup {
@@ -52,10 +53,22 @@ pub mod backup {
                 .get(chain_name)
                 .context(format!("No RPC URL configured for chain {}", chain_name))?;
             if chain_name != "tezos" {
-                chain::evm::process_nfts(chain_name, rpc_url, contracts.clone(), &output_path)
-                    .await?;
+                chain::evm::process_nfts(
+                    chain_name,
+                    rpc_url,
+                    contracts.clone(),
+                    &output_path,
+                    cfg.exit_on_error,
+                )
+                .await?;
             } else {
-                chain::tezos::process_nfts(rpc_url, contracts.clone(), &output_path).await?;
+                chain::tezos::process_nfts(
+                    rpc_url,
+                    contracts.clone(),
+                    &output_path,
+                    cfg.exit_on_error,
+                )
+                .await?;
             }
         }
         if cfg.prune_missing {

@@ -181,6 +181,10 @@ fn collect_urls_to_download(metadata: &NFTMetadata) -> Vec<(String, String)> {
         add_if_not_empty(animation_url, "animation");
     }
 
+    if let Some(external_url) = &metadata.external_url {
+        add_if_not_empty(external_url, "external");
+    }
+
     urls_to_download
 }
 
@@ -189,6 +193,7 @@ pub async fn process_nfts(
     rpc_url: &str,
     contracts: Vec<String>,
     output_path: &Path,
+    exit_on_error: bool,
 ) -> Result<()> {
     let rpc_url = rpc_url.parse::<url::Url>()?;
     let provider = ProviderBuilder::new().on_http(rpc_url);
@@ -226,81 +231,79 @@ pub async fn process_nfts(
             }
         };
 
-        // Get token URI
-        let token_uri = match get_token_uri(contract_addr, provider.clone(), token_id).await {
-            Ok(uri) => uri,
-            Err(e) => {
-                error!("Failed to get token URI: {}", e);
-                continue;
-            }
-        };
+        let contract_processing_result: Result<()> = (async {
+            // Get token URI
+            let token_uri = get_token_uri(contract_addr, provider.clone(), token_id).await?;
 
-        // Save metadata
-        debug!("Fetching metadata from {}", token_uri);
-        let contract_address = format!("{:#x}", contract_addr);
-        let token_id_str = token_id.to_string();
-        let metadata_content = match fetch_and_save_content(
-            &token_uri,
-            chain_name,
-            &contract_address,
-            &token_id_str,
-            output_path,
-            Options {
-                overriden_filename: Some("metadata.json".to_string()),
-                fallback_filename: None,
-            },
-        )
-        .await
-        {
-            Ok(content) => content,
-            Err(e) => {
-                error!(
-                    "Failed to fetch metadata from {} ({}:{}): {}",
-                    token_uri, contract_address, token_id_str, e
-                );
-                continue;
-            }
-        };
-
-        // Iterate over metadata to gather all URLs to download
-        let metadata_content_str = fs::read_to_string(metadata_content).await?;
-        let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
-        let urls_to_download = collect_urls_to_download(&metadata);
-
-        // Download all URLs, keeping track of what we've downloaded to avoid duplicates
-        let mut downloaded = std::collections::HashSet::new();
-        for (url, file_name) in urls_to_download {
-            // Only download if we haven't seen this URL before
-            let inserted = downloaded.insert(url.clone());
-            if !inserted {
-                debug!("Skipping duplicate {} from {}", file_name, url);
-                continue;
-            }
-
-            debug!("Downloading {} from {}", file_name, url);
-            fetch_and_save_content(
-                &url,
+            // Save metadata
+            debug!("Fetching metadata from {}", token_uri);
+            let contract_address = format!("{:#x}", contract_addr);
+            let token_id_str = token_id.to_string();
+            let metadata_content = fetch_and_save_content(
+                &token_uri,
                 chain_name,
                 &contract_address,
                 &token_id_str,
                 output_path,
                 Options {
-                    overriden_filename: None,
-                    fallback_filename: Some(file_name.clone()),
+                    overriden_filename: Some("metadata.json".to_string()),
+                    fallback_filename: None,
                 },
             )
             .await?;
-        }
 
-        // Process any additional content after downloading all files
-        fetch_and_save_extra_content(
-            chain_name,
-            &format!("{:#x}", contract_addr),
-            &token_id.to_string(),
-            output_path,
-            None,
-        )
-        .await?;
+            // Iterate over metadata to gather all URLs to download
+            let metadata_content_str = fs::read_to_string(metadata_content).await?;
+            let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
+            let urls_to_download = collect_urls_to_download(&metadata);
+
+            // Download all URLs, keeping track of what we've downloaded to avoid duplicates
+            let mut downloaded = std::collections::HashSet::new();
+            for (url, file_name) in urls_to_download {
+                // Only download if we haven't seen this URL before
+                let inserted = downloaded.insert(url.clone());
+                if !inserted {
+                    debug!("Skipping duplicate {} from {}", file_name, url);
+                    continue;
+                }
+
+                debug!("Downloading {} from {}", file_name, url);
+                fetch_and_save_content(
+                    &url,
+                    chain_name,
+                    &contract_address,
+                    &token_id_str,
+                    output_path,
+                    Options {
+                        overriden_filename: None,
+                        fallback_filename: Some(file_name.clone()),
+                    },
+                )
+                .await?;
+            }
+
+            // Process any additional content after downloading all files
+            fetch_and_save_extra_content(
+                chain_name,
+                &format!("{:#x}", contract_addr),
+                &token_id.to_string(),
+                output_path,
+                None,
+            )
+            .await?;
+            Ok(())
+        })
+        .await;
+
+        if let Err(e) = contract_processing_result {
+            error!(
+                "Failed to process contract {} on {} (token ID {}): {}",
+                contract.address, chain_name, contract.token_id, e
+            );
+            if exit_on_error {
+                return Err(e);
+            }
+        }
     }
 
     Ok(())

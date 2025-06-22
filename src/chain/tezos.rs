@@ -153,7 +153,7 @@ async fn fetch_nft_metadata(
     use tracing::debug;
 
     debug!("Fetching metadata from {}", token_uri);
-    let metadata_content = fetch_and_save_content(
+    let metadata_content_result = fetch_and_save_content(
         token_uri,
         "tezos",
         &contract.address,
@@ -164,7 +164,19 @@ async fn fetch_nft_metadata(
             fallback_filename: None,
         },
     )
-    .await?;
+    .await;
+
+    let metadata_content = match metadata_content_result {
+        Ok(path) => path,
+        Err(e) => {
+            error!(
+                "Failed to fetch metadata for contract {} (token ID {}): {}",
+                contract.address, contract.token_id, e
+            );
+            return Err(e);
+        }
+    };
+
     let metadata_content_str = fs::read_to_string(metadata_content).await?;
     let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
 
@@ -214,7 +226,7 @@ async fn fetch_nft_metadata(
         }
 
         debug!("Downloading {} from {}", file_name, url);
-        fetch_and_save_content(
+        if let Err(e) = fetch_and_save_content(
             &url,
             "tezos",
             &contract.address,
@@ -225,18 +237,32 @@ async fn fetch_nft_metadata(
                 fallback_filename: None,
             },
         )
-        .await?;
+        .await
+        {
+            error!(
+                "Failed to fetch content from {} for contract {} (token ID {}): {}",
+                url, contract.address, contract.token_id, e
+            );
+            return Err(e);
+        }
     }
 
     // Process any additional content after downloading all files
-    fetch_and_save_extra_content(
+    if let Err(e) = fetch_and_save_extra_content(
         "tezos",
         &contract.address,
         &contract.token_id,
         output_path,
         metadata.artifact_uri.as_deref(),
     )
-    .await?;
+    .await
+    {
+        error!(
+            "Failed to fetch extra content for contract {} (token ID {}): {}",
+            contract.address, contract.token_id, e
+        );
+        return Err(e);
+    }
 
     Ok(())
 }
@@ -245,6 +271,7 @@ pub async fn process_nfts(
     rpc_url: &str,
     contracts: Vec<String>,
     output_path: &std::path::Path,
+    exit_on_error: bool,
 ) -> Result<()> {
     // Initialize Tezos RPC client
     let rpc: TezosRpc<HttpClient> = TezosRpc::new(rpc_url.to_string());
@@ -276,7 +303,15 @@ pub async fn process_nfts(
             Some(uri) => uri,
         };
 
-        fetch_nft_metadata(&token_uri, &contract, output_path).await?;
+        if let Err(e) = fetch_nft_metadata(&token_uri, &contract, output_path).await {
+            error!(
+                "Failed to process contract {} (token ID {}): {}",
+                contract.address, contract.token_id, e
+            );
+            if exit_on_error {
+                return Err(e);
+            }
+        }
     }
 
     Ok(())

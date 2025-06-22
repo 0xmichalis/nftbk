@@ -43,6 +43,10 @@ struct Args {
     /// Server address (default: http://127.0.0.1:8080)
     #[arg(long, default_value = "http://127.0.0.1:8080")]
     server_addr: String,
+
+    /// Exit on the first error encountered
+    #[arg(long, default_value = "true")]
+    exit_on_error: bool,
 }
 
 async fn backup_from_server(
@@ -166,6 +170,7 @@ async fn main() -> Result<()> {
             token_config,
             output_path: args.output_path,
             prune_missing: args.prune_missing,
+            exit_on_error: args.exit_on_error,
         };
         return backup_from_config(backup_config).await;
     }
