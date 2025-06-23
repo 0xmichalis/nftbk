@@ -2,6 +2,7 @@ use anyhow::Result;
 use flate2::read::GzDecoder;
 use std::io::Read;
 use std::path::Path;
+use std::path::PathBuf;
 use tokio::fs;
 use tracing::{debug, info, warn};
 
@@ -11,7 +12,7 @@ async fn fetch_croquet_challenge_content(
     output_path: &Path,
     contract: &str,
     token_id: &str,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     debug!(
         "Fetching additional content for Ethereum contract {} token {}",
         contract, token_id
@@ -35,6 +36,7 @@ async fn fetch_croquet_challenge_content(
 
     // Download each file
     let client = reqwest::Client::new();
+    let mut files_created = Vec::new();
     for (source_file, target_file) in files {
         let url = format!("https://chan.gallery/bb0101/Build/{}", source_file);
         let file_path = build_dir.join(target_file);
@@ -42,6 +44,7 @@ async fn fetch_croquet_challenge_content(
         // Skip if file already exists
         if fs::try_exists(&file_path).await? {
             debug!("File already exists at {}", file_path.display());
+            files_created.push(file_path.clone());
             continue;
         }
 
@@ -58,11 +61,12 @@ async fn fetch_croquet_challenge_content(
             content.to_vec()
         };
 
-        fs::write(file_path, final_content).await?;
+        files_created.push(file_path.clone());
+        fs::write(&file_path, final_content).await?;
         info!("Saved {} from {}", target_file, url);
     }
 
-    Ok(())
+    Ok(files_created)
 }
 
 async fn fetch_the_fisherman_content(
@@ -70,7 +74,7 @@ async fn fetch_the_fisherman_content(
     contract: &str,
     token_id: &str,
     artifact_url: &str,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     debug!(
         "Fetching additional content for Tezos contract {} token {}",
         contract, token_id
@@ -101,6 +105,7 @@ async fn fetch_the_fisherman_content(
 
     // Download each file
     let client = reqwest::Client::new();
+    let mut files_created = Vec::new();
     for file in files {
         let url = format!("{}/{}", artifact_url.trim_end_matches('/'), file);
         let file_path = token_dir.join(file);
@@ -108,12 +113,14 @@ async fn fetch_the_fisherman_content(
         // Skip if file already exists
         if fs::try_exists(&file_path).await? {
             debug!("File already exists at {}", file_path.display());
+            files_created.push(file_path.clone());
             continue;
         }
 
         match client.get(&url).send().await {
             Ok(response) => {
                 let content = response.bytes().await?;
+                files_created.push(file_path.clone());
                 fs::write(&file_path, content).await?;
                 info!("Saved {} from {}", file, url);
             }
@@ -123,7 +130,7 @@ async fn fetch_the_fisherman_content(
         }
     }
 
-    Ok(())
+    Ok(files_created)
 }
 
 /// Extends content handling based on chain, contract address, and token ID.
@@ -134,7 +141,7 @@ pub async fn fetch_and_save_extra_content(
     token_id: &str,
     output_path: &Path,
     artifact_url: Option<&str>,
-) -> Result<()> {
+) -> Result<Vec<PathBuf>> {
     match (chain, contract, token_id) {
         (
             "ethereum",
@@ -151,6 +158,6 @@ pub async fn fetch_and_save_extra_content(
             .await
         }
         // Default case - no extension needed
-        _ => Ok(()),
+        _ => Ok(Vec::new()),
     }
 }

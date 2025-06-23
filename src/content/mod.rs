@@ -3,7 +3,7 @@ use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 pub mod extensions;
 pub mod extra;
@@ -111,21 +111,37 @@ pub async fn fetch_and_save_content(
 
     // Check if file exists (with any extension) using base path and url
     if let Some(existing_path) = try_exists(&file_path).await? {
-        debug!("File already exists at {}", existing_path.display());
+        debug!(
+            "File already exists at {} (skipping download)",
+            existing_path.display()
+        );
         return Ok(existing_path);
     }
 
     // Get content based on URL type
-    let mut content = if is_data_url(url) {
+    let content = if is_data_url(url) {
         get_data_url(url).unwrap()
     } else {
         let content_url = get_url(url);
         // TODO: Rotate IPFS gateways to handle rate limits
-        fetch_http_content(&content_url).await?
+        match fetch_http_content(&content_url).await {
+            Ok(data) => data,
+            Err(e) => {
+                error!("Failed to fetch content from {}: {}", content_url, e);
+                return Err(e);
+            }
+        }
     };
 
     // Create directory and save content
-    fs::create_dir_all(file_path.parent().unwrap()).await?;
+    if let Err(e) = fs::create_dir_all(file_path.parent().unwrap()).await {
+        error!(
+            "Failed to create directory {}: {}",
+            file_path.parent().unwrap().display(),
+            e
+        );
+        return Err(anyhow::anyhow!(e));
+    }
 
     // Detect media extension from content if not already known from the filename
     if !extensions::has_known_extension(&file_path) {
@@ -136,20 +152,68 @@ pub async fn fetch_and_save_content(
         }
     }
 
-    match file_path.extension().unwrap_or_default().to_str() {
+    info!("Saving file: {} (url: {})", file_path.display(), url);
+    let write_result = match file_path.extension().unwrap_or_default().to_str() {
         Some("json") => {
-            let json_value: Value = serde_json::from_slice(&content)?;
-            content = serde_json::to_string_pretty(&json_value)?.into();
+            let json_value: Value = match serde_json::from_slice(&content) {
+                Ok(val) => val,
+                Err(e) => {
+                    error!("Failed to parse JSON for {}: {}", file_path.display(), e);
+                    return Err(anyhow::anyhow!(e));
+                }
+            };
+            let pretty = match serde_json::to_string_pretty(&json_value) {
+                Ok(val) => val,
+                Err(e) => {
+                    error!(
+                        "Failed to pretty-print JSON for {}: {}",
+                        file_path.display(),
+                        e
+                    );
+                    return Err(anyhow::anyhow!(e));
+                }
+            };
+            info!("Saving {}", file_path.display());
+            fs::write(&file_path, pretty)
+                .await
+                .map_err(|e| anyhow::anyhow!(e))
         }
         Some("html") => {
-            let content_str = String::from_utf8_lossy(&content);
-            html::download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
+            let content_str = String::from_utf8_lossy(&content).to_string();
+            info!("Saving {}", file_path.display());
+            let write_res = fs::write(&file_path, &content)
+                .await
+                .map_err(|e| anyhow::anyhow!(e));
+            if write_res.is_ok() {
+                // Now call download_html_resources after content is dropped
+                if let Err(e) = crate::content::html::download_html_resources(
+                    &content_str,
+                    url,
+                    file_path.parent().unwrap(),
+                )
+                .await
+                {
+                    error!(
+                        "Failed to download HTML resources for {}: {}",
+                        file_path.display(),
+                        e
+                    );
+                    return Err(e);
+                }
+            }
+            write_res
         }
-        _ => {}
+        _ => fs::write(&file_path, &content)
+            .await
+            .map_err(|e| anyhow::anyhow!(e)),
+    };
+    match write_result {
+        Ok(_) => debug!("Successfully saved file: {}", file_path.display()),
+        Err(e) => {
+            error!("Failed to write file {}: {}", file_path.display(), e);
+            return Err(e);
+        }
     }
-
-    info!("Saving {}", file_path.display());
-    fs::write(&file_path, &content).await?;
 
     Ok(file_path)
 }

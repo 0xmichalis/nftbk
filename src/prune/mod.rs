@@ -1,13 +1,19 @@
 use anyhow::Result;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::Path;
 use tokio::fs;
 use tracing::info;
 
 use crate::TokenConfig;
 
-/// Prune directories in the backup folder that are not part of the config
-pub async fn prune_missing_directories(output_path: &Path, config: &TokenConfig) -> Result<()> {
+/// Prune directories in the backup folder that are not part of the config or contain files not in the valid files list
+pub async fn prune_missing_directories(
+    output_path: &Path,
+    config: &TokenConfig,
+    valid_files: &[std::path::PathBuf],
+) -> Result<()> {
+    use std::collections::HashSet;
+    let valid_files_set: HashSet<_> = valid_files.iter().collect();
     // Build map of valid token IDs per contract per chain
     let mut valid_tokens: HashMap<String, HashMap<String, HashSet<String>>> = HashMap::new();
     for (chain, contracts) in &config.chains {
@@ -97,6 +103,19 @@ pub async fn prune_missing_directories(output_path: &Path, config: &TokenConfig)
                 if !valid_tokens[&chain_name][&contract_addr].contains(&token_id) {
                     info!("Pruning token directory: {}", token_path.display());
                     fs::remove_dir_all(&token_path).await?;
+                    continue;
+                }
+
+                // Prune files in token directory that are not in valid_files
+                let mut file_entries = fs::read_dir(&token_path).await?;
+                while let Some(file_entry) = file_entries.next_entry().await? {
+                    let file_path = file_entry.path();
+                    if fs::metadata(&file_path).await?.is_file()
+                        && !valid_files_set.contains(&file_path)
+                    {
+                        info!("Pruning file: {}", file_path.display());
+                        fs::remove_file(&file_path).await?;
+                    }
                 }
             }
         }

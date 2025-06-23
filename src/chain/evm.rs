@@ -1,19 +1,18 @@
 use alloy::{
     contract::Error,
-    primitives::{Address, U256},
-    providers::{ProviderBuilder, RootProvider},
     sol,
     transports::http::{Client, Http},
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::future::Future;
 use std::time::Duration;
-use std::{future::Future, path::Path};
-use tokio::fs;
 use tokio::time::sleep;
-use tracing::{debug, error};
+use tracing::debug;
 
-use crate::content::{extra::fetch_and_save_extra_content, fetch_and_save_content, Options};
+use crate::chain::common::{ContractWithToken, NFTAttribute};
+use crate::chain::ContractTokenInfo;
+use crate::content::{fetch_and_save_content, Options};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -60,12 +59,6 @@ where
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct NFTAttribute {
-    pub trait_type: String,
-    pub value: serde_json::Value,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
 pub struct Media {
     pub uri: String,
 }
@@ -83,12 +76,6 @@ sol! {
         function tokenURI(uint256 tokenId) external view returns (string);
         function uri(uint256 id) external view returns (string);
     }
-}
-
-#[derive(Debug)]
-struct ContractWithToken {
-    address: String,
-    token_id: String,
 }
 
 fn is_rate_limited(e: &Error) -> bool {
@@ -117,190 +104,111 @@ where
     }
 }
 
-async fn get_token_uri(
-    contract_addr: Address,
-    provider: RootProvider<Http<Client>>,
-    token_id: U256,
-) -> Result<String, Error> {
-    let nft = INFT::new(contract_addr, provider);
+pub struct EvmChainProcessor;
 
-    let uri = match try_call_contract(|| {
-        let nft = nft.clone();
-        async move { nft.tokenURI(token_id).call().await }
-    })
-    .await
-    {
-        Ok(uri) => Ok(uri._0),
-        Err(e) if !is_rate_limited(&e) => {
-            let uri = try_call_contract(|| {
-                let nft = nft.clone();
-                async move { nft.uri(token_id).call().await }
-            })
-            .await?;
-            Ok(uri._0)
-        }
-        Err(e) => Err(e),
-    }?;
+#[async_trait::async_trait]
+impl crate::chain::NFTChainProcessor for EvmChainProcessor {
+    type Metadata = NFTMetadata;
+    type ContractWithToken = ContractWithToken;
+    type RpcClient = alloy::providers::RootProvider<Http<Client>>;
 
-    // Handle OpenSea's URI pattern
-    if uri.contains("/api.opensea.io/") && uri.contains("{id}") {
-        let hex_token_id = format!("{:x}", token_id);
-        return Ok(uri.replace("{id}", &hex_token_id));
-    }
-
-    Ok(uri)
-}
-
-fn collect_urls_to_download(metadata: &NFTMetadata) -> Vec<(String, String)> {
-    let mut urls_to_download = Vec::new();
-
-    let mut add_if_not_empty = |url: &str, name: &str| {
-        if !url.is_empty() {
-            urls_to_download.push((url.to_string(), name.to_string()));
-        }
-    };
-
-    if let Some(media) = &metadata.media {
-        add_if_not_empty(&media.uri, "media");
-    }
-    if let Some(content) = &metadata.content {
-        add_if_not_empty(&content.uri, "content");
-    }
-    if let Some(assets) = &metadata.assets {
-        if let Some(glb) = &assets.glb {
-            add_if_not_empty(glb, "glb");
-        }
-    }
-    if let Some(image) = &metadata.image {
-        add_if_not_empty(image, "image");
-    }
-    if let Some(image_url) = &metadata.image_url {
-        add_if_not_empty(image_url, "image");
-    }
-    if let Some(animation_url) = &metadata.animation_url {
-        add_if_not_empty(animation_url, "animation");
-    }
-
-    urls_to_download
-}
-
-pub async fn process_nfts(
-    chain_name: &str,
-    rpc_url: &str,
-    contracts: Vec<String>,
-    output_path: &Path,
-    exit_on_error: bool,
-) -> Result<()> {
-    let rpc_url = rpc_url.parse::<url::Url>()?;
-    let provider = ProviderBuilder::new().on_http(rpc_url);
-
-    let contracts = contracts
-        .into_iter()
-        .map(|s| {
-            let parts: Vec<&str> = s.split(':').collect();
-            ContractWithToken {
-                address: parts[0].to_string(),
-                token_id: parts[1].to_string(),
-            }
-        })
-        .collect::<Vec<_>>();
-
-    for contract in contracts {
+    async fn fetch_metadata(
+        &self,
+        token_uri: &str,
+        contract: &Self::ContractWithToken,
+        output_path: &std::path::Path,
+        chain_name: &str,
+    ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)> {
         debug!(
-            "Processing contract {} on {} (token ID {})",
-            contract.address, chain_name, contract.token_id
+            "Fetching metadata from {} for contract {}",
+            token_uri,
+            contract.address()
         );
-        let contract_addr = match contract.address.parse::<Address>() {
-            Ok(addr) => addr,
-            Err(e) => {
-                error!("Failed to parse contract address on {}: {}", chain_name, e);
-                continue;
-            }
-        };
-
-        // Parse token ID into U256
-        let token_id = match U256::from_str_radix(&contract.token_id, 10) {
-            Ok(id) => id,
-            Err(e) => {
-                error!("Failed to parse token ID: {}", e);
-                continue;
-            }
-        };
-
-        let contract_processing_result: Result<()> = (async {
-            // Get token URI
-            let token_uri = get_token_uri(contract_addr, provider.clone(), token_id).await?;
-
-            // Save metadata
-            debug!("Fetching metadata from {}", token_uri);
-            let contract_address = format!("{:#x}", contract_addr);
-            let token_id_str = token_id.to_string();
-            let metadata_content = fetch_and_save_content(
-                &token_uri,
-                chain_name,
-                &contract_address,
-                &token_id_str,
-                output_path,
-                Options {
-                    overriden_filename: Some("metadata.json".to_string()),
-                    fallback_filename: None,
-                },
-            )
-            .await?;
-
-            // Iterate over metadata to gather all URLs to download
-            let metadata_content_str = fs::read_to_string(metadata_content).await?;
-            let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
-            let urls_to_download = collect_urls_to_download(&metadata);
-
-            // Download all URLs, keeping track of what we've downloaded to avoid duplicates
-            let mut downloaded = std::collections::HashSet::new();
-            for (url, file_name) in urls_to_download {
-                // Only download if we haven't seen this URL before
-                let inserted = downloaded.insert(url.clone());
-                if !inserted {
-                    debug!("Skipping duplicate {} from {}", file_name, url);
-                    continue;
-                }
-
-                debug!("Downloading {} from {}", file_name, url);
-                fetch_and_save_content(
-                    &url,
-                    chain_name,
-                    &contract_address,
-                    &token_id_str,
-                    output_path,
-                    Options {
-                        overriden_filename: None,
-                        fallback_filename: Some(file_name.clone()),
-                    },
-                )
-                .await?;
-            }
-
-            // Process any additional content after downloading all files
-            fetch_and_save_extra_content(
-                chain_name,
-                &format!("{:#x}", contract_addr),
-                &token_id.to_string(),
-                output_path,
-                None,
-            )
-            .await?;
-            Ok(())
-        })
-        .await;
-
-        if let Err(e) = contract_processing_result {
-            error!(
-                "Failed to process contract {} on {} (token ID {}): {}",
-                contract.address, chain_name, contract.token_id, e
-            );
-            if exit_on_error {
-                return Err(e);
-            }
-        }
+        let metadata_content = fetch_and_save_content(
+            token_uri,
+            chain_name,
+            &contract.address,
+            &contract.token_id,
+            output_path,
+            Options {
+                overriden_filename: Some("metadata.json".to_string()),
+                fallback_filename: None,
+            },
+        )
+        .await?;
+        let metadata_content_str = tokio::fs::read_to_string(&metadata_content).await?;
+        let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
+        Ok((metadata, metadata_content))
     }
 
-    Ok(())
+    fn collect_urls_to_download(metadata: &Self::Metadata) -> Vec<(String, Option<String>)> {
+        let mut urls_to_download = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        let mut add_if_not_empty = |url: &str, name: Option<&str>| {
+            if !url.is_empty() && seen.insert(url.to_string()) {
+                urls_to_download.push((url.to_string(), name.map(|s| s.to_string())));
+            }
+        };
+
+        if let Some(media) = &metadata.media {
+            add_if_not_empty(&media.uri, Some("media"));
+        }
+        if let Some(content) = &metadata.content {
+            add_if_not_empty(&content.uri, Some("content"));
+        }
+        if let Some(assets) = &metadata.assets {
+            if let Some(glb) = &assets.glb {
+                add_if_not_empty(glb, Some("glb"));
+            }
+        }
+        if let Some(image) = &metadata.image {
+            add_if_not_empty(image, Some("image"));
+        }
+        if let Some(image_url) = &metadata.image_url {
+            add_if_not_empty(image_url, Some("image"));
+        }
+        if let Some(animation_url) = &metadata.animation_url {
+            add_if_not_empty(animation_url, Some("animation"));
+        }
+
+        urls_to_download
+    }
+
+    async fn get_uri(
+        &self,
+        rpc: &Self::RpcClient,
+        contract: &Self::ContractWithToken,
+    ) -> anyhow::Result<String> {
+        use alloy::primitives::{Address, U256};
+        let contract_addr = contract.address().parse::<Address>()?;
+        let token_id = U256::from_str_radix(contract.token_id(), 10)?;
+        let nft = INFT::new(contract_addr, rpc);
+
+        let uri = match try_call_contract(|| {
+            let nft = nft.clone();
+            async move { nft.tokenURI(token_id).call().await }
+        })
+        .await
+        {
+            Ok(uri) => Ok(uri._0),
+            Err(e) if !is_rate_limited(&e) => {
+                let uri = try_call_contract(|| {
+                    let nft = nft.clone();
+                    async move { nft.uri(token_id).call().await }
+                })
+                .await?;
+                Ok(uri._0)
+            }
+            Err(e) => Err(e),
+        }?;
+
+        // Handle OpenSea's URI pattern
+        if uri.contains("/api.opensea.io/") && uri.contains("{id}") {
+            let hex_token_id = format!("{:x}", token_id);
+            return Ok(uri.replace("{id}", &hex_token_id));
+        }
+
+        Ok(uri)
+    }
 }
