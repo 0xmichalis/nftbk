@@ -13,7 +13,7 @@ Two configuration files are used:
 - `config_chains.toml`: Contains RPC URLs for different chains
 - `config_tokens.toml`: Contains the NFT tokens to back up
 
-Copy `config.example.chains.toml` to `config_chains.toml` and `config.example.tokens.toml` to `config_tokens.toml`, then update as needed.
+Copy `example_config_chains.toml` to `config_chains.toml` and `example_config_tokens.toml` to `config_tokens.toml`, then update as needed.
 
 Example configs:
 

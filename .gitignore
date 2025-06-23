@@ -1,8 +1,6 @@
 /target
 **/*.rs.bk
 .env
-config_chains.toml
-config_tokens.toml
-*.config.toml
+config_*.toml
 /nft_backup*
 *.json
