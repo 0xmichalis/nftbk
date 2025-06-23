@@ -87,7 +87,7 @@ async fn try_call_contract<Fut, T>(mut f: impl FnMut() -> Fut) -> Result<T, Erro
 where
     Fut: Future<Output = Result<T, Error>> + Send,
 {
-    const MAX_RETRIES: u32 = 3;
+    const MAX_RETRIES: u32 = 5;
     const RETRY_DELAY_MS: u64 = 1000;
 
     let mut attempts = 0;
@@ -96,7 +96,7 @@ where
             Ok(uri) => return Ok(uri),
             Err(e) if is_rate_limited(&e) && attempts < MAX_RETRIES => {
                 attempts += 1;
-                sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                sleep(Duration::from_millis(RETRY_DELAY_MS * attempts as u64)).await;
                 continue;
             }
             Err(e) => return Err(e),
