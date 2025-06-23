@@ -181,10 +181,6 @@ fn collect_urls_to_download(metadata: &NFTMetadata) -> Vec<(String, String)> {
         add_if_not_empty(animation_url, "animation");
     }
 
-    if let Some(external_url) = &metadata.external_url {
-        add_if_not_empty(external_url, "external");
-    }
-
     urls_to_download
 }
 
