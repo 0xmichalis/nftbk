@@ -32,9 +32,9 @@ struct Args {
     #[arg(short, long, value_enum, default_value = "info")]
     log_level: LogLevel,
 
-    /// Delete directories in the backup folder that are not part of the config
+    /// Delete redundant files in the backup folder
     #[arg(long, default_value = "false")]
-    prune_missing: bool,
+    prune_redundant: bool,
 
     /// Use the server for backup instead of running locally
     #[arg(long, default_value = "false")]
@@ -169,7 +169,7 @@ async fn main() -> Result<()> {
             chain_config,
             token_config,
             output_path: args.output_path,
-            prune_missing: args.prune_missing,
+            prune_redundant: args.prune_redundant,
             exit_on_error: args.exit_on_error,
         };
         return backup_from_config(backup_config).await;

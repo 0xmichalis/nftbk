@@ -286,7 +286,7 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
         chain_config: (*state.chain_config).clone(),
         token_config,
         output_path: Some(out_path.clone()),
-        prune_missing: false,
+        prune_redundant: false,
         exit_on_error: false,
     };
     let backup_result = backup::backup_from_config(backup_cfg).await;

@@ -6,8 +6,8 @@ use tracing::info;
 
 use crate::TokenConfig;
 
-/// Prune directories in the backup folder that are not part of the config or contain files not in the valid files list
-pub async fn prune_missing_directories(
+/// Prune directories in the backup folder that are not part of the config or contain redundant files
+pub async fn prune_redundant_files(
     output_path: &Path,
     config: &TokenConfig,
     valid_files: &[std::path::PathBuf],

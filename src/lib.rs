@@ -35,7 +35,7 @@ pub struct BackupConfig {
     pub chain_config: ChainConfig,
     pub token_config: TokenConfig,
     pub output_path: Option<PathBuf>,
-    pub prune_missing: bool,
+    pub prune_redundant: bool,
     pub exit_on_error: bool,
 }
 
@@ -96,9 +96,9 @@ pub mod backup {
             all_files.extend(files);
         }
 
-        if cfg.prune_missing {
-            info!("Pruning directories not in config...");
-            prune::prune_missing_directories(&output_path, token_config, &all_files).await?;
+        if cfg.prune_redundant {
+            info!("Pruning redundant files...");
+            prune::prune_redundant_files(&output_path, token_config, &all_files).await?;
         }
 
         info!(
