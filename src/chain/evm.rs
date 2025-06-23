@@ -79,7 +79,7 @@ sol! {
 }
 
 fn is_rate_limited(e: &Error) -> bool {
-    e.to_string().contains("429")
+    e.to_string().contains("429") || e.to_string().contains("rate limit")
 }
 
 // Helper function to handle contract calls with retries
