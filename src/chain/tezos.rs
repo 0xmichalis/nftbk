@@ -143,6 +143,42 @@ async fn get_uri(
     Ok(get_uri_from_token_metadata(&json_value))
 }
 
+fn collect_urls_to_download(metadata: &NFTMetadata) -> Vec<(String, String)> {
+    let mut urls_to_download = Vec::new();
+    let nft_name = metadata.name.as_deref().unwrap_or("untitled");
+
+    // Add URIs from formats array with their filenames
+    if let Some(formats) = &metadata.formats {
+        for format in formats {
+            if format.uri.is_empty() {
+                continue;
+            }
+            let file_name = if format.file_name.is_empty() {
+                nft_name.to_string()
+            } else {
+                format.file_name.clone()
+            };
+            urls_to_download.push((format.uri.clone(), file_name));
+        }
+    }
+
+    // Helper function to add non-empty URLs
+    let mut add_if_not_empty = |url: &Option<String>, name: &str| {
+        if let Some(url) = url {
+            if !url.is_empty() {
+                urls_to_download.push((url.clone(), name.to_string()));
+            }
+        }
+    };
+
+    add_if_not_empty(&metadata.image, "image");
+    add_if_not_empty(&metadata.artifact_uri, "artifact");
+    add_if_not_empty(&metadata.display_uri, "display");
+    add_if_not_empty(&metadata.thumbnail_uri, "thumbnail");
+
+    urls_to_download
+}
+
 async fn fetch_nft_metadata(
     token_uri: &str,
     contract: &ContractWithToken,
@@ -180,40 +216,8 @@ async fn fetch_nft_metadata(
     let metadata_content_str = fs::read_to_string(metadata_content).await?;
     let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
 
-    // Get NFT name to use as fallback filename
-    let nft_name = metadata.name.as_deref().unwrap_or("untitled");
-
-    // Collect all URIs that need to be downloaded
-    let mut urls_to_download = Vec::new();
-
-    // Add URIs from formats array with their filenames
-    if let Some(formats) = &metadata.formats {
-        for format in formats {
-            if format.uri.is_empty() {
-                continue;
-            }
-            let file_name = if format.file_name.is_empty() {
-                nft_name.to_string()
-            } else {
-                format.file_name.clone()
-            };
-            urls_to_download.push((format.uri.clone(), file_name));
-        }
-    }
-
-    // Helper function to add non-empty URLs
-    let mut add_if_not_empty = |url: &Option<String>, name: &str| {
-        if let Some(url) = url {
-            if !url.is_empty() {
-                urls_to_download.push((url.clone(), name.to_string()));
-            }
-        }
-    };
-
-    add_if_not_empty(&metadata.image, "image");
-    add_if_not_empty(&metadata.artifact_uri, "artifact");
-    add_if_not_empty(&metadata.display_uri, "display");
-    add_if_not_empty(&metadata.thumbnail_uri, "thumbnail");
+    // Use the new function to collect all URIs that need to be downloaded
+    let urls_to_download = collect_urls_to_download(&metadata);
 
     // Download all URLs, keeping track of what we've downloaded to avoid duplicates
     let mut downloaded = std::collections::HashSet::new();
