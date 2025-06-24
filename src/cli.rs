@@ -109,7 +109,6 @@ async fn wait_for_done_backup(
     server_addr: &str,
     task_id: &str,
 ) -> Result<()> {
-    println!("Waiting for backup to complete...");
     let status_url = format!(
         "{}/backup/{}/status",
         server_addr.trim_end_matches('/'),
@@ -128,7 +127,7 @@ async fn wait_for_done_backup(
                     match status.status.as_str() {
                         "in_progress" => {
                             if !in_progress_logged {
-                                println!("Backup in progress...");
+                                println!("Waiting for backup to complete...");
                                 in_progress_logged = true;
                             }
                         }
