@@ -1,12 +1,16 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ChainTokens {
+pub struct Tokens {
     pub chain: String,
     pub tokens: Vec<String>,
 }
 
-pub type BackupRequest = Vec<ChainTokens>;
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BackupRequest {
+    pub tokens: Vec<Tokens>,
+    pub force: Option<bool>,
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BackupResponse {

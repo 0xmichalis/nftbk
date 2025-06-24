@@ -22,7 +22,7 @@ use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, warn};
 
-use nftbk::api::{BackupRequest, BackupResponse, StatusResponse};
+use nftbk::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
 use nftbk::backup::{self, BackupConfig, ChainConfig, TokenConfig};
 use nftbk::hashing::{compute_array_sha256, compute_file_sha256};
 use nftbk::logging::{self, LogLevel};
@@ -140,7 +140,7 @@ async fn handle_backup(
     let configured_chains: std::collections::HashSet<_> =
         state.chain_config.0.keys().cloned().collect();
     let mut unknown_chains = Vec::new();
-    for entry in &req {
+    for entry in &req.tokens {
         if !configured_chains.contains(&entry.chain) {
             unknown_chains.push(entry.chain.clone());
         }
@@ -155,32 +155,40 @@ async fn handle_backup(
     }
     // Flatten all tokens for task_id computation
     let mut all_tokens = Vec::new();
-    for entry in &req {
+    for entry in &req.tokens {
         all_tokens.extend(entry.tokens.iter().cloned());
     }
     let task_id = compute_array_sha256(&all_tokens);
     let mut tasks = state.tasks.lock().await;
 
+    let force = req.force.unwrap_or(false);
+
     // Check if task exists and its status
     if let Some(task) = tasks.get(&task_id) {
         match &task.status {
             TaskStatus::InProgress => {
-                info!(
+                debug!(
                     "Duplicate backup request, returning existing task_id {}",
                     task_id
                 );
                 return Json(BackupResponse { task_id }).into_response();
             }
             TaskStatus::Done => {
-                info!(
-                    "Backup already completed, returning existing task_id {}",
-                    task_id
-                );
-                return Json(BackupResponse { task_id }).into_response();
+                if force {
+                    info!("Force rerunning backup task {}", task_id);
+                } else {
+                    debug!(
+                        "Backup already completed, returning existing task_id {}",
+                        task_id
+                    );
+                    return Json(BackupResponse { task_id }).into_response();
+                }
             }
             TaskStatus::Error(e) => {
-                info!("Previous backup failed for task {}: {}", task_id, e);
-                info!("Rerunning backup task {}", task_id);
+                info!(
+                    "Rerunning task {} because previous backup failed: {}",
+                    task_id, e
+                );
             }
         }
     }
@@ -198,8 +206,14 @@ async fn handle_backup(
     // Spawn background job
     let state_clone = state.clone();
     let task_id_clone = task_id.clone();
+    let tokens = req.tokens.clone();
     tokio::task::spawn_blocking(move || {
-        tokio::runtime::Handle::current().block_on(run_backup_job(state_clone, task_id_clone, req))
+        tokio::runtime::Handle::current().block_on(run_backup_job(
+            state_clone,
+            task_id_clone,
+            tokens,
+            force,
+        ))
     });
 
     info!("Started backup task {}", task_id);
@@ -257,12 +271,20 @@ async fn check_backup_on_disk(base_dir: &str, task_id: &str) -> Option<PathBuf> 
     }
 }
 
-async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
+async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, force: bool) {
     let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
     let out_path = PathBuf::from(&out_dir);
 
-    // First check if backup already exists on disk
-    if let Some(zip_path) = check_backup_on_disk(&state.base_dir, &task_id).await {
+    // If force is set, delete the error log if it exists
+    // Otherwise, check if backup already exists on disk
+    if force {
+        let log_path = format!("{}/nftbk-{}.log", state.base_dir, task_id);
+        match tokio::fs::remove_file(&log_path).await {
+            Ok(_) => info!("Deleted error log for task {}", task_id),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // Ignore if not found
+            Err(e) => warn!("Failed to delete error log for task {}: {}", task_id, e),
+        }
+    } else if let Some(zip_path) = check_backup_on_disk(&state.base_dir, &task_id).await {
         // Update task state to reflect the existing backup
         let mut tasks = state.tasks.lock().await;
         if let Some(task) = tasks.get_mut(&task_id) {
@@ -284,7 +306,7 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
 
     // Build TokenConfig from request
     let mut token_map = std::collections::HashMap::new();
-    for entry in req {
+    for entry in tokens {
         token_map.insert(entry.chain, entry.tokens);
     }
     let token_config = TokenConfig { chains: token_map };

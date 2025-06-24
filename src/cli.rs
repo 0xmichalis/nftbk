@@ -9,7 +9,7 @@ use tar::Archive;
 use tokio::fs;
 use tracing::warn;
 
-use nftbk::api::{BackupResponse, ChainTokens, StatusResponse};
+use nftbk::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
 use nftbk::backup::{backup_from_config, BackupConfig, ChainConfig, TokenConfig};
 use nftbk::logging;
 use nftbk::logging::LogLevel;
@@ -48,15 +48,20 @@ struct Args {
     /// Exit on the first error encountered
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     exit_on_error: bool,
+
+    /// Force rerunning a completed backup task
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    force: bool,
 }
 
 async fn backup_from_server(
     token_config: TokenConfig,
     server_addr: String,
     output_path: Option<PathBuf>,
+    force: bool,
 ) -> Result<()> {
     let client = Client::new();
-    let backup_resp = request_backup(&token_config, &server_addr, &client).await?;
+    let backup_resp = request_backup(&token_config, &server_addr, &client, force).await?;
     println!("Task ID: {}", backup_resp.task_id);
 
     wait_for_done_backup(&client, &server_addr, &backup_resp.task_id).await?;
@@ -76,10 +81,14 @@ async fn request_backup(
     token_config: &TokenConfig,
     server_addr: &str,
     client: &Client,
+    force: bool,
 ) -> Result<BackupResponse> {
-    let mut backup_req = Vec::new();
+    let mut backup_req = BackupRequest {
+        tokens: Vec::new(),
+        force: Some(force),
+    };
     for (chain, tokens) in &token_config.chains {
-        backup_req.push(ChainTokens {
+        backup_req.tokens.push(Tokens {
             chain: chain.clone(),
             tokens: tokens.clone(),
         });
@@ -217,7 +226,8 @@ async fn main() -> Result<()> {
         toml::from_str(&tokens_content).context("Failed to parse tokens config file")?;
 
     if args.server_mode {
-        return backup_from_server(token_config, args.server_addr, args.output_path).await;
+        return backup_from_server(token_config, args.server_addr, args.output_path, args.force)
+            .await;
     }
 
     let chains_content = fs::read_to_string(&args.chains_config_path)
