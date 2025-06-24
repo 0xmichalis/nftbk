@@ -10,10 +10,10 @@ use clap::Parser;
 use dotenv::dotenv;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use sha2::{Digest, Sha256};
+use nftbk::hashing::{compute_array_sha256, compute_file_sha256};
 use std::collections::HashMap;
 use std::net::SocketAddr;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs::File;
 use tokio::sync::Mutex;
@@ -104,16 +104,6 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
-fn compute_task_id(tokens: &[String]) -> String {
-    let mut hasher = Sha256::new();
-    let mut sorted = tokens.to_vec();
-    sorted.sort();
-    for token in &sorted {
-        hasher.update(token.as_bytes());
-    }
-    format!("{:x}", hasher.finalize())
-}
-
 async fn handle_backup(
     State(state): State<AppState>,
     Json(req): Json<BackupRequest>,
@@ -140,7 +130,7 @@ async fn handle_backup(
     for entry in &req {
         all_tokens.extend(entry.tokens.iter().cloned());
     }
-    let task_id = compute_task_id(&all_tokens);
+    let task_id = compute_array_sha256(&all_tokens);
     let mut tasks = state.tasks.lock().await;
 
     // Check if task exists and its status
@@ -186,13 +176,6 @@ async fn handle_backup(
 
     info!("Started backup task {}", task_id);
     Json(BackupResponse { task_id }).into_response()
-}
-
-/// Helper function to compute SHA256 of a file
-async fn compute_file_sha256(path: &Path) -> Result<String, std::io::Error> {
-    let contents = tokio::fs::read(path).await?;
-    let hash = Sha256::digest(&contents);
-    Ok(format!("{:x}", hash))
 }
 
 /// Helper function to get backup archive and checksum paths for a given task
@@ -267,12 +250,6 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
         return;
     }
 
-    // Build TokenConfig from request
-    let mut token_map = std::collections::HashMap::new();
-    for entry in req {
-        token_map.insert(entry.chain, entry.tokens);
-    }
-    let token_config = TokenConfig { chains: token_map };
     // Prepare output dir
     if let Err(e) = tokio::fs::create_dir_all(&out_path).await {
         let mut tasks = state.tasks.lock().await;
@@ -281,6 +258,14 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
         }
         return;
     }
+
+    // Build TokenConfig from request
+    let mut token_map = std::collections::HashMap::new();
+    for entry in req {
+        token_map.insert(entry.chain, entry.tokens);
+    }
+    let token_config = TokenConfig { chains: token_map };
+
     // Run backup
     let backup_cfg = BackupConfig {
         chain_config: (*state.chain_config).clone(),
@@ -298,6 +283,7 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
         }
         return;
     }
+
     // Zip the output dir
     let (zip_pathbuf, checksum_path) = get_zipped_backup_paths(&state.base_dir, &task_id);
     let zip_path = zip_pathbuf.to_str().unwrap();
@@ -327,6 +313,7 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
         }
         return;
     }
+
     // Update task and write checksum
     let mut tasks = state.tasks.lock().await;
     if let Some(task) = tasks.get_mut(&task_id) {
