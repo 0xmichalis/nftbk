@@ -53,6 +53,7 @@ where
     FExtraUri: Fn(&C::Metadata) -> Option<&str>,
 {
     let mut all_files = Vec::new();
+    let mut error_log = Vec::new();
     for contract in contracts {
         debug!(
             "Processing contract {} (token ID {})",
@@ -62,15 +63,17 @@ where
         let token_uri = match processor.get_uri(&provider, &contract).await {
             Ok(uri) => uri,
             Err(e) => {
-                error!(
+                let msg = format!(
                     "Failed to get token URI for contract {} (token ID {}): {}",
                     contract.address(),
                     contract.token_id(),
                     e
                 );
+                error!("{}", msg);
                 if exit_on_error {
                     return Err(e);
                 }
+                error_log.push(msg);
                 continue;
             }
         };
@@ -81,15 +84,17 @@ where
         {
             Ok(pair) => pair,
             Err(e) => {
-                error!(
+                let msg = format!(
                     "Failed to fetch metadata for contract {} (token ID {}): {}",
                     contract.address(),
                     contract.token_id(),
                     e
                 );
+                error!("{}", msg);
                 if exit_on_error {
                     return Err(e);
                 }
+                error_log.push(msg);
                 continue;
             }
         };
@@ -119,16 +124,18 @@ where
             {
                 Ok(path) => all_files.push(path),
                 Err(e) => {
-                    error!(
+                    let msg = format!(
                         "Failed to fetch content from {} for contract {} (token ID {}): {}",
                         url,
                         contract.address(),
                         contract.token_id(),
                         e
                     );
+                    error!("{}", msg);
                     if exit_on_error {
                         return Err(e);
                     }
+                    error_log.push(msg);
                 }
             }
         }
@@ -147,15 +154,39 @@ where
                 all_files.extend(extra_files);
             }
             Err(e) => {
-                error!(
+                let msg = format!(
                     "Failed to fetch extra content for contract {} (token ID {}): {}",
                     contract.address(),
                     contract.token_id(),
                     e
                 );
+                error!("{}", msg);
                 if exit_on_error {
                     return Err(e);
                 }
+                error_log.push(msg);
+            }
+        }
+    }
+
+    // Write error log if needed
+    if !exit_on_error && !error_log.is_empty() {
+        use tokio::io::AsyncWriteExt;
+        let mut log_path = output_path.to_path_buf();
+        log_path.set_extension("log");
+        let log_content = error_log.join("\n");
+        match tokio::fs::File::create(&log_path).await {
+            Ok(mut file) => {
+                if let Err(e) = file.write_all(log_content.as_bytes()).await {
+                    error!("Failed to write error log to {}: {}", log_path.display(), e);
+                }
+            }
+            Err(e) => {
+                error!(
+                    "Failed to create error log file {}: {}",
+                    log_path.display(),
+                    e
+                );
             }
         }
     }
