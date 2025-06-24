@@ -1,9 +1,11 @@
-use crate::url::{get_data_url, get_last_path_segment, get_url, is_data_url};
 use anyhow::Result;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tokio::fs;
-use tracing::{debug, error, info};
+use tracing::{debug, info};
+
+use crate::content::html::download_html_resources;
+use crate::url::{get_data_url, get_last_path_segment, get_url, is_data_url};
 
 pub mod extensions;
 pub mod extra;
@@ -124,24 +126,11 @@ pub async fn fetch_and_save_content(
     } else {
         let content_url = get_url(url);
         // TODO: Rotate IPFS gateways to handle rate limits
-        match fetch_http_content(&content_url).await {
-            Ok(data) => data,
-            Err(e) => {
-                error!("Failed to fetch content from {}: {}", content_url, e);
-                return Err(e);
-            }
-        }
+        fetch_http_content(&content_url).await?
     };
 
     // Create directory and save content
-    if let Err(e) = fs::create_dir_all(file_path.parent().unwrap()).await {
-        error!(
-            "Failed to create directory {}: {}",
-            file_path.parent().unwrap().display(),
-            e
-        );
-        return Err(anyhow::anyhow!(e));
-    }
+    fs::create_dir_all(file_path.parent().unwrap()).await?;
 
     // Detect media extension from content if not already known from the filename
     if !extensions::has_known_extension(&file_path) {
@@ -152,54 +141,22 @@ pub async fn fetch_and_save_content(
         }
     }
 
-    info!("Saving file: {} (url: {})", file_path.display(), url);
+    info!("Saving {} (url: {})", file_path.display(), url);
     let write_result = match file_path.extension().unwrap_or_default().to_str() {
         Some("json") => {
-            let json_value: Value = match serde_json::from_slice(&content) {
-                Ok(val) => val,
-                Err(e) => {
-                    error!("Failed to parse JSON for {}: {}", file_path.display(), e);
-                    return Err(anyhow::anyhow!(e));
-                }
-            };
-            let pretty = match serde_json::to_string_pretty(&json_value) {
-                Ok(val) => val,
-                Err(e) => {
-                    error!(
-                        "Failed to pretty-print JSON for {}: {}",
-                        file_path.display(),
-                        e
-                    );
-                    return Err(anyhow::anyhow!(e));
-                }
-            };
-            info!("Saving {}", file_path.display());
+            let json_value: Value = serde_json::from_slice(&content)?;
+            let pretty = serde_json::to_string_pretty(&json_value)?;
             fs::write(&file_path, pretty)
                 .await
                 .map_err(|e| anyhow::anyhow!(e))
         }
         Some("html") => {
             let content_str = String::from_utf8_lossy(&content).to_string();
-            info!("Saving {}", file_path.display());
             let write_res = fs::write(&file_path, &content)
                 .await
                 .map_err(|e| anyhow::anyhow!(e));
             if write_res.is_ok() {
-                // Now call download_html_resources after content is dropped
-                if let Err(e) = crate::content::html::download_html_resources(
-                    &content_str,
-                    url,
-                    file_path.parent().unwrap(),
-                )
-                .await
-                {
-                    error!(
-                        "Failed to download HTML resources for {}: {}",
-                        file_path.display(),
-                        e
-                    );
-                    return Err(e);
-                }
+                download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
             }
             write_res
         }
@@ -207,13 +164,7 @@ pub async fn fetch_and_save_content(
             .await
             .map_err(|e| anyhow::anyhow!(e)),
     };
-    match write_result {
-        Ok(_) => debug!("Successfully saved file: {}", file_path.display()),
-        Err(e) => {
-            error!("Failed to write file {}: {}", file_path.display(), e);
-            return Err(e);
-        }
-    }
-
+    write_result?;
+    debug!("Successfully saved {}", file_path.display());
     Ok(file_path)
 }

@@ -69,10 +69,10 @@ where
                     contract.token_id(),
                     e
                 );
-                error!("{}", msg);
                 if exit_on_error {
                     return Err(e);
                 }
+                error!("{}", msg);
                 error_log.push(msg);
                 continue;
             }
@@ -90,10 +90,10 @@ where
                     contract.token_id(),
                     e
                 );
-                error!("{}", msg);
                 if exit_on_error {
                     return Err(e);
                 }
+                error!("{}", msg);
                 error_log.push(msg);
                 continue;
             }
@@ -125,16 +125,16 @@ where
                 Ok(path) => all_files.push(path),
                 Err(e) => {
                     let msg = format!(
-                        "Failed to fetch content from {} for contract {} (token ID {}): {}",
+                        "Failed to fetch content from {} (contract: {}, token ID: {}): {}",
                         url,
                         contract.address(),
                         contract.token_id(),
                         e
                     );
-                    error!("{}", msg);
                     if exit_on_error {
                         return Err(e);
                     }
+                    error!("{}", msg);
                     error_log.push(msg);
                 }
             }
@@ -155,15 +155,15 @@ where
             }
             Err(e) => {
                 let msg = format!(
-                    "Failed to fetch extra content for contract {} (token ID {}): {}",
+                    "Failed to fetch extra content (contract: {}, token ID: {}): {}",
                     contract.address(),
                     contract.token_id(),
                     e
                 );
-                error!("{}", msg);
                 if exit_on_error {
                     return Err(e);
                 }
+                error!("{}", msg);
                 error_log.push(msg);
             }
         }
@@ -171,11 +171,17 @@ where
 
     // Write error log if needed
     if !exit_on_error && !error_log.is_empty() {
+        use tokio::fs::OpenOptions;
         use tokio::io::AsyncWriteExt;
         let mut log_path = output_path.to_path_buf();
         log_path.set_extension("log");
         let log_content = error_log.join("\n");
-        match tokio::fs::File::create(&log_path).await {
+        match OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .await
+        {
             Ok(mut file) => {
                 if let Err(e) = file.write_all(log_content.as_bytes()).await {
                     error!("Failed to write error log to {}: {}", log_path.display(), e);
