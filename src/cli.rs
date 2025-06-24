@@ -81,7 +81,7 @@ async fn backup_from_server(
         anyhow::bail!("Server error: {}", text);
     }
     let backup_resp: BackupResponse = resp.json().await.context("Invalid server response")?;
-    println!("Backup task submitted. Task ID: {}", backup_resp.task_id);
+    println!("Task ID: {}", backup_resp.task_id);
 
     // Poll for status
     let status_url = format!("{}/backup/{}/status", server, backup_resp.task_id);
