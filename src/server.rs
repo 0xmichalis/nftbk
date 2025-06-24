@@ -269,11 +269,6 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
             task.zip_path = Some(zip_path);
         }
         info!("Found existing backup for task {}", task_id);
-
-        // Delete the unzipped directory to save space
-        if let Err(e) = tokio::fs::remove_dir_all(&out_path).await {
-            error!("Failed to delete unzipped directory: {}", e);
-        }
         return;
     }
 
@@ -367,11 +362,6 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
         task.zip_path = Some(zip_pathbuf);
     }
     info!("Backup {} ready", task_id);
-
-    // Delete the unzipped directory to save space
-    if let Err(e) = tokio::fs::remove_dir_all(&out_path).await {
-        error!("Failed to delete unzipped directory: {}", e);
-    }
 }
 
 async fn handle_status(
