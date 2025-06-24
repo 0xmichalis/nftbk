@@ -198,7 +198,7 @@ async fn compute_file_sha256(path: &Path) -> Result<String, std::io::Error> {
 /// Helper function to get backup archive and checksum paths for a given task
 fn get_zipped_backup_paths(base_dir: &str, task_id: &str) -> (PathBuf, PathBuf) {
     let zip_path = PathBuf::from(format!("{}/nftbk-{}.tar.gz", base_dir, task_id));
-    let checksum_path = zip_path.with_extension("sha256");
+    let checksum_path = PathBuf::from(format!("{}.sha256", zip_path.display()));
     (zip_path, checksum_path)
 }
 
