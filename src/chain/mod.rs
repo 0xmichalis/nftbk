@@ -1,7 +1,3 @@
-pub mod common;
-pub mod evm;
-pub mod tezos;
-
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::Path;
@@ -10,6 +6,10 @@ use tracing::{debug, error};
 use crate::content::extra::fetch_and_save_extra_content;
 use crate::content::{fetch_and_save_content, Options};
 pub use common::ContractTokenInfo;
+
+pub mod common;
+pub mod evm;
+pub mod tezos;
 
 /// Trait for NFT chain processors to enable shared logic for fetching metadata and collecting URLs.
 #[async_trait]

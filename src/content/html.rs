@@ -1,10 +1,11 @@
-use crate::url::get_url;
 use anyhow::Result;
 use scraper::{Html, Selector};
 use std::path::Path;
 use tokio::fs;
 use tracing::{debug, info, warn};
 use url::Url;
+
+use crate::url::get_url;
 
 pub async fn download_html_resources(
     html_content: &str,

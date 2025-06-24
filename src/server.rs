@@ -10,7 +10,6 @@ use clap::Parser;
 use dotenv::dotenv;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use nftbk::hashing::{compute_array_sha256, compute_file_sha256};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -24,6 +23,7 @@ use tracing::{debug, error, info, warn};
 
 use nftbk::api::{BackupRequest, BackupResponse, StatusResponse};
 use nftbk::backup::{self, BackupConfig, ChainConfig, TokenConfig};
+use nftbk::hashing::{compute_array_sha256, compute_file_sha256};
 use nftbk::logging::{self, LogLevel};
 
 #[derive(Debug, Clone)]

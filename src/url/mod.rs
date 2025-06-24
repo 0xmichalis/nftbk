@@ -1,5 +1,5 @@
-use ::url::Url;
 use base64::Engine;
+use url::Url;
 
 pub fn is_data_url(url: &str) -> bool {
     url.starts_with("data:")
