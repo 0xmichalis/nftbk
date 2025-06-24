@@ -233,8 +233,9 @@ async fn main() -> Result<()> {
     let chains_content = fs::read_to_string(&args.chains_config_path)
         .await
         .context("Failed to read chains config file")?;
-    let chain_config: ChainConfig =
+    let mut chain_config: ChainConfig =
         toml::from_str(&chains_content).context("Failed to parse chains config file")?;
+    chain_config.resolve_env_vars()?;
 
     let backup_config = BackupConfig {
         chain_config,

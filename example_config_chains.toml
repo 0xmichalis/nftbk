@@ -1,5 +1,0 @@
-ethereum = "https://mainnet.infura.io/v3/API_KEY"
-tezos = "https://mainnet.smartpy.io"
-zora = "https://rpc.zora.energy"
-base = "https://mainnet.base.org"
-arbitrum = "https://1rpc.io/arb" 

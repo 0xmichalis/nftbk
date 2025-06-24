@@ -62,7 +62,10 @@ impl AppState {
             .expect("Failed to read chain config");
         let chains: std::collections::HashMap<String, String> =
             toml::from_str(&config_content).expect("Failed to parse chain config");
-        let chain_config = ChainConfig(chains);
+        let mut chain_config = ChainConfig(chains);
+        chain_config
+            .resolve_env_vars()
+            .expect("Failed to resolve environment variables in chain config");
         AppState {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             chain_config: Arc::new(chain_config),
@@ -74,15 +77,15 @@ impl AppState {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Address to listen on (default: 127.0.0.1:8080)
+    /// Address to listen on
     #[arg(long, default_value = "127.0.0.1:8080")]
     listen: String,
 
-    /// Path to the NFT chains configuration file (default: config_chains.toml)
+    /// Path to the NFT chains configuration file
     #[arg(short = 'c', long, default_value = "config_chains.toml")]
     chain_config: String,
 
-    /// Base directory for backups (default: /tmp)
+    /// Base directory for backups
     #[arg(long, default_value = "/tmp")]
     base_dir: String,
 

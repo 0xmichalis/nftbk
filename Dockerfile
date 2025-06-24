@@ -24,6 +24,9 @@ WORKDIR /app
 # Copy only the built binary from builder stage
 COPY --from=builder /usr/src/app/target/release/nftbk-server /app/nftbk-server
 
+# Copy the chain config to the runtime image
+COPY config_chains.toml /app/config_chains.toml
+
 # Expose the port your server listens on (adjust if needed)
 EXPOSE 8080
 

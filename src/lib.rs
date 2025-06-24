@@ -26,6 +26,29 @@ pub mod url;
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChainConfig(pub HashMap<String, String>);
 
+impl ChainConfig {
+    /// Resolves environment variable references in the form ${VAR_NAME} in all values.
+    /// Returns an error if any referenced environment variable is not set.
+    pub fn resolve_env_vars(&mut self) -> Result<()> {
+        let re = regex::Regex::new(r"\$\{([A-Z0-9_]+)\}").unwrap();
+        for (key, value) in self.0.iter_mut() {
+            let mut resolved = value.clone();
+            for caps in re.captures_iter(value) {
+                let var_name = &caps[1];
+                let env_val = std::env::var(var_name).with_context(|| {
+                    format!(
+                        "Environment variable '{}' referenced in '{}' for chain '{}' is not set",
+                        var_name, value, key
+                    )
+                })?;
+                resolved = resolved.replace(&format!("${{{}}}", var_name), &env_val);
+            }
+            *value = resolved;
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct TokenConfig {
     #[serde(flatten)]

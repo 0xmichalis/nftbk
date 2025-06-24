@@ -2663,6 +2663,7 @@ dependencies = [
  "futures",
  "hex",
  "hyper 1.5.2",
+ "regex",
  "reqwest 0.11.27",
  "scraper",
  "serde",
