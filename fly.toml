@@ -1,0 +1,23 @@
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+
+app = 'nftbk'
+primary_region = 'fra'
+
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+  processes = ['app']
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '1gb'
+
+# Mount a 10GB persistent volume for storage
+[mounts]
+  source = "storage_vol"
+  destination = "/tmp"
+  initial_size = "10gb"
+  snapshot_retention = 1
