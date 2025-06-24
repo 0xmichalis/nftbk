@@ -1,15 +1,7 @@
-use std::fmt;
+use time::{macros::format_description, UtcOffset};
 use tracing::Level;
 use tracing_subscriber::fmt::format::FmtSpan;
-use tracing_subscriber::fmt::time::FormatTime;
-
-struct NoTime;
-
-impl FormatTime for NoTime {
-    fn format_time(&self, _: &mut tracing_subscriber::fmt::format::Writer<'_>) -> fmt::Result {
-        Ok(())
-    }
-}
+use tracing_subscriber::fmt::time::OffsetTime;
 
 #[derive(clap::ValueEnum, Clone, Debug)]
 pub enum LogLevel {
@@ -31,8 +23,11 @@ impl From<LogLevel> for Level {
 }
 
 pub fn init(log_level: LogLevel) {
+    static TIME_FORMAT: &[time::format_description::FormatItem<'_>] =
+        format_description!("[year]-[month]-[day]T[hour]:[minute]:[second]Z");
+    let timer = OffsetTime::new(UtcOffset::UTC, TIME_FORMAT);
     tracing_subscriber::fmt()
-        .with_timer(NoTime)
+        .with_timer(timer)
         .with_target(false)
         .with_span_events(FmtSpan::NONE)
         .with_level(true)

@@ -22,7 +22,7 @@ tezos-contract = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
 tezos-michelson = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
 tezos-rpc = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "time"] }
 hex = "0.4.3"
 scraper = "0.17"
 flate2 = "1.0"
@@ -36,6 +36,7 @@ hyper = { version = "1.0", features = ["full"] }
 tar = "0.4"
 dotenv = "0.15"
 async-trait = "0.1.88"
+time = { version = "0.3", features = ["macros", "formatting"] }
 
 [lib]
 name = "nftbk"
