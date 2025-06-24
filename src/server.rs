@@ -97,6 +97,7 @@ async fn main() {
         .route("/backup", post(handle_backup))
         .route("/backup/:task_id/status", get(handle_status))
         .route("/backup/:task_id/download", get(handle_download))
+        .route("/backup/:task_id/error_log", get(handle_error_log))
         .with_state(state);
     let addr: SocketAddr = args.listen.parse().expect("Invalid listen address");
     info!("Listening on {}", addr);
@@ -426,4 +427,25 @@ async fn serve_zip_file(zip_path: &PathBuf, task_id: &str) -> Response {
             .unwrap(),
     );
     (StatusCode::OK, headers, body).into_response()
+}
+
+async fn handle_error_log(
+    State(state): State<AppState>,
+    AxumPath(task_id): AxumPath<String>,
+) -> impl IntoResponse {
+    let log_path = format!("{}/nftbk-{}.log", state.base_dir, task_id);
+    match tokio::fs::read_to_string(&log_path).await {
+        Ok(content) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/plain")],
+            content,
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::NOT_FOUND,
+            [(header::CONTENT_TYPE, "text/plain")],
+            "Error log not found".to_string(),
+        )
+            .into_response(),
+    }
 }
