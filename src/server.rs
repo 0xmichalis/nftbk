@@ -79,7 +79,7 @@ impl AppState {
 struct Args {
     /// Address to listen on
     #[arg(long, default_value = "127.0.0.1:8080")]
-    listen: String,
+    listen_address: String,
 
     /// Path to the NFT chains configuration file
     #[arg(short = 'c', long, default_value = "config_chains.toml")]
@@ -129,7 +129,7 @@ async fn main() {
         .route("/backup/:task_id/download", get(handle_download))
         .route("/backup/:task_id/error_log", get(handle_error_log))
         .with_state(state);
-    let addr: SocketAddr = args.listen.parse().expect("Invalid listen address");
+    let addr: SocketAddr = args.listen_address.parse().expect("Invalid listen address");
     info!("Listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();

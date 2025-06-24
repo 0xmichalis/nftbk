@@ -33,4 +33,4 @@ EXPOSE 8080
 # Run as non-root user for security
 USER nonroot:nonroot
 
-CMD ["/app/nftbk-server"]
+CMD ["/app/nftbk-server", "--listen-address", "0.0.0.0:8080"]
