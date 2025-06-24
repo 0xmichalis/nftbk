@@ -17,35 +17,36 @@ use nftbk::logging::LogLevel;
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Path to the NFT chains configuration file (default: config_chains.toml)
+    /// The path to the chains configuration file
     #[arg(short = 'c', long, default_value = "config_chains.toml")]
     chains_config_path: PathBuf,
 
-    /// Path to the NFT tokens configuration file (default: config_tokens.toml)
+    /// The path to the tokens configuration file
     #[arg(short = 't', long, default_value = "config_tokens.toml")]
     tokens_config_path: PathBuf,
 
-    /// Optional output directory path (defaults to current directory)
+    /// The directory to save the backup to (defaults to current directory)
     #[arg(short, long)]
     output_path: Option<PathBuf>,
 
+    /// Set the log level
     #[arg(short, long, value_enum, default_value = "info")]
     log_level: LogLevel,
 
     /// Delete redundant files in the backup folder
-    #[arg(long, default_value = "false")]
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     prune_redundant: bool,
 
-    /// Use the server for backup instead of running locally
-    #[arg(long, default_value = "false")]
+    /// Request a backup from the server instead of running locally
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     server_mode: bool,
 
-    /// Server address (default: http://127.0.0.1:8080)
+    /// The server address to request backups from
     #[arg(long, default_value = "http://127.0.0.1:8080")]
     server_addr: String,
 
     /// Exit on the first error encountered
-    #[arg(long, default_value = "true")]
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     exit_on_error: bool,
 }
 

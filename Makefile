@@ -17,6 +17,10 @@ test:
 check:
 	cargo check -- $(filter-out $@,$(MAKECMDGOALS))
 
+.PHONY: build
+build:
+	cargo build -- $(filter-out $@,$(MAKECMDGOALS))
+
 .PHONY: run-cli
 run-cli:
 	cargo run --bin nftbk-cli -- $(filter-out $@,$(MAKECMDGOALS))
