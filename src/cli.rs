@@ -63,31 +63,13 @@ async fn backup_from_server(
 
     fetch_error_log(&server_addr, &backup_resp.task_id).await?;
 
-    let download_url = format!(
-        "{}/backup/{}/download",
-        server_addr.trim_end_matches('/'),
-        backup_resp.task_id
-    );
-    let resp = client
-        .get(&download_url)
-        .send()
-        .await
-        .context("Failed to download zip")?;
-    if !resp.status().is_success() {
-        anyhow::bail!("Failed to download zip: {}", resp.status());
-    }
-    let bytes = resp.bytes().await.context("Failed to read zip bytes")?;
-    let output_path = output_path.unwrap_or_else(|| PathBuf::from("."));
-
-    println!("Extracting backup to {}...", output_path.display());
-    // Extract tar.gz from bytes
-    let gz = GzDecoder::new(Cursor::new(bytes));
-    let mut archive = Archive::new(gz);
-    archive
-        .unpack(&output_path)
-        .context("Failed to extract backup archive")?;
-    println!("Backup extracted to {}", output_path.display());
-    Ok(())
+    return download_backup(
+        &client,
+        &server_addr,
+        &backup_resp.task_id,
+        output_path.as_ref(),
+    )
+    .await;
 }
 
 async fn request_backup(
@@ -185,6 +167,39 @@ async fn fetch_error_log(server_addr: &str, task_id: &str) -> Result<()> {
         let text = resp.text().await?;
         warn!("{}", text);
     }
+    Ok(())
+}
+
+async fn download_backup(
+    client: &Client,
+    server_addr: &str,
+    task_id: &str,
+    output_path: Option<&PathBuf>,
+) -> Result<()> {
+    let download_url = format!(
+        "{}/backup/{}/download",
+        server_addr.trim_end_matches('/'),
+        task_id
+    );
+    let resp = client
+        .get(&download_url)
+        .send()
+        .await
+        .context("Failed to download zip")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("Failed to download zip: {}", resp.status());
+    }
+    let bytes = resp.bytes().await.context("Failed to read zip bytes")?;
+    let output_path = output_path.cloned().unwrap_or_else(|| PathBuf::from("."));
+
+    println!("Extracting backup to {}...", output_path.display());
+    // Extract tar.gz from bytes
+    let gz = GzDecoder::new(Cursor::new(bytes));
+    let mut archive = Archive::new(gz);
+    archive
+        .unpack(&output_path)
+        .context("Failed to extract backup archive")?;
+    println!("Backup extracted to {}", output_path.display());
     Ok(())
 }
 
