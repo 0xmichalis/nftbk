@@ -43,7 +43,7 @@ struct Args {
 
     /// The server address to request backups from
     #[arg(long, default_value = "http://127.0.0.1:8080")]
-    server_addr: String,
+    server_address: String,
 
     /// Exit on the first error encountered
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
@@ -56,21 +56,21 @@ struct Args {
 
 async fn backup_from_server(
     token_config: TokenConfig,
-    server_addr: String,
+    server_address: String,
     output_path: Option<PathBuf>,
     force: bool,
 ) -> Result<()> {
     let client = Client::new();
-    let backup_resp = request_backup(&token_config, &server_addr, &client, force).await?;
+    let backup_resp = request_backup(&token_config, &server_address, &client, force).await?;
     println!("Task ID: {}", backup_resp.task_id);
 
-    wait_for_done_backup(&client, &server_addr, &backup_resp.task_id).await?;
+    wait_for_done_backup(&client, &server_address, &backup_resp.task_id).await?;
 
-    fetch_error_log(&server_addr, &backup_resp.task_id).await?;
+    fetch_error_log(&server_address, &backup_resp.task_id).await?;
 
     return download_backup(
         &client,
-        &server_addr,
+        &server_address,
         &backup_resp.task_id,
         output_path.as_ref(),
     )
@@ -79,7 +79,7 @@ async fn backup_from_server(
 
 async fn request_backup(
     token_config: &TokenConfig,
-    server_addr: &str,
+    server_address: &str,
     client: &Client,
     force: bool,
 ) -> Result<BackupResponse> {
@@ -94,7 +94,7 @@ async fn request_backup(
         });
     }
 
-    let server = server_addr.trim_end_matches('/');
+    let server = server_address.trim_end_matches('/');
     println!(
         "Submitting backup request to server at {}/backup ...",
         server
@@ -115,12 +115,12 @@ async fn request_backup(
 
 async fn wait_for_done_backup(
     client: &reqwest::Client,
-    server_addr: &str,
+    server_address: &str,
     task_id: &str,
 ) -> Result<()> {
     let status_url = format!(
         "{}/backup/{}/status",
-        server_addr.trim_end_matches('/'),
+        server_address.trim_end_matches('/'),
         task_id
     );
     let mut in_progress_logged = false;
@@ -164,11 +164,11 @@ async fn wait_for_done_backup(
     Ok(())
 }
 
-async fn fetch_error_log(server_addr: &str, task_id: &str) -> Result<()> {
+async fn fetch_error_log(server_address: &str, task_id: &str) -> Result<()> {
     let client = reqwest::Client::new();
     let url = format!(
         "{}/backup/{}/error_log",
-        server_addr.trim_end_matches('/'),
+        server_address.trim_end_matches('/'),
         task_id
     );
     let resp = client.get(&url).send().await?;
@@ -181,13 +181,13 @@ async fn fetch_error_log(server_addr: &str, task_id: &str) -> Result<()> {
 
 async fn download_backup(
     client: &Client,
-    server_addr: &str,
+    server_address: &str,
     task_id: &str,
     output_path: Option<&PathBuf>,
 ) -> Result<()> {
     let download_url = format!(
         "{}/backup/{}/download",
-        server_addr.trim_end_matches('/'),
+        server_address.trim_end_matches('/'),
         task_id
     );
     println!("Downloading zip ...");
@@ -226,8 +226,13 @@ async fn main() -> Result<()> {
         toml::from_str(&tokens_content).context("Failed to parse tokens config file")?;
 
     if args.server_mode {
-        return backup_from_server(token_config, args.server_addr, args.output_path, args.force)
-            .await;
+        return backup_from_server(
+            token_config,
+            args.server_address,
+            args.output_path,
+            args.force,
+        )
+        .await;
     }
 
     let chains_content = fs::read_to_string(&args.chains_config_path)
