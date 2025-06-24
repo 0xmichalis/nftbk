@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tar::Archive;
 use tokio::fs;
+use tracing::warn;
 
 use nftbk::api::{BackupResponse, ChainTokens, StatusResponse};
 use nftbk::backup::{backup_from_config, BackupConfig, ChainConfig, TokenConfig};
@@ -124,6 +125,8 @@ async fn backup_from_server(
         tokio::time::sleep(Duration::from_secs(10)).await;
     }
 
+    fetch_error_log(server, &backup_resp.task_id).await?;
+
     let download_url = format!("{}/backup/{}/download", server, backup_resp.task_id);
     let resp = client
         .get(&download_url)
@@ -144,6 +147,21 @@ async fn backup_from_server(
         .unpack(&output_path)
         .context("Failed to extract backup archive")?;
     println!("Backup extracted to {}", output_path.display());
+    Ok(())
+}
+
+async fn fetch_error_log(server_addr: &str, task_id: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+    let url = format!(
+        "{}/backup/{}/error_log",
+        server_addr.trim_end_matches('/'),
+        task_id
+    );
+    let resp = client.get(&url).send().await?;
+    if resp.status().is_success() {
+        let text = resp.text().await?;
+        warn!("{}", text);
+    }
     Ok(())
 }
 
