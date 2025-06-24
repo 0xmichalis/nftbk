@@ -55,39 +55,19 @@ async fn backup_from_server(
     server_addr: String,
     output_path: Option<PathBuf>,
 ) -> Result<()> {
-    // Build BackupRequest from TokenConfig
-    let mut backup_req = Vec::new();
-    for (chain, tokens) in &token_config.chains {
-        backup_req.push(ChainTokens {
-            chain: chain.clone(),
-            tokens: tokens.clone(),
-        });
-    }
-
     let client = Client::new();
-    let server = server_addr.trim_end_matches('/');
-    println!(
-        "Submitting backup request to server at {}/backup...",
-        server
-    );
-    let resp = client
-        .post(format!("{}/backup", server))
-        .json(&backup_req)
-        .send()
-        .await
-        .context("Failed to send backup request to server")?;
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Server error: {}", text);
-    }
-    let backup_resp: BackupResponse = resp.json().await.context("Invalid server response")?;
+    let backup_resp = request_backup(&token_config, &server_addr, &client).await?;
     println!("Task ID: {}", backup_resp.task_id);
 
-    wait_for_done_backup(&client, server, &backup_resp.task_id).await?;
+    wait_for_done_backup(&client, &server_addr, &backup_resp.task_id).await?;
 
-    fetch_error_log(server, &backup_resp.task_id).await?;
+    fetch_error_log(&server_addr, &backup_resp.task_id).await?;
 
-    let download_url = format!("{}/backup/{}/download", server, backup_resp.task_id);
+    let download_url = format!(
+        "{}/backup/{}/download",
+        server_addr.trim_end_matches('/'),
+        backup_resp.task_id
+    );
     let resp = client
         .get(&download_url)
         .send()
@@ -108,6 +88,38 @@ async fn backup_from_server(
         .context("Failed to extract backup archive")?;
     println!("Backup extracted to {}", output_path.display());
     Ok(())
+}
+
+async fn request_backup(
+    token_config: &TokenConfig,
+    server_addr: &str,
+    client: &Client,
+) -> Result<BackupResponse> {
+    let mut backup_req = Vec::new();
+    for (chain, tokens) in &token_config.chains {
+        backup_req.push(ChainTokens {
+            chain: chain.clone(),
+            tokens: tokens.clone(),
+        });
+    }
+
+    let server = server_addr.trim_end_matches('/');
+    println!(
+        "Submitting backup request to server at {}/backup...",
+        server
+    );
+    let resp = client
+        .post(format!("{}/backup", server))
+        .json(&backup_req)
+        .send()
+        .await
+        .context("Failed to send backup request to server")?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Server error: {}", text);
+    }
+    let backup_resp: BackupResponse = resp.json().await.context("Invalid server response")?;
+    Ok(backup_resp)
 }
 
 async fn wait_for_done_backup(
