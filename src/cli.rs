@@ -153,28 +153,28 @@ async fn main() -> Result<()> {
     let args = Args::parse();
     logging::init(args.log_level);
 
-    let chains_content = fs::read_to_string(&args.chains_config_path)
-        .await
-        .context("Failed to read chains config file")?;
-    let chain_config: ChainConfig =
-        toml::from_str(&chains_content).context("Failed to parse chains config file")?;
-
     let tokens_content = fs::read_to_string(&args.tokens_config_path)
         .await
         .context("Failed to read tokens config file")?;
     let token_config: TokenConfig =
         toml::from_str(&tokens_content).context("Failed to parse tokens config file")?;
 
-    if !args.server_mode {
-        let backup_config = BackupConfig {
-            chain_config,
-            token_config,
-            output_path: args.output_path,
-            prune_redundant: args.prune_redundant,
-            exit_on_error: args.exit_on_error,
-        };
-        return backup_from_config(backup_config).await;
+    if args.server_mode {
+        return backup_from_server(token_config, args.server_addr, args.output_path).await;
     }
 
-    backup_from_server(token_config, args.server_addr, args.output_path).await
+    let chains_content = fs::read_to_string(&args.chains_config_path)
+        .await
+        .context("Failed to read chains config file")?;
+    let chain_config: ChainConfig =
+        toml::from_str(&chains_content).context("Failed to parse chains config file")?;
+
+    let backup_config = BackupConfig {
+        chain_config,
+        token_config,
+        output_path: args.output_path,
+        prune_redundant: args.prune_redundant,
+        exit_on_error: args.exit_on_error,
+    };
+    return backup_from_config(backup_config).await;
 }
