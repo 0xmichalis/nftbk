@@ -25,8 +25,8 @@ struct Args {
     #[arg(short = 't', long, default_value = "config_tokens.toml")]
     tokens_config_path: PathBuf,
 
-    /// The directory to save the backup to (defaults to current directory)
-    #[arg(short, long)]
+    /// The directory to save the backup to
+    #[arg(short, long, default_value = "nft_backup")]
     output_path: Option<PathBuf>,
 
     /// Set the log level

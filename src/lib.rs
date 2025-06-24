@@ -43,8 +43,7 @@ pub struct BackupConfig {
 pub mod backup {
     use super::*;
     pub async fn backup_from_config(cfg: BackupConfig) -> Result<()> {
-        let base_path = cfg.output_path.unwrap_or_else(|| PathBuf::from("."));
-        let output_path = base_path.join("nft_backup");
+        let output_path = cfg.output_path.unwrap();
         fs::create_dir_all(&output_path).await?;
 
         let chain_config = &cfg.chain_config.0;
