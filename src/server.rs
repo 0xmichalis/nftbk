@@ -11,7 +11,9 @@ use dotenv::dotenv;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use nftbk::hashing::{compute_array_sha256, compute_file_sha256};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -85,6 +87,30 @@ struct Args {
 
     #[arg(short, long, value_enum, default_value = "info")]
     log_level: LogLevel,
+}
+
+/// A writer that writes to two destinations: the archive file and a hasher
+struct TeeWriter<W: Write, H: Write> {
+    writer: W,
+    hasher: H,
+}
+
+impl<W: Write, H: Write> TeeWriter<W, H> {
+    fn new(writer: W, hasher: H) -> Self {
+        Self { writer, hasher }
+    }
+}
+
+impl<W: Write, H: Write> Write for TeeWriter<W, H> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        let n = self.writer.write(buf)?;
+        self.hasher.write_all(&buf[..n])?;
+        Ok(n)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()?;
+        self.hasher.flush()
+    }
 }
 
 #[tokio::main]
@@ -298,7 +324,9 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
         return;
     }
     let tar_gz = tar_gz.unwrap();
-    let enc = GzEncoder::new(tar_gz, Compression::default());
+    let mut hasher = Sha256::new();
+    let tee_writer = TeeWriter::new(tar_gz, &mut hasher);
+    let enc = GzEncoder::new(tee_writer, Compression::default());
     let mut tar = tar::Builder::new(enc);
     if let Err(e) = tar.append_dir_all(".", &out_path) {
         let mut tasks = state.tasks.lock().await;
@@ -307,7 +335,18 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
         }
         return;
     }
-    if let Err(e) = tar.into_inner().and_then(|enc| enc.finish()) {
+    // Finish writing and flush everything
+    let enc = match tar.into_inner() {
+        Ok(enc) => enc,
+        Err(e) => {
+            let mut tasks = state.tasks.lock().await;
+            if let Some(task) = tasks.get_mut(&task_id) {
+                task.status = TaskStatus::Error(format!("Failed to finish tar: {}", e));
+            }
+            return;
+        }
+    };
+    if let Err(e) = enc.finish() {
         let mut tasks = state.tasks.lock().await;
         if let Some(task) = tasks.get_mut(&task_id) {
             task.status = TaskStatus::Error(format!("Failed to finish zip: {}", e));
@@ -318,19 +357,11 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
     // Update task and write checksum
     let mut tasks = state.tasks.lock().await;
     if let Some(task) = tasks.get_mut(&task_id) {
-        match compute_file_sha256(&zip_pathbuf).await {
-            Ok(checksum) => {
-                if let Err(e) = tokio::fs::write(&checksum_path, checksum).await {
-                    error!("Failed to write checksum file: {}", e);
-                    task.status = TaskStatus::Error("Failed to write checksum file".to_string());
-                    return;
-                }
-            }
-            Err(e) => {
-                error!("Failed to compute checksum: {}", e);
-                task.status = TaskStatus::Error("Failed to compute checksum".to_string());
-                return;
-            }
+        let checksum = format!("{:x}", hasher.finalize());
+        if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
+            error!("Failed to write checksum file: {}", e);
+            task.status = TaskStatus::Error("Failed to write checksum file".to_string());
+            return;
         }
         task.status = TaskStatus::Done;
         task.zip_path = Some(zip_pathbuf);
