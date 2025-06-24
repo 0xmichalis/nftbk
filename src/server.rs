@@ -16,6 +16,7 @@ use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::fs::File;
 use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
@@ -310,6 +311,7 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
     let (zip_pathbuf, checksum_path) = get_zipped_backup_paths(&state.base_dir, &task_id);
     let zip_path = zip_pathbuf.to_str().unwrap();
     info!("Zipping backup at {}", zip_path);
+    let start_time = Instant::now();
     let tar_gz = std::fs::File::create(zip_path);
     if let Err(e) = tar_gz {
         let mut tasks = state.tasks.lock().await;
@@ -348,6 +350,7 @@ async fn run_backup_job(state: AppState, task_id: String, req: BackupRequest) {
         }
         return;
     }
+    info!("Zipped backup in {:?}s", start_time.elapsed().as_secs());
 
     // Update task and write checksum
     let mut tasks = state.tasks.lock().await;
