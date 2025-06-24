@@ -175,7 +175,7 @@ where
         use tokio::io::AsyncWriteExt;
         let mut log_path = output_path.to_path_buf();
         log_path.set_extension("log");
-        let log_content = error_log.join("\n");
+        let log_content = error_log.join("\n") + "\n";
         match OpenOptions::new()
             .create(true)
             .append(true)
