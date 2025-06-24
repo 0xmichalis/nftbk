@@ -5,7 +5,6 @@ use flate2::read::GzDecoder;
 use reqwest::Client;
 use std::io::Cursor;
 use std::path::PathBuf;
-use std::time::Duration;
 use tar::Archive;
 use tokio::fs;
 use tracing::warn;
@@ -84,8 +83,43 @@ async fn backup_from_server(
     let backup_resp: BackupResponse = resp.json().await.context("Invalid server response")?;
     println!("Task ID: {}", backup_resp.task_id);
 
-    // Poll for status
-    let status_url = format!("{}/backup/{}/status", server, backup_resp.task_id);
+    wait_for_done_backup(&client, server, &backup_resp.task_id).await?;
+
+    fetch_error_log(server, &backup_resp.task_id).await?;
+
+    let download_url = format!("{}/backup/{}/download", server, backup_resp.task_id);
+    let resp = client
+        .get(&download_url)
+        .send()
+        .await
+        .context("Failed to download zip")?;
+    if !resp.status().is_success() {
+        anyhow::bail!("Failed to download zip: {}", resp.status());
+    }
+    let bytes = resp.bytes().await.context("Failed to read zip bytes")?;
+    let output_path = output_path.unwrap_or_else(|| PathBuf::from("."));
+
+    println!("Extracting backup to {}...", output_path.display());
+    // Extract tar.gz from bytes
+    let gz = GzDecoder::new(Cursor::new(bytes));
+    let mut archive = Archive::new(gz);
+    archive
+        .unpack(&output_path)
+        .context("Failed to extract backup archive")?;
+    println!("Backup extracted to {}", output_path.display());
+    Ok(())
+}
+
+async fn wait_for_done_backup(
+    client: &reqwest::Client,
+    server_addr: &str,
+    task_id: &str,
+) -> Result<()> {
+    let status_url = format!(
+        "{}/backup/{}/status",
+        server_addr.trim_end_matches('/'),
+        task_id
+    );
     let mut in_progress_logged = false;
     loop {
         let resp = client.get(&status_url).send().await;
@@ -122,31 +156,8 @@ async fn backup_from_server(
                 println!("Error polling status: {}", e);
             }
         }
-        tokio::time::sleep(Duration::from_secs(10)).await;
+        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
     }
-
-    fetch_error_log(server, &backup_resp.task_id).await?;
-
-    let download_url = format!("{}/backup/{}/download", server, backup_resp.task_id);
-    let resp = client
-        .get(&download_url)
-        .send()
-        .await
-        .context("Failed to download zip")?;
-    if !resp.status().is_success() {
-        anyhow::bail!("Failed to download zip: {}", resp.status());
-    }
-    let bytes = resp.bytes().await.context("Failed to read zip bytes")?;
-    let output_path = output_path.unwrap_or_else(|| PathBuf::from("."));
-
-    println!("Extracting backup to {}...", output_path.display());
-    // Extract tar.gz from bytes
-    let gz = GzDecoder::new(Cursor::new(bytes));
-    let mut archive = Archive::new(gz);
-    archive
-        .unpack(&output_path)
-        .context("Failed to extract backup archive")?;
-    println!("Backup extracted to {}", output_path.display());
     Ok(())
 }
 
