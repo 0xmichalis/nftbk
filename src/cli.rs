@@ -87,7 +87,7 @@ async fn request_backup(
 
     let server = server_addr.trim_end_matches('/');
     println!(
-        "Submitting backup request to server at {}/backup...",
+        "Submitting backup request to server at {}/backup ...",
         server
     );
     let resp = client
@@ -109,6 +109,7 @@ async fn wait_for_done_backup(
     server_addr: &str,
     task_id: &str,
 ) -> Result<()> {
+    println!("Waiting for backup to complete...");
     let status_url = format!(
         "{}/backup/{}/status",
         server_addr.trim_end_matches('/'),
@@ -132,7 +133,7 @@ async fn wait_for_done_backup(
                             }
                         }
                         "done" => {
-                            println!("Backup complete! Downloading zip...");
+                            println!("Backup complete.");
                             break;
                         }
                         "error" => {
@@ -181,6 +182,7 @@ async fn download_backup(
         server_addr.trim_end_matches('/'),
         task_id
     );
+    println!("Downloading zip ...");
     let resp = client
         .get(&download_url)
         .send()
