@@ -50,3 +50,7 @@ path = "src/cli.rs"
 [[bin]]
 name = "nftbk-server"
 path = "src/server.rs"
+
+[[bin]]
+name = "pruner"
+path = "src/bin/pruner.rs"

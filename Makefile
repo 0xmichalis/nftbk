@@ -28,3 +28,7 @@ run-cli:
 .PHONY: run-server
 run-server:
 	cargo run --bin nftbk-server -- $(filter-out $@,$(MAKECMDGOALS))
+
+.PHONY: run-pruner
+run-pruner:
+	cargo run --bin nftbk-pruner -- $(filter-out $@,$(MAKECMDGOALS))
