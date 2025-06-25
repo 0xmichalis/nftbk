@@ -6,6 +6,10 @@ use std::{
     thread::sleep,
     time::{Duration, SystemTime},
 };
+use tracing::info;
+
+use nftbk::logging;
+use nftbk::logging::LogLevel;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -33,6 +37,10 @@ struct Args {
     /// Run in daemon mode (loop forever)
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     daemon: bool,
+
+    /// Set the log level
+    #[arg(short, long, value_enum, default_value = "info")]
+    log_level: LogLevel,
 }
 
 fn potentially_prune_file(
@@ -77,9 +85,13 @@ fn potentially_prune_file(
 
 fn main() {
     let args = Args::parse();
+    logging::init(args.log_level.clone());
+
+    info!("Starting pruner with config: {:?}", args);
+
     let re = Regex::new(&args.pattern).expect("Invalid regex pattern");
-    println!("Starting pruner with config: {:?}", args);
     let run_once = || {
+        info!("Running pruning process...");
         let now = SystemTime::now();
         let retention = Duration::from_secs(60 * 60 * 24 * args.retention_days);
         let base_dir = Path::new(&args.base_dir);
@@ -94,6 +106,7 @@ fn main() {
             let path = entry.path();
             potentially_prune_file(&path, now, retention, &re, args.dry_run);
         }
+        info!("Pruning process completed");
     };
     if args.daemon {
         loop {
