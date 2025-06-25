@@ -1,7 +1,9 @@
 use axum::http::{header, HeaderMap, StatusCode};
+use axum::middleware;
+use axum::middleware::Next;
 use axum::{
     body::Body,
-    extract::{Path as AxumPath, State},
+    extract::{Path as AxumPath, Request, State},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -12,6 +14,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
+use std::env;
 use std::io::{self, Write};
 use std::net::SocketAddr;
 use std::path::PathBuf;
@@ -48,6 +51,7 @@ struct AppState {
     chain_config: Arc<ChainConfig>,
     base_dir: Arc<String>,
     unsafe_skip_checksum_check: bool,
+    auth_token: Option<String>,
 }
 
 impl Default for AppState {
@@ -61,6 +65,7 @@ impl AppState {
         chain_config_path: &str,
         base_dir: &str,
         unsafe_skip_checksum_check: bool,
+        auth_token: Option<String>,
     ) -> Self {
         let config_content = tokio::fs::read_to_string(chain_config_path)
             .await
@@ -76,6 +81,7 @@ impl AppState {
             chain_config: Arc::new(chain_config),
             base_dir: Arc::new(base_dir.to_string()),
             unsafe_skip_checksum_check,
+            auth_token,
         }
     }
 }
@@ -130,21 +136,31 @@ impl<W: Write, H: Write> Write for TeeWriter<W, H> {
 
 #[tokio::main]
 async fn main() {
+    // We are consuming config both from the environment and from the command line
     dotenv().ok();
     let args = Args::parse();
-    logging::init(args.log_level);
+    logging::init(args.log_level.clone());
+    let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
+
+    info!("Starting server with options: {:?}", args);
+    info!("Authentication enabled: {}", auth_token.is_some());
+
     let state = AppState::new(
         &args.chain_config,
         &args.base_dir,
         args.unsafe_skip_checksum_check,
+        auth_token.clone(),
     )
     .await;
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/backup", post(handle_backup))
         .route("/backup/:task_id/status", get(handle_status))
         .route("/backup/:task_id/download", get(handle_download))
         .route("/backup/:task_id/error_log", get(handle_error_log))
-        .with_state(state);
+        .with_state(state.clone());
+    if auth_token.is_some() {
+        app = app.layer(middleware::from_fn_with_state(state, auth_middleware));
+    }
     let addr: SocketAddr = args.listen_address.parse().expect("Invalid listen address");
     info!("Listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
@@ -525,4 +541,27 @@ async fn handle_error_log(
         )
             .into_response(),
     }
+}
+
+async fn auth_middleware(
+    State(state): State<AppState>,
+    req: Request,
+    next: Next,
+) -> impl IntoResponse {
+    if let Some(ref token) = state.auth_token {
+        let auth_header = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+        let expected = format!("Bearer {}", token);
+        if auth_header != Some(expected.as_str()) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(header::WWW_AUTHENTICATE, "Bearer")],
+                "Unauthorized",
+            )
+                .into_response();
+        }
+    }
+    next.run(req).await
 }

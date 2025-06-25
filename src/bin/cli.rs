@@ -3,6 +3,7 @@ use clap::Parser;
 use dotenv::dotenv;
 use flate2::read::GzDecoder;
 use reqwest::Client;
+use std::env;
 use std::io::Cursor;
 use std::path::PathBuf;
 use tar::Archive;
@@ -60,19 +61,34 @@ async fn backup_from_server(
     output_path: Option<PathBuf>,
     force: bool,
 ) -> Result<()> {
+    let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
     let client = Client::new();
-    let backup_resp = request_backup(&token_config, &server_address, &client, force).await?;
+    let backup_resp = request_backup(
+        &token_config,
+        &server_address,
+        &client,
+        force,
+        auth_token.as_deref(),
+    )
+    .await?;
     println!("Task ID: {}", backup_resp.task_id);
 
-    wait_for_done_backup(&client, &server_address, &backup_resp.task_id).await?;
+    wait_for_done_backup(
+        &client,
+        &server_address,
+        &backup_resp.task_id,
+        auth_token.as_deref(),
+    )
+    .await?;
 
-    fetch_error_log(&server_address, &backup_resp.task_id).await?;
+    fetch_error_log(&server_address, &backup_resp.task_id, auth_token.as_deref()).await?;
 
     return download_backup(
         &client,
         &server_address,
         &backup_resp.task_id,
         output_path.as_ref(),
+        auth_token.as_deref(),
     )
     .await;
 }
@@ -82,6 +98,7 @@ async fn request_backup(
     server_address: &str,
     client: &Client,
     force: bool,
+    auth_token: Option<&str>,
 ) -> Result<BackupResponse> {
     let mut backup_req = BackupRequest {
         tokens: Vec::new(),
@@ -99,9 +116,11 @@ async fn request_backup(
         "Submitting backup request to server at {}/backup ...",
         server
     );
-    let resp = client
-        .post(format!("{}/backup", server))
-        .json(&backup_req)
+    let mut req = client.post(format!("{}/backup", server)).json(&backup_req);
+    if let Some(token) = auth_token {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+    let resp = req
         .send()
         .await
         .context("Failed to send backup request to server")?;
@@ -117,6 +136,7 @@ async fn wait_for_done_backup(
     client: &reqwest::Client,
     server_address: &str,
     task_id: &str,
+    auth_token: Option<&str>,
 ) -> Result<()> {
     let status_url = format!(
         "{}/backup/{}/status",
@@ -125,7 +145,11 @@ async fn wait_for_done_backup(
     );
     let mut in_progress_logged = false;
     loop {
-        let resp = client.get(&status_url).send().await;
+        let mut req = client.get(&status_url);
+        if let Some(token) = auth_token {
+            req = req.header("Authorization", format!("Bearer {}", token));
+        }
+        let resp = req.send().await;
         match resp {
             Ok(r) => {
                 if r.status().is_success() {
@@ -164,14 +188,22 @@ async fn wait_for_done_backup(
     Ok(())
 }
 
-async fn fetch_error_log(server_address: &str, task_id: &str) -> Result<()> {
+async fn fetch_error_log(
+    server_address: &str,
+    task_id: &str,
+    auth_token: Option<&str>,
+) -> Result<()> {
     let client = reqwest::Client::new();
     let url = format!(
         "{}/backup/{}/error_log",
         server_address.trim_end_matches('/'),
         task_id
     );
-    let resp = client.get(&url).send().await?;
+    let mut req = client.get(&url);
+    if let Some(token) = auth_token {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+    let resp = req.send().await?;
     if resp.status().is_success() {
         let text = resp.text().await?;
         warn!("{}", text);
@@ -184,6 +216,7 @@ async fn download_backup(
     server_address: &str,
     task_id: &str,
     output_path: Option<&PathBuf>,
+    auth_token: Option<&str>,
 ) -> Result<()> {
     let download_url = format!(
         "{}/backup/{}/download",
@@ -191,11 +224,11 @@ async fn download_backup(
         task_id
     );
     println!("Downloading zip ...");
-    let resp = client
-        .get(&download_url)
-        .send()
-        .await
-        .context("Failed to download zip")?;
+    let mut req = client.get(&download_url);
+    if let Some(token) = auth_token {
+        req = req.header("Authorization", format!("Bearer {}", token));
+    }
+    let resp = req.send().await.context("Failed to download zip")?;
     if !resp.status().is_success() {
         anyhow::bail!("Failed to download zip: {}", resp.status());
     }
