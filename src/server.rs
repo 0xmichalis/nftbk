@@ -77,18 +77,19 @@ impl AppState {
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {
-    /// Address to listen on
+    /// The address to listen on
     #[arg(long, default_value = "127.0.0.1:8080")]
     listen_address: String,
 
-    /// Path to the NFT chains configuration file
+    /// The path to the chains configuration file
     #[arg(short = 'c', long, default_value = "config_chains.toml")]
     chain_config: String,
 
-    /// Base directory for backups
+    /// The base directory to save the backup to
     #[arg(long, default_value = "/tmp")]
     base_dir: String,
 
+    /// Set the log level
     #[arg(short, long, value_enum, default_value = "info")]
     log_level: LogLevel,
 }
