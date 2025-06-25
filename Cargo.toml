@@ -45,11 +45,11 @@ path = "src/lib.rs"
 
 [[bin]]
 name = "nftbk-cli"
-path = "src/cli.rs"
+path = "src/bin/cli.rs"
 
 [[bin]]
 name = "nftbk-server"
-path = "src/server.rs"
+path = "src/bin/server.rs"
 
 [[bin]]
 name = "pruner"
