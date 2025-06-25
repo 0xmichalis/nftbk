@@ -35,5 +35,6 @@ run-pruner:
 
 .PHONY: run-supervisor
 run-supervisor:
-	cargo run --bin nftbk-supervisor -- $(filter-out $@,$(MAKECMDGOALS))
+	cargo run --bin nftbk-supervisor -- --server ./target/debug/nftbk-server --pruner ./target/debug/nftbk-pruner
+
 

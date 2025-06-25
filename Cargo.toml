@@ -38,6 +38,8 @@ dotenv = "0.15"
 async-trait = "0.1.88"
 time = { version = "0.3", features = ["macros", "formatting"] }
 regex = "1"
+ctrlc = "3"
+libc = "0.2"
 
 [lib]
 name = "nftbk"

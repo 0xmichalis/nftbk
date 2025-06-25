@@ -21,6 +21,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::fs::File;
+use tokio::signal;
 use tokio::sync::Mutex;
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info, warn};
@@ -164,7 +165,21 @@ async fn main() {
     let addr: SocketAddr = args.listen_address.parse().expect("Invalid listen address");
     info!("Listening on {}", addr);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+
+    // Add graceful shutdown
+    let shutdown_signal = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+        info!("Received shutdown signal, shutting down server...");
+        let _ = std::io::stdout().flush();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    };
+
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await
+        .unwrap();
 }
 
 async fn handle_backup(

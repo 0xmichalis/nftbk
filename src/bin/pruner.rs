@@ -1,9 +1,10 @@
 use clap::Parser;
 use regex::Regex;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::{
     fs,
     path::Path,
-    thread::sleep,
     time::{Duration, SystemTime},
 };
 use tracing::info;
@@ -90,6 +91,14 @@ fn main() {
     info!("Starting pruner with config: {:?}", args);
 
     let re = Regex::new(&args.pattern).expect("Invalid regex pattern");
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        r.store(false, Ordering::SeqCst);
+        info!("Received shutdown signal, shutting down pruner...");
+    })
+    .expect("Error setting Ctrl-C handler");
+
     let run_once = || {
         info!("Running pruning process...");
         let now = SystemTime::now();
@@ -109,10 +118,19 @@ fn main() {
         info!("Pruning process completed");
     };
     if args.daemon {
-        loop {
+        while running.load(Ordering::SeqCst) {
             run_once();
-            sleep(Duration::from_secs(args.interval_seconds));
+            let sleep_step = 1; // seconds
+            let mut slept = 0;
+            while slept < args.interval_seconds && running.load(Ordering::SeqCst) {
+                std::thread::sleep(Duration::from_secs(sleep_step));
+                slept += sleep_step;
+            }
         }
+        info!("Pruner shutting down gracefully");
+        use std::io::Write;
+        let _ = std::io::stdout().flush();
+        std::thread::sleep(std::time::Duration::from_millis(100));
     } else {
         run_once();
     }
