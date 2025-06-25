@@ -14,18 +14,17 @@ RUN apt-get update && \
 COPY . .
 
 # Build the release binaries
-RUN cargo build --release --bin nftbk-server --bin pruner
+RUN cargo build --release --bin nftbk-server --bin nftbk-pruner --bin nftbk-supervisor
 
 # Runtime stage
 FROM gcr.io/distroless/cc-debian12
 
 WORKDIR /app
 
-# Copy both binaries from builder stage
+# Copy all necessary files
 COPY --from=builder /usr/src/app/target/release/nftbk-server /app/nftbk-server
-COPY --from=builder /usr/src/app/target/release/pruner /app/pruner
-
-# Copy the chain config to the runtime image
+COPY --from=builder /usr/src/app/target/release/nftbk-pruner /app/nftbk-pruner
+COPY --from=builder /usr/src/app/target/release/nftbk-supervisor /app/nftbk-supervisor
 COPY config_chains.toml /app/config_chains.toml
 
 # Expose the port your server listens on (adjust if needed)

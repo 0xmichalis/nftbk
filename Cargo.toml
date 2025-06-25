@@ -52,5 +52,9 @@ name = "nftbk-server"
 path = "src/bin/server.rs"
 
 [[bin]]
-name = "pruner"
+name = "nftbk-pruner"
 path = "src/bin/pruner.rs"
+
+[[bin]]
+name = "nftbk-supervisor"
+path = "src/bin/supervisor.rs"

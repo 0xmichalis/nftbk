@@ -23,5 +23,4 @@ primary_region = 'fra'
   snapshot_retention = 1
 
 [processes]
-app = "/app/nftbk-server --listen-address 0.0.0.0:8080 --unsafe-skip-checksum-check true"
-pruner = "/app/pruner --base-dir /tmp --retention-days 7 --dry-run false --daemon true"
+app = "/app/nftbk-supervisor"
