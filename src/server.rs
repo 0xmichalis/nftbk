@@ -47,6 +47,7 @@ struct AppState {
     tasks: TaskMap,
     chain_config: Arc<ChainConfig>,
     base_dir: Arc<String>,
+    unsafe_skip_checksum_check: bool,
 }
 
 impl Default for AppState {
@@ -56,7 +57,11 @@ impl Default for AppState {
 }
 
 impl AppState {
-    async fn new(chain_config_path: &str, base_dir: &str) -> Self {
+    async fn new(
+        chain_config_path: &str,
+        base_dir: &str,
+        unsafe_skip_checksum_check: bool,
+    ) -> Self {
         let config_content = tokio::fs::read_to_string(chain_config_path)
             .await
             .expect("Failed to read chain config");
@@ -70,6 +75,7 @@ impl AppState {
             tasks: Arc::new(Mutex::new(HashMap::new())),
             chain_config: Arc::new(chain_config),
             base_dir: Arc::new(base_dir.to_string()),
+            unsafe_skip_checksum_check,
         }
     }
 }
@@ -92,6 +98,10 @@ struct Args {
     /// Set the log level
     #[arg(short, long, value_enum, default_value = "info")]
     log_level: LogLevel,
+
+    /// Skip checksum verification
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    unsafe_skip_checksum_check: bool,
 }
 
 /// A writer that writes to two destinations: the archive file and a hasher
@@ -123,7 +133,12 @@ async fn main() {
     dotenv().ok();
     let args = Args::parse();
     logging::init(args.log_level);
-    let state = AppState::new(&args.chain_config, &args.base_dir).await;
+    let state = AppState::new(
+        &args.chain_config,
+        &args.base_dir,
+        args.unsafe_skip_checksum_check,
+    )
+    .await;
     let app = Router::new()
         .route("/backup", post(handle_backup))
         .route("/backup/:task_id/status", get(handle_status))
@@ -232,7 +247,11 @@ fn get_zipped_backup_paths(base_dir: &str, task_id: &str) -> (PathBuf, PathBuf) 
 }
 
 /// Helper function to check if a backup exists on disk and is not corrupted
-async fn check_backup_on_disk(base_dir: &str, task_id: &str) -> Option<PathBuf> {
+async fn check_backup_on_disk(
+    base_dir: &str,
+    task_id: &str,
+    unsafe_skip_checksum_check: bool,
+) -> Option<PathBuf> {
     let (path, checksum_path) = get_zipped_backup_paths(base_dir, task_id);
 
     // First check if both files exist
@@ -241,6 +260,10 @@ async fn check_backup_on_disk(base_dir: &str, task_id: &str) -> Option<PathBuf> 
         tokio::fs::try_exists(&checksum_path).await,
     ) {
         (Ok(true), Ok(true)) => {
+            if unsafe_skip_checksum_check {
+                // Only check for existence, skip reading and comparing checksums
+                return Some(path);
+            }
             // Read stored checksum
             info!("Checking backup on disk for task {}", task_id);
             let stored_checksum = match tokio::fs::read_to_string(&checksum_path).await {
@@ -288,7 +311,9 @@ async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, f
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // Ignore if not found
             Err(e) => warn!("Failed to delete error log for task {}: {}", task_id, e),
         }
-    } else if let Some(zip_path) = check_backup_on_disk(&state.base_dir, &task_id).await {
+    } else if let Some(zip_path) =
+        check_backup_on_disk(&state.base_dir, &task_id, state.unsafe_skip_checksum_check).await
+    {
         // Update task state to reflect the existing backup
         let mut tasks = state.tasks.lock().await;
         if let Some(task) = tasks.get_mut(&task_id) {
@@ -412,7 +437,7 @@ async fn handle_status(
     }
 
     // If not in memory, check if backup exists on disk
-    if check_backup_on_disk(&state.base_dir, &task_id)
+    if check_backup_on_disk(&state.base_dir, &task_id, state.unsafe_skip_checksum_check)
         .await
         .is_some()
     {
@@ -447,7 +472,9 @@ async fn handle_download(
     drop(tasks);
 
     // If not in memory, check if backup exists on disk
-    if let Some(zip_path) = check_backup_on_disk(&state.base_dir, &task_id).await {
+    if let Some(zip_path) =
+        check_backup_on_disk(&state.base_dir, &task_id, state.unsafe_skip_checksum_check).await
+    {
         return serve_zip_file(&zip_path, &task_id).await;
     }
 

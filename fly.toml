@@ -21,3 +21,6 @@ primary_region = 'fra'
   destination = "/tmp"
   initial_size = "10gb"
   snapshot_retention = 1
+
+[experimental]
+cmd = ["/app/nftbk-server", "--listen-address", "0.0.0.0:8080", "--unsafe-skip-checksum-check", "true"]
