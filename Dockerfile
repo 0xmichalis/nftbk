@@ -13,16 +13,17 @@ RUN apt-get update && \
 # Copy the entire project
 COPY . .
 
-# Build the release binary
-RUN cargo build --release
+# Build the release binaries
+RUN cargo build --release --bin nftbk-server --bin pruner
 
 # Runtime stage
 FROM gcr.io/distroless/cc-debian12
 
 WORKDIR /app
 
-# Copy only the built binary from builder stage
+# Copy both binaries from builder stage
 COPY --from=builder /usr/src/app/target/release/nftbk-server /app/nftbk-server
+COPY --from=builder /usr/src/app/target/release/pruner /app/pruner
 
 # Copy the chain config to the runtime image
 COPY config_chains.toml /app/config_chains.toml

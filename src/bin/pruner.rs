@@ -23,7 +23,7 @@ struct Args {
     interval_seconds: u64,
 
     /// Dry run (do not actually delete files)
-    #[arg(long, default_value_t = false)]
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
     dry_run: bool,
 
     /// Regex pattern for file names to prune
