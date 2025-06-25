@@ -29,6 +29,10 @@ struct Args {
     /// Regex pattern for file names to prune
     #[arg(long, default_value = "^nftbk-")]
     pattern: String,
+
+    /// Run in daemon mode (loop forever)
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    daemon: bool,
 }
 
 fn potentially_prune_file(
@@ -75,7 +79,7 @@ fn main() {
     let args = Args::parse();
     let re = Regex::new(&args.pattern).expect("Invalid regex pattern");
     println!("Starting pruner with config: {:?}", args);
-    loop {
+    let run_once = || {
         let now = SystemTime::now();
         let retention = Duration::from_secs(60 * 60 * 24 * args.retention_days);
         let base_dir = Path::new(&args.base_dir);
@@ -83,14 +87,20 @@ fn main() {
             Ok(e) => e,
             Err(e) => {
                 eprintln!("Failed to read base dir {:?}: {}", base_dir, e);
-                sleep(Duration::from_secs(args.interval_seconds));
-                continue;
+                return;
             }
         };
         for entry in entries.flatten() {
             let path = entry.path();
             potentially_prune_file(&path, now, retention, &re, args.dry_run);
         }
-        sleep(Duration::from_secs(args.interval_seconds));
+    };
+    if args.daemon {
+        loop {
+            run_once();
+            sleep(Duration::from_secs(args.interval_seconds));
+        }
+    } else {
+        run_once();
     }
 }
