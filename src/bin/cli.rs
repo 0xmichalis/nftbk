@@ -12,6 +12,7 @@ use tracing::warn;
 
 use nftbk::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
 use nftbk::backup::{backup_from_config, BackupConfig, ChainConfig, TokenConfig};
+use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
 
@@ -117,8 +118,8 @@ async fn request_backup(
         server
     );
     let mut req = client.post(format!("{}/backup", server)).json(&backup_req);
-    if let Some(token) = auth_token {
-        req = req.header("Authorization", format!("Bearer {}", token));
+    if is_defined(&auth_token.map(|s| s.to_string())) {
+        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
     }
     let resp = req
         .send()
@@ -146,8 +147,8 @@ async fn wait_for_done_backup(
     let mut in_progress_logged = false;
     loop {
         let mut req = client.get(&status_url);
-        if let Some(token) = auth_token {
-            req = req.header("Authorization", format!("Bearer {}", token));
+        if is_defined(&auth_token.map(|s| s.to_string())) {
+            req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
         }
         let resp = req.send().await;
         match resp {
@@ -200,8 +201,8 @@ async fn fetch_error_log(
         task_id
     );
     let mut req = client.get(&url);
-    if let Some(token) = auth_token {
-        req = req.header("Authorization", format!("Bearer {}", token));
+    if is_defined(&auth_token.map(|s| s.to_string())) {
+        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
     }
     let resp = req.send().await?;
     if resp.status().is_success() {
@@ -225,8 +226,8 @@ async fn download_backup(
     );
     println!("Downloading zip ...");
     let mut req = client.get(&download_url);
-    if let Some(token) = auth_token {
-        req = req.header("Authorization", format!("Bearer {}", token));
+    if is_defined(&auth_token.map(|s| s.to_string())) {
+        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
     }
     let resp = req.send().await.context("Failed to download zip")?;
     if !resp.status().is_success() {

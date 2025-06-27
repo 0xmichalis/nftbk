@@ -40,6 +40,7 @@ time = { version = "0.3", features = ["macros", "formatting"] }
 regex = "1"
 ctrlc = "3"
 libc = "0.2"
+josekit = "0.10.3"
 
 [lib]
 name = "nftbk"

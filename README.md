@@ -26,6 +26,10 @@ USERNAME=michalis \
     python3 scripts/extract_gallery_tokens.py > config_tokens.toml
 ```
 
+### Privy support
+
+The server supports authenticating Privy JWT tokens, if both a `PRIVY_APP_ID` and a `PRIVY_VERIFICATION_KEY` are provided in its environment. For the key, set `\\n` as newlines so the  key can be set within a single line to work around a limitation in multine support that the latest released `dotenv` version has.
+
 ## Run
 
 To run the CLI:
