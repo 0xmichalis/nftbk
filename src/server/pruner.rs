@@ -36,6 +36,11 @@ fn potentially_prune_file(path: &Path, now: SystemTime, retention: Duration, re:
     if !re.is_match(name) {
         return;
     }
+    if name.ends_with("-metadata.json") {
+        // Skip metadata files to continue displaying some amount of data
+        // to end users about expired backups.
+        return;
+    }
     let res = if path.is_dir() {
         fs::remove_dir_all(path)
     } else {

@@ -55,7 +55,7 @@ pub async fn handle_backups(
         {
             ("done".to_string(), None)
         } else {
-            ("unknown".to_string(), None)
+            ("expired".to_string(), None)
         };
         let log_path = format!("{}/nftbk-{}.log", state.base_dir, task_id);
         let error_log = (tokio::fs::read_to_string(&log_path).await).ok();
