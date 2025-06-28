@@ -18,9 +18,9 @@ primary_region = 'fra'
 # Mount a 10GB persistent volume for storage
 [mounts]
   source = "storage_vol"
-  destination = "/tmp"
+  destination = "/app/data"
   initial_size = "10gb"
   snapshot_retention = 1
 
 [processes]
-app = "/app/nftbk-server --listen-address 0.0.0.0:8080 --unsafe-skip-checksum-check true"
+  app = "/app/nftbk-server --listen-address 0.0.0.0:8080 --unsafe-skip-checksum-check true --base-dir /app/data"
