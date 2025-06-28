@@ -28,13 +28,3 @@ run-cli:
 .PHONY: run-server
 run-server:
 	cargo run --bin nftbk-server -- --unsafe-skip-checksum-check true $(filter-out $@,$(MAKECMDGOALS))
-
-.PHONY: run-pruner
-run-pruner:
-	cargo run --bin nftbk-pruner -- $(filter-out $@,$(MAKECMDGOALS))
-
-.PHONY: run-supervisor
-run-supervisor:
-	cargo run --bin nftbk-supervisor -- --server ./target/debug/nftbk-server --pruner ./target/debug/nftbk-pruner
-
-
