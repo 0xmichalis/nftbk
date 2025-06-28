@@ -9,9 +9,12 @@ use axum::{
 };
 use clap::Parser;
 use dotenv::dotenv;
+use nftbk::server::pruner::{run_pruner, PrunerConfig};
 use std::env;
 use std::io::Write;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tokio::signal;
 use tracing::info;
 
@@ -45,6 +48,22 @@ struct Args {
     /// Skip checksum verification
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     unsafe_skip_checksum_check: bool,
+
+    /// Enable the pruner thread
+    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    enable_pruner: bool,
+
+    /// Pruner retention period in days
+    #[arg(long, default_value_t = 3)]
+    pruner_retention_days: u64,
+
+    /// Pruner interval in seconds
+    #[arg(long, default_value_t = 3600)]
+    pruner_interval_seconds: u64,
+
+    /// Pruner regex pattern for file names to prune
+    #[arg(long, default_value = "^nftbk-")]
+    pruner_pattern: String,
 }
 
 #[derive(Clone)]
@@ -103,11 +122,29 @@ async fn main() {
         app = app.layer(middleware::from_fn_with_state(auth_state, auth_middleware));
     }
 
+    // Start the pruner thread
+    let running = Arc::new(AtomicBool::new(true));
+    let pruner_handle = if args.enable_pruner {
+        let pruner_config = PrunerConfig {
+            base_dir: args.base_dir.clone(),
+            retention_days: args.pruner_retention_days,
+            interval_seconds: args.pruner_interval_seconds,
+            pattern: args.pruner_pattern.clone(),
+        };
+        let running_clone = running.clone();
+        Some(std::thread::spawn(move || {
+            run_pruner(pruner_config, running_clone);
+        }))
+    } else {
+        None
+    };
+
     // Add graceful shutdown
-    let shutdown_signal = async {
+    let shutdown_signal = async move {
         signal::ctrl_c()
             .await
             .expect("failed to install Ctrl+C handler");
+        running.store(false, Ordering::SeqCst);
         info!("Received shutdown signal, shutting down server...");
         let _ = std::io::stdout().flush();
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -121,6 +158,9 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal)
         .await
         .unwrap();
+    if let Some(handle) = pruner_handle {
+        let _ = handle.join();
+    }
 }
 
 async fn auth_middleware(

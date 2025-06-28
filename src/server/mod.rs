@@ -14,6 +14,7 @@ pub mod handle_download;
 pub mod handle_error_log;
 pub mod handle_status;
 pub mod privy;
+pub mod pruner;
 pub use handle_backup::handle_backup;
 pub use handle_backups::handle_backups;
 pub use handle_download::handle_download;
