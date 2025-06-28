@@ -46,6 +46,7 @@ impl<W: Write, H: Write> Write for TeeWriter<W, H> {
 struct BackupMetadata {
     requestor: String,
     tokens: Vec<Tokens>,
+    nft_count: usize,
 }
 
 pub async fn handle_backup(
@@ -153,9 +154,11 @@ async fn run_backup_job(
     let out_path = PathBuf::from(&out_dir);
 
     // Write metadata file
+    let nft_count = tokens.iter().map(|t| t.tokens.len()).sum();
     let metadata = BackupMetadata {
         requestor: requestor.clone(),
         tokens: tokens.clone(),
+        nft_count,
     };
     let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
     if let Err(e) = tokio::fs::write(

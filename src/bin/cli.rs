@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use dotenv::dotenv;
 use flate2::read::GzDecoder;
+use prettytable::{row, Table};
 use reqwest::Client;
 use std::env;
 use std::io::Cursor;
@@ -54,6 +55,10 @@ struct Args {
     /// Force rerunning a completed backup task
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     force: bool,
+
+    /// List existing backups in the server
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    list: bool,
 }
 
 async fn backup_from_server(
@@ -118,7 +123,7 @@ async fn request_backup(
         server
     );
     let mut req = client.post(format!("{}/backup", server)).json(&backup_req);
-    if is_defined(&auth_token.map(|s| s.to_string())) {
+    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
         req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
     }
     let resp = req
@@ -147,7 +152,7 @@ async fn wait_for_done_backup(
     let mut in_progress_logged = false;
     loop {
         let mut req = client.get(&status_url);
-        if is_defined(&auth_token.map(|s| s.to_string())) {
+        if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
             req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
         }
         let resp = req.send().await;
@@ -201,7 +206,7 @@ async fn fetch_error_log(
         task_id
     );
     let mut req = client.get(&url);
-    if is_defined(&auth_token.map(|s| s.to_string())) {
+    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
         req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
     }
     let resp = req.send().await?;
@@ -226,7 +231,7 @@ async fn download_backup(
     );
     println!("Downloading zip ...");
     let mut req = client.get(&download_url);
-    if is_defined(&auth_token.map(|s| s.to_string())) {
+    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
         req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
     }
     let resp = req.send().await.context("Failed to download zip")?;
@@ -247,11 +252,55 @@ async fn download_backup(
     Ok(())
 }
 
+async fn list_server_backups(server_address: &str) -> Result<()> {
+    let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
+    let client = Client::new();
+    let url = format!("{}/backups", server_address.trim_end_matches('/'));
+    let mut req = client.get(&url);
+    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
+        req = req.header(
+            "Authorization",
+            format!("Bearer {}", auth_token.as_deref().unwrap()),
+        );
+    }
+    let resp = req
+        .send()
+        .await
+        .context("Failed to fetch backups from server")?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Server error: {}", text);
+    }
+    let backups: serde_json::Value = resp.json().await.context("Invalid server response")?;
+    let arr = backups
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("Expected array response"))?;
+    let mut table = Table::new();
+    table.add_row(row!["Task ID", "Status", "Error", "Error Log", "NFT Count"]);
+    for entry in arr {
+        let task_id = entry.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
+        let status = entry.get("status").and_then(|v| v.as_str()).unwrap_or("");
+        let error = entry.get("error").and_then(|v| v.as_str()).unwrap_or("");
+        let error_log = entry
+            .get("error_log")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let nft_count = entry.get("nft_count").and_then(|v| v.as_u64()).unwrap_or(0);
+        table.add_row(row![task_id, status, error, error_log, nft_count]);
+    }
+    table.printstd();
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     dotenv().ok();
     let args = Args::parse();
     logging::init(args.log_level);
+
+    if args.server_mode && args.list {
+        return list_server_backups(&args.server_address).await;
+    }
 
     let tokens_content = fs::read_to_string(&args.tokens_config_path)
         .await

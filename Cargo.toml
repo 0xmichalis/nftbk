@@ -41,6 +41,7 @@ regex = "1"
 ctrlc = "3"
 libc = "0.2"
 josekit = "0.10.3"
+prettytable = "0.10"
 
 [lib]
 name = "nftbk"

@@ -13,6 +13,7 @@ struct UserBackupInfo {
     status: String,
     error: Option<String>,
     error_log: Option<String>,
+    nft_count: usize,
 }
 
 pub async fn handle_backups(
@@ -55,11 +56,24 @@ pub async fn handle_backups(
         };
         let log_path = format!("{}/nftbk-{}.log", state.base_dir, task_id);
         let error_log = (tokio::fs::read_to_string(&log_path).await).ok();
+        let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
+        let nft_count = match tokio::fs::read_to_string(&metadata_path).await {
+            Ok(content) => serde_json::from_str::<serde_json::Value>(&content)
+                .ok()
+                .and_then(|v| {
+                    v.get("nft_count")
+                        .and_then(|n| n.as_u64())
+                        .map(|n| n as usize)
+                })
+                .unwrap_or(0),
+            Err(_) => 0,
+        };
         results.push(UserBackupInfo {
             task_id: task_id.clone(),
             status,
             error,
             error_log,
+            nft_count,
         });
     }
     Json(results).into_response()
