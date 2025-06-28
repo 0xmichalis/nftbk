@@ -4,12 +4,13 @@ use crate::backup::{self, BackupConfig, TokenConfig};
 use crate::hashing::compute_array_sha256;
 use crate::server::{check_backup_on_disk, get_zipped_backup_paths};
 use axum::{
-    extract::{Json, State},
+    extract::{Extension, Json, State},
     http::StatusCode,
     response::IntoResponse,
 };
 use flate2::write::GzEncoder;
 use flate2::Compression;
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::io::{self, Write};
@@ -41,8 +42,15 @@ impl<W: Write, H: Write> Write for TeeWriter<W, H> {
     }
 }
 
+#[derive(Serialize)]
+struct BackupMetadata {
+    requestor: String,
+    tokens: Vec<Tokens>,
+}
+
 pub async fn handle_backup(
     State(state): State<AppState>,
+    Extension(user_did): Extension<Option<String>>,
     Json(req): Json<BackupRequest>,
 ) -> impl IntoResponse {
     // Validate requested chains
@@ -111,6 +119,7 @@ pub async fn handle_backup(
     );
     drop(tasks); // Release lock before spawning
 
+    let user = user_did.clone();
     // Spawn background job
     let state_clone = state.clone();
     let task_id_clone = task_id.clone();
@@ -121,16 +130,42 @@ pub async fn handle_backup(
             task_id_clone,
             tokens,
             force,
+            user.unwrap_or_default(),
         ))
     });
 
-    info!("Started backup task {}", task_id);
+    info!(
+        "Started backup task {} (user: {})",
+        task_id,
+        user_did.unwrap_or_default()
+    );
     Json(BackupResponse { task_id }).into_response()
 }
 
-async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, force: bool) {
+async fn run_backup_job(
+    state: AppState,
+    task_id: String,
+    tokens: Vec<Tokens>,
+    force: bool,
+    user_did: String,
+) {
     let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
     let out_path = PathBuf::from(&out_dir);
+
+    // Write metadata file
+    let metadata = BackupMetadata {
+        requestor: user_did,
+        tokens: tokens.clone(),
+    };
+    let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
+    if let Err(e) = tokio::fs::write(
+        &metadata_path,
+        serde_json::to_vec_pretty(&metadata).unwrap(),
+    )
+    .await
+    {
+        warn!("Failed to write metadata file for task {}: {}", task_id, e);
+    }
 
     // If force is set, delete the error log if it exists
     // Otherwise, check if backup already exists on disk

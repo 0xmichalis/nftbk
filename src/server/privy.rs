@@ -1,9 +1,9 @@
 use josekit::jws::ES256;
 use josekit::jwt::decode_with_verifier;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PrivyClaims {
     pub sub: String, // user DID
     pub iss: String, // issuer

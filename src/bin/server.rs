@@ -122,7 +122,7 @@ async fn main() {
 
 async fn auth_middleware(
     State(auth_state): State<AuthState>,
-    req: Request,
+    mut req: Request,
     next: Next,
 ) -> impl IntoResponse {
     let state = &auth_state.app_state;
@@ -137,6 +137,7 @@ async fn auth_middleware(
             .and_then(|v| v.to_str().ok());
         let expected = format!("Bearer {}", token);
         if auth_header == Some(expected.as_str()) {
+            req.extensions_mut().insert::<Option<String>>(None);
             return next.run(req).await;
         }
     }
@@ -152,7 +153,8 @@ async fn auth_middleware(
         if let Some(header_value) = auth_header {
             if let Some(jwt) = header_value.strip_prefix("Bearer ") {
                 match verify_privy_jwt(jwt, verification_key, app_id).await {
-                    Ok(_claims) => {
+                    Ok(claims) => {
+                        req.extensions_mut().insert(Some(claims.sub.clone()));
                         return next.run(req).await;
                     }
                     Err(e) => {
