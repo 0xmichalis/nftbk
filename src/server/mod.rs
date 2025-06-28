@@ -9,11 +9,13 @@ use crate::backup::ChainConfig;
 use crate::hashing::compute_file_sha256;
 
 pub mod handle_backup;
+pub mod handle_backups;
 pub mod handle_download;
 pub mod handle_error_log;
 pub mod handle_status;
 pub mod privy;
 pub use handle_backup::handle_backup;
+pub use handle_backups::handle_backups;
 pub use handle_download::handle_download;
 pub use handle_error_log::handle_error_log;
 pub use handle_status::handle_status;

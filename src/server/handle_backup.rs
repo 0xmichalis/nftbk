@@ -50,7 +50,7 @@ struct BackupMetadata {
 
 pub async fn handle_backup(
     State(state): State<AppState>,
-    Extension(user_did): Extension<Option<String>>,
+    Extension(requestor): Extension<Option<String>>,
     Json(req): Json<BackupRequest>,
 ) -> impl IntoResponse {
     // Validate requested chains
@@ -119,7 +119,7 @@ pub async fn handle_backup(
     );
     drop(tasks); // Release lock before spawning
 
-    let user = user_did.clone();
+    let user = requestor.clone();
     // Spawn background job
     let state_clone = state.clone();
     let task_id_clone = task_id.clone();
@@ -135,9 +135,9 @@ pub async fn handle_backup(
     });
 
     info!(
-        "Started backup task {} (user: {})",
+        "Started backup task {} (requestor: {})",
         task_id,
-        user_did.unwrap_or_default()
+        requestor.unwrap_or_default()
     );
     Json(BackupResponse { task_id }).into_response()
 }
@@ -147,14 +147,14 @@ async fn run_backup_job(
     task_id: String,
     tokens: Vec<Tokens>,
     force: bool,
-    user_did: String,
+    requestor: String,
 ) {
     let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
     let out_path = PathBuf::from(&out_dir);
 
     // Write metadata file
     let metadata = BackupMetadata {
-        requestor: user_did,
+        requestor: requestor.clone(),
         tokens: tokens.clone(),
     };
     let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
@@ -165,6 +165,29 @@ async fn run_backup_job(
     .await
     {
         warn!("Failed to write metadata file for task {}: {}", task_id, e);
+    }
+
+    // Update by_requestor index if requestor is not empty
+    if !requestor.is_empty() {
+        let by_requestor_dir = format!("{}/by_requestor", state.base_dir);
+        if let Err(e) = tokio::fs::create_dir_all(&by_requestor_dir).await {
+            warn!("Failed to create by_requestor dir: {}", e);
+        } else {
+            let user_file = format!("{}/{}.json", by_requestor_dir, requestor);
+            let mut task_ids: Vec<String> = match tokio::fs::read_to_string(&user_file).await {
+                Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
+            if !task_ids.contains(&task_id) {
+                task_ids.push(task_id.clone());
+                if let Err(e) =
+                    tokio::fs::write(&user_file, serde_json::to_vec_pretty(&task_ids).unwrap())
+                        .await
+                {
+                    warn!("Failed to update user index for {}: {}", requestor, e);
+                }
+            }
+        }
     }
 
     // If force is set, delete the error log if it exists

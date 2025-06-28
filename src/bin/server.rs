@@ -19,7 +19,9 @@ use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::privy::verify_privy_jwt;
-use nftbk::server::{handle_backup, handle_download, handle_error_log, handle_status, AppState};
+use nftbk::server::{
+    handle_backup, handle_backups, handle_download, handle_error_log, handle_status, AppState,
+};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -88,6 +90,7 @@ async fn main() {
         .route("/backup/:task_id/status", get(handle_status))
         .route("/backup/:task_id/download", get(handle_download))
         .route("/backup/:task_id/error_log", get(handle_error_log))
+        .route("/backups", get(handle_backups))
         .with_state(state.clone());
 
     // Add auth middleware
@@ -137,7 +140,7 @@ async fn auth_middleware(
             .and_then(|v| v.to_str().ok());
         let expected = format!("Bearer {}", token);
         if auth_header == Some(expected.as_str()) {
-            req.extensions_mut().insert::<Option<String>>(None);
+            req.extensions_mut().insert(Some("admin".to_string()));
             return next.run(req).await;
         }
     }
