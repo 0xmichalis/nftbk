@@ -43,6 +43,8 @@ pub struct AppState {
     pub base_dir: Arc<String>,
     pub unsafe_skip_checksum_check: bool,
     pub auth_token: Option<String>,
+    pub pruner_enabled: bool,
+    pub pruner_retention_days: u64,
 }
 
 impl Default for AppState {
@@ -57,6 +59,8 @@ impl AppState {
         base_dir: &str,
         unsafe_skip_checksum_check: bool,
         auth_token: Option<String>,
+        pruner_enabled: bool,
+        pruner_retention_days: u64,
     ) -> Self {
         let config_content = tokio::fs::read_to_string(chain_config_path)
             .await
@@ -73,6 +77,8 @@ impl AppState {
             base_dir: Arc::new(base_dir.to_string()),
             unsafe_skip_checksum_check,
             auth_token,
+            pruner_enabled,
+            pruner_retention_days,
         }
     }
 }

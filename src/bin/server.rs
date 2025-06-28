@@ -90,6 +90,8 @@ async fn main() {
         &args.base_dir,
         args.unsafe_skip_checksum_check,
         auth_token.clone(),
+        args.enable_pruner,
+        args.pruner_retention_days,
     )
     .await;
 
