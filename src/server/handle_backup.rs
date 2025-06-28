@@ -8,6 +8,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use chrono::Utc;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::Serialize;
@@ -44,6 +45,7 @@ impl<W: Write, H: Write> Write for TeeWriter<W, H> {
 
 #[derive(Serialize)]
 struct BackupMetadata {
+    created_at: String,
     requestor: String,
     tokens: Vec<Tokens>,
     nft_count: usize,
@@ -156,6 +158,7 @@ async fn run_backup_job(
     // Write metadata file
     let nft_count = tokens.iter().map(|t| t.tokens.len()).sum();
     let metadata = BackupMetadata {
+        created_at: Utc::now().to_rfc3339(),
         requestor: requestor.clone(),
         tokens: tokens.clone(),
         nft_count,
