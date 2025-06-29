@@ -13,7 +13,7 @@ Two configuration files are used:
 - `config_chains.toml`: Contains RPC URLs for different chains
 - `config_tokens.toml`: Contains the NFT tokens to back up
 
-Currently `config_chains.toml` includes a few prepopulated RPCs and for Ethereum specifically, you would need to use an Alchemy API key that can be configured as `ETH_RPC_API_KEY` inside an `.env` file. Or choose to use a different RPC altogether. For `config_tokens.toml`, there is an `example_config_tokens.toml` that you can update as needed with the tokens to backup.
+Currently `config_chains.toml` includes a few prepopulated RPCs. Alchemy RPCs are used for EVM chains with an API key that can be configured as `EVM_RPC_API_KEY` inside an `.env` file. You can also choose to use different RPCs altogether. For `config_tokens.toml`, there is an `example_config_tokens.toml` that you can update as needed with the tokens to backup.
 
 ### Generate config from gallery.so
 
