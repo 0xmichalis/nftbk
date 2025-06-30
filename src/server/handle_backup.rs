@@ -72,12 +72,8 @@ pub async fn handle_backup(
         )
             .into_response();
     }
-    // Flatten all tokens for task_id computation
-    let mut all_tokens = Vec::new();
-    for entry in &req.tokens {
-        all_tokens.extend(entry.tokens.iter().cloned());
-    }
-    let task_id = compute_array_sha256(&all_tokens);
+
+    let task_id = compute_array_sha256(&req.tokens);
     let mut tasks = state.tasks.lock().await;
 
     let force = req.force.unwrap_or(false);
