@@ -239,14 +239,40 @@ async fn run_backup_job(
         exit_on_error: false,
     };
     let backup_result = backup::backup_from_config(backup_cfg).await;
-    if let Err(e) = backup_result {
-        error!("Backup {task_id} failed: {}", e);
-        let mut tasks = state.tasks.lock().await;
-        if let Some(task) = tasks.get_mut(&task_id) {
-            task.status = TaskStatus::Error(format!("Backup failed: {}", e));
+    let files_written = match backup_result {
+        Ok(files) => files,
+        Err(e) => {
+            error!("Backup {task_id} failed: {}", e);
+            let mut tasks = state.tasks.lock().await;
+            if let Some(task) = tasks.get_mut(&task_id) {
+                task.status = TaskStatus::Error(format!("Backup failed: {}", e));
+            }
+            return;
         }
-        return;
+    };
+
+    // Sync all files and directories to disk before zipping
+    info!("Syncing {} to disk before zipping", out_path.display());
+    let mut synced_dirs = HashSet::new();
+    for file in &files_written {
+        if file.is_file() {
+            if let Ok(f) = std::fs::File::open(file) {
+                let _ = f.sync_all();
+            }
+        }
+        if let Some(parent) = file.parent() {
+            if synced_dirs.insert(parent.to_path_buf()) {
+                if let Ok(dir) = std::fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+            }
+        }
     }
+    info!(
+        "Synced {} to disk before zipping ({} files)",
+        out_path.display(),
+        files_written.len()
+    );
 
     // Zip the output dir
     let (zip_pathbuf, checksum_path) = get_zipped_backup_paths(&state.base_dir, &task_id);

@@ -358,5 +358,6 @@ async fn main() -> Result<()> {
         prune_redundant: args.prune_redundant,
         exit_on_error: args.exit_on_error,
     };
-    return backup_from_config(backup_config).await;
+    backup_from_config(backup_config).await?;
+    Ok(())
 }

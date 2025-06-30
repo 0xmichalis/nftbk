@@ -67,7 +67,7 @@ pub struct BackupConfig {
 
 pub mod backup {
     use super::*;
-    pub async fn backup_from_config(cfg: BackupConfig) -> Result<()> {
+    pub async fn backup_from_config(cfg: BackupConfig) -> Result<Vec<PathBuf>> {
         let output_path = cfg.output_path.unwrap();
         fs::create_dir_all(&output_path).await?;
 
@@ -76,6 +76,7 @@ pub mod backup {
 
         let start = Instant::now();
         let mut all_files = Vec::new();
+        let mut nft_count = 0;
         for (chain_name, contracts) in &token_config.chains {
             if contracts.is_empty() {
                 warn!("No contracts configured for chain {}", chain_name);
@@ -90,6 +91,7 @@ pub mod backup {
                 .get(chain_name)
                 .context(format!("No RPC URL configured for chain {}", chain_name))?;
             let contracts = ContractWithToken::parse_contracts(contracts);
+            nft_count += contracts.len();
 
             let files = if chain_name == "tezos" {
                 let processor = Arc::new(TezosChainProcessor);
@@ -127,12 +129,14 @@ pub mod backup {
         }
 
         info!(
-            "Backup complete in {:?}s. Files saved in {}",
+            "Backup complete in {:?}s. {} NFTs ({} files) saved in {}.",
             start.elapsed().as_secs(),
-            output_path.display()
+            nft_count,
+            all_files.len(),
+            output_path.display(),
         );
 
-        Ok(())
+        Ok(all_files)
     }
     pub use super::{BackupConfig, ChainConfig, TokenConfig};
 }
