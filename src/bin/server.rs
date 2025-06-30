@@ -23,7 +23,8 @@ use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::privy::verify_privy_jwt;
 use nftbk::server::{
-    handle_backup, handle_backups, handle_download, handle_error_log, handle_status, AppState,
+    handle_backup, handle_backups, handle_download, handle_download_token, handle_error_log,
+    handle_status, AppState,
 };
 
 #[derive(Parser, Debug)]
@@ -105,24 +106,36 @@ async fn main() {
         is_defined(&privy_app_id) && is_defined(&privy_verification_key)
     );
 
-    // Create the router
-    let mut app = Router::new()
+    // Create the public router (no auth middleware)
+    let public_router = Router::new()
+        .route("/backup/:task_id/download", get(handle_download))
+        .with_state(state.clone());
+
+    // Create the authenticated router (all other routes)
+    let mut authed_router = Router::new()
         .route("/backup", post(handle_backup))
         .route("/backup/:task_id/status", get(handle_status))
-        .route("/backup/:task_id/download", get(handle_download))
+        .route(
+            "/backup/:task_id/download_token",
+            get(handle_download_token),
+        )
         .route("/backup/:task_id/error_log", get(handle_error_log))
         .route("/backups", get(handle_backups))
         .with_state(state.clone());
 
-    // Add auth middleware
+    // Add auth middleware to authenticated router
     let auth_state = AuthState {
         app_state: state.clone(),
         privy_verification_key,
         privy_app_id,
     };
     if is_defined(&auth_token) || is_defined(&auth_state.privy_verification_key) {
-        app = app.layer(middleware::from_fn_with_state(auth_state, auth_middleware));
+        authed_router =
+            authed_router.layer(middleware::from_fn_with_state(auth_state, auth_middleware));
     }
+
+    // Merge routers
+    let app = public_router.merge(authed_router);
 
     // Start the pruner thread
     let running = Arc::new(AtomicBool::new(true));

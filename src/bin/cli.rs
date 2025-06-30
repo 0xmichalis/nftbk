@@ -222,19 +222,45 @@ async fn download_backup(
     server_address: &str,
     task_id: &str,
     output_path: Option<&PathBuf>,
-    auth_token: Option<&str>,
+    _auth_token: Option<&str>,
 ) -> Result<()> {
-    let download_url = format!(
-        "{}/backup/{}/download",
+    // Step 1: Get download token
+    let token_url = format!(
+        "{}/backup/{}/download_token",
         server_address.trim_end_matches('/'),
         task_id
     );
-    println!("Downloading zip ...");
-    let mut req = client.get(&download_url);
-    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
-        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
+    let mut token_req = client.get(&token_url);
+    if is_defined(&_auth_token.as_ref().map(|s| s.to_string())) {
+        token_req = token_req.header("Authorization", format!("Bearer {}", _auth_token.unwrap()));
     }
-    let resp = req.send().await.context("Failed to download zip")?;
+    let token_resp = token_req
+        .send()
+        .await
+        .context("Failed to get download token")?;
+    if !token_resp.status().is_success() {
+        anyhow::bail!("Failed to get download token: {}", token_resp.status());
+    }
+    let token_json: serde_json::Value =
+        token_resp.json().await.context("Invalid token response")?;
+    let download_token = token_json
+        .get("token")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("No token in response"))?;
+
+    // Step 2: Download using token
+    let download_url = format!(
+        "{}/backup/{}/download?token={}",
+        server_address.trim_end_matches('/'),
+        task_id,
+        urlencoding::encode(download_token)
+    );
+    println!("Downloading zip ...");
+    let resp = client
+        .get(&download_url)
+        .send()
+        .await
+        .context("Failed to download zip")?;
     if !resp.status().is_success() {
         anyhow::bail!("Failed to download zip: {}", resp.status());
     }

@@ -1,3 +1,10 @@
+use axum::extract::State;
+use axum::Json;
+use base64::Engine;
+use chrono;
+use rand::rngs::OsRng;
+use rand::RngCore;
+use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -45,6 +52,8 @@ pub struct AppState {
     pub auth_token: Option<String>,
     pub pruner_enabled: bool,
     pub pruner_retention_days: u64,
+    /// Maps download tokens to (task_id, expiration timestamp as unix epoch seconds)
+    pub download_tokens: Arc<Mutex<HashMap<String, (String, u64)>>>,
 }
 
 impl Default for AppState {
@@ -79,6 +88,7 @@ impl AppState {
             auth_token,
             pruner_enabled,
             pruner_retention_days,
+            download_tokens: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 }
@@ -138,4 +148,19 @@ pub async fn check_backup_on_disk(
         }
         _ => None,
     }
+}
+
+pub async fn handle_download_token(
+    State(state): axum::extract::State<AppState>,
+    axum::extract::Path(task_id): axum::extract::Path<String>,
+) -> impl axum::response::IntoResponse {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
+    let expires_at = chrono::Utc::now().timestamp() as u64 + 600; // 10 minutes
+    {
+        let mut tokens = state.download_tokens.lock().await;
+        tokens.insert(token.clone(), (task_id.clone(), expires_at));
+    }
+    Json(json!({ "token": token, "expires_at": expires_at }))
 }

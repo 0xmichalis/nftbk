@@ -42,7 +42,9 @@ ctrlc = "3"
 libc = "0.2"
 josekit = "0.10.3"
 prettytable = "0.10"
-chrono = "0.4.39"
+chrono = { version = "0.4.39", features = ["serde"] }
+rand = "0.8"
+urlencoding = "2.1"
 
 [lib]
 name = "nftbk"
