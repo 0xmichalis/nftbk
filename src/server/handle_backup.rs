@@ -119,7 +119,52 @@ pub async fn handle_backup(
     );
     drop(tasks); // Release lock before spawning
 
-    let user = requestor.clone();
+    // Write metadata file synchronously as part of the HTTP request
+    let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum();
+    let metadata = BackupMetadata {
+        created_at: Utc::now().to_rfc3339(),
+        requestor: requestor.clone().unwrap_or_default(),
+        nft_count,
+        tokens: req.tokens.clone(),
+    };
+    let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
+    if let Err(e) = tokio::fs::write(
+        &metadata_path,
+        serde_json::to_vec_pretty(&metadata).unwrap(),
+    )
+    .await
+    {
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": format!("Failed to write metadata file: {}", e)})),
+        )
+            .into_response();
+    }
+
+    // Update by_requestor index if requestor is not empty
+    let requestor_str = requestor.as_deref().unwrap_or("");
+    if !requestor_str.is_empty() {
+        let by_requestor_dir = format!("{}/by_requestor", state.base_dir);
+        if let Err(e) = tokio::fs::create_dir_all(&by_requestor_dir).await {
+            warn!("Failed to create by_requestor dir: {}", e);
+        } else {
+            let user_file = format!("{}/{}.json", by_requestor_dir, requestor_str);
+            let mut task_ids: Vec<String> = match tokio::fs::read_to_string(&user_file).await {
+                Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
+                Err(_) => Vec::new(),
+            };
+            if !task_ids.contains(&task_id) {
+                task_ids.push(task_id.clone());
+                if let Err(e) =
+                    tokio::fs::write(&user_file, serde_json::to_vec_pretty(&task_ids).unwrap())
+                        .await
+                {
+                    warn!("Failed to update user index for {}: {}", requestor_str, e);
+                }
+            }
+        }
+    }
+
     // Spawn background job
     let state_clone = state.clone();
     let task_id_clone = task_id.clone();
@@ -130,7 +175,6 @@ pub async fn handle_backup(
             task_id_clone,
             tokens,
             force,
-            user.unwrap_or_default(),
         ))
     });
 
@@ -142,56 +186,9 @@ pub async fn handle_backup(
     (StatusCode::CREATED, Json(BackupResponse { task_id })).into_response()
 }
 
-async fn run_backup_job(
-    state: AppState,
-    task_id: String,
-    tokens: Vec<Tokens>,
-    force: bool,
-    requestor: String,
-) {
+async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, force: bool) {
     let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
     let out_path = PathBuf::from(&out_dir);
-
-    // Write metadata file
-    let nft_count = tokens.iter().map(|t| t.tokens.len()).sum();
-    let metadata = BackupMetadata {
-        created_at: Utc::now().to_rfc3339(),
-        requestor: requestor.clone(),
-        tokens: tokens.clone(),
-        nft_count,
-    };
-    let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
-    if let Err(e) = tokio::fs::write(
-        &metadata_path,
-        serde_json::to_vec_pretty(&metadata).unwrap(),
-    )
-    .await
-    {
-        warn!("Failed to write metadata file for task {}: {}", task_id, e);
-    }
-
-    // Update by_requestor index if requestor is not empty
-    if !requestor.is_empty() {
-        let by_requestor_dir = format!("{}/by_requestor", state.base_dir);
-        if let Err(e) = tokio::fs::create_dir_all(&by_requestor_dir).await {
-            warn!("Failed to create by_requestor dir: {}", e);
-        } else {
-            let user_file = format!("{}/{}.json", by_requestor_dir, requestor);
-            let mut task_ids: Vec<String> = match tokio::fs::read_to_string(&user_file).await {
-                Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-                Err(_) => Vec::new(),
-            };
-            if !task_ids.contains(&task_id) {
-                task_ids.push(task_id.clone());
-                if let Err(e) =
-                    tokio::fs::write(&user_file, serde_json::to_vec_pretty(&task_ids).unwrap())
-                        .await
-                {
-                    warn!("Failed to update user index for {}: {}", requestor, e);
-                }
-            }
-        }
-    }
 
     // If force is set, delete the error log if it exists
     // Otherwise, check if backup already exists on disk
@@ -422,7 +419,6 @@ pub async fn handle_backup_retry(
             task_id_clone,
             tokens,
             true,
-            user,
         ))
     });
     info!(
