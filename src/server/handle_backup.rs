@@ -346,7 +346,13 @@ pub async fn handle_backup_retry(
         Some(TaskInfo {
             status: TaskStatus::Done,
             ..
-        }) => {}
+        }) => {
+            let mut tasks = state.tasks.lock().await;
+            if let Some(task) = tasks.get_mut(&task_id) {
+                task.status = TaskStatus::InProgress;
+            }
+            drop(tasks);
+        }
         Some(_) => {
             return (
                 StatusCode::BAD_REQUEST,
