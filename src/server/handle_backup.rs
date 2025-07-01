@@ -337,49 +337,25 @@ pub async fn handle_backup_retry(
     Path(task_id): Path<String>,
     Extension(requestor): Extension<Option<String>>,
 ) -> impl IntoResponse {
-    // 1. Check if task is Done
+    // Check if task is not InProgress
     let tasks = state.tasks.lock().await;
-    let task_info = tasks.get(&task_id).cloned();
-    drop(tasks);
-
-    match task_info {
+    let in_progress = matches!(
+        tasks.get(&task_id),
         Some(TaskInfo {
-            status: TaskStatus::Done,
+            status: TaskStatus::InProgress,
             ..
-        }) => {
-            let mut tasks = state.tasks.lock().await;
-            if let Some(task) = tasks.get_mut(&task_id) {
-                task.status = TaskStatus::InProgress;
-            }
-            drop(tasks);
-        }
-        Some(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Task is not in Done state"})),
-            )
-                .into_response();
-        }
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Task not found"})),
-            )
-                .into_response();
-        }
-    };
-
-    // 2. Check if error log exists
-    let log_path = format!("{}/nftbk-{}.log", state.base_dir, task_id);
-    if tokio::fs::read_to_string(&log_path).await.is_err() {
+        })
+    );
+    drop(tasks);
+    if in_progress {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "No error log found for this task"})),
+            Json(serde_json::json!({"error": "Task is already in progress"})),
         )
             .into_response();
     }
 
-    // 3. Load tokens from metadata file
+    // Load tokens from metadata file
     let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
     let metadata_bytes = match tokio::fs::read(&metadata_path).await {
         Ok(bytes) => bytes,
@@ -402,7 +378,7 @@ pub async fn handle_backup_retry(
         }
     };
 
-    // 4. Ensure the requestor matches the one in the metadata
+    // Ensure the requestor matches the one in the metadata
     let req_requestor = requestor.clone().unwrap_or_default();
     let meta_requestor = metadata.requestor.clone();
     if !meta_requestor.is_empty() && req_requestor != meta_requestor {
@@ -413,7 +389,18 @@ pub async fn handle_backup_retry(
             .into_response();
     }
 
-    // 5. Re-run backup job
+    // Set status to in progress
+    let mut tasks = state.tasks.lock().await;
+    tasks.insert(
+        task_id.clone(),
+        TaskInfo {
+            status: TaskStatus::InProgress,
+            zip_path: None,
+        },
+    );
+    drop(tasks);
+
+    // Re-run backup job
     let tokens = metadata.tokens.clone();
     let user = req_requestor;
     let user_for_log = user.clone();
