@@ -86,7 +86,7 @@ pub async fn handle_backup(
                     "Duplicate backup request, returning existing task_id {}",
                     task_id
                 );
-                return Json(BackupResponse { task_id }).into_response();
+                return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
             }
             TaskStatus::Done => {
                 if force {
@@ -96,7 +96,7 @@ pub async fn handle_backup(
                         "Backup already completed, returning existing task_id {}",
                         task_id
                     );
-                    return Json(BackupResponse { task_id }).into_response();
+                    return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
                 }
             }
             TaskStatus::Error(e) => {
@@ -138,7 +138,7 @@ pub async fn handle_backup(
         task_id,
         requestor.unwrap_or_default()
     );
-    Json(BackupResponse { task_id }).into_response()
+    (StatusCode::CREATED, Json(BackupResponse { task_id })).into_response()
 }
 
 async fn run_backup_job(
