@@ -15,8 +15,9 @@ use serde::Serialize;
 use serde_json;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+use std::fs;
 use std::io::{self, Write};
-use std::path::PathBuf;
+use std::path::Path as StdPath;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
@@ -188,7 +189,7 @@ pub async fn handle_backup(
 
 async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, force: bool) {
     let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
-    let out_path = PathBuf::from(&out_dir);
+    let out_path = std::path::PathBuf::from(&out_dir);
 
     // If force is set, delete the error log if it exists
     // Otherwise, check if backup already exists on disk
@@ -290,7 +291,9 @@ async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, f
     let tee_writer = TeeWriter::new(tar_gz, &mut hasher);
     let enc = GzEncoder::new(tee_writer, Compression::default());
     let mut tar = tar::Builder::new(enc);
-    if let Err(e) = tar.append_dir_all(".", &out_path) {
+
+    // Custom recursive add to tar with relative paths
+    if let Err(e) = add_dir_recursively(&mut tar, out_path.as_path(), out_path.as_path()) {
         let mut tasks = state.tasks.lock().await;
         if let Some(task) = tasks.get_mut(&task_id) {
             task.status = TaskStatus::Error(format!("Failed to tar dir: {}", e));
@@ -330,6 +333,25 @@ async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, f
         task.zip_path = Some(zip_pathbuf);
     }
     info!("Backup {} ready", task_id);
+}
+
+fn add_dir_recursively<T: Write>(
+    tar: &mut tar::Builder<T>,
+    src_dir: &StdPath,
+    base: &StdPath,
+) -> std::io::Result<()> {
+    for entry in fs::read_dir(src_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let rel_path = path.strip_prefix(base).unwrap();
+        if path.is_dir() {
+            tar.append_dir(rel_path, &path)?;
+            add_dir_recursively(tar, &path, base)?;
+        } else if path.is_file() {
+            tar.append_path_with_name(&path, rel_path)?;
+        }
+    }
+    Ok(())
 }
 
 pub async fn handle_backup_retry(
