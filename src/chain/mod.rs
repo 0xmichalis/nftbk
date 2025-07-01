@@ -125,8 +125,7 @@ where
                 Ok(path) => all_files.push(path),
                 Err(e) => {
                     let msg = format!(
-                        "Failed to fetch content from {} (contract: {}, token ID: {}): {}",
-                        url,
+                        "Failed to fetch content for contract {} (token ID {}): {}",
                         contract.address(),
                         contract.token_id(),
                         e
