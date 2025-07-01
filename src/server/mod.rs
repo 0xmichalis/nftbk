@@ -23,6 +23,7 @@ pub mod handle_status;
 pub mod privy;
 pub mod pruner;
 pub use handle_backup::handle_backup;
+pub use handle_backup::handle_backup_retry;
 pub use handle_backups::handle_backups;
 pub use handle_download::handle_download;
 pub use handle_error_log::handle_error_log;

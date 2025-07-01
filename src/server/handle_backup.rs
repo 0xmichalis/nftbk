@@ -4,7 +4,7 @@ use crate::backup::{self, BackupConfig, TokenConfig};
 use crate::hashing::compute_array_sha256;
 use crate::server::{check_backup_on_disk, get_zipped_backup_paths};
 use axum::{
-    extract::{Extension, Json, State},
+    extract::{Extension, Json, Path, State},
     http::StatusCode,
     response::IntoResponse,
 };
@@ -12,6 +12,7 @@ use chrono::Utc;
 use flate2::write::GzEncoder;
 use flate2::Compression;
 use serde::Serialize;
+use serde_json;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
 use std::io::{self, Write};
@@ -43,7 +44,7 @@ impl<W: Write, H: Write> Write for TeeWriter<W, H> {
     }
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, serde::Deserialize)]
 struct BackupMetadata {
     created_at: String,
     requestor: String,
@@ -332,4 +333,101 @@ async fn run_backup_job(
         task.zip_path = Some(zip_pathbuf);
     }
     info!("Backup {} ready", task_id);
+}
+
+pub async fn handle_backup_retry(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    Extension(requestor): Extension<Option<String>>,
+) -> impl IntoResponse {
+    // 1. Check if task is Done
+    let tasks = state.tasks.lock().await;
+    let task_info = tasks.get(&task_id).cloned();
+    drop(tasks);
+
+    match task_info {
+        Some(TaskInfo {
+            status: TaskStatus::Done,
+            ..
+        }) => {}
+        Some(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Task is not in Done state"})),
+            )
+                .into_response();
+        }
+        None => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Task not found"})),
+            )
+                .into_response();
+        }
+    };
+
+    // 2. Check if error log exists
+    let log_path = format!("{}/nftbk-{}.log", state.base_dir, task_id);
+    if tokio::fs::read_to_string(&log_path).await.is_err() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "No error log found for this task"})),
+        )
+            .into_response();
+    }
+
+    // 3. Load tokens from metadata file
+    let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
+    let metadata_bytes = match tokio::fs::read(&metadata_path).await {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Metadata file not found"})),
+            )
+                .into_response();
+        }
+    };
+    let metadata: BackupMetadata = match serde_json::from_slice(&metadata_bytes) {
+        Ok(m) => m,
+        Err(_) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Invalid metadata format"})),
+            )
+                .into_response();
+        }
+    };
+
+    // 4. Ensure the requestor matches the one in the metadata
+    let req_requestor = requestor.clone().unwrap_or_default();
+    let meta_requestor = metadata.requestor.clone();
+    if !meta_requestor.is_empty() && req_requestor != meta_requestor {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Requestor does not match task owner"})),
+        )
+            .into_response();
+    }
+
+    // 5. Re-run backup job
+    let tokens = metadata.tokens.clone();
+    let user = req_requestor;
+    let user_for_log = user.clone();
+    let state_clone = state.clone();
+    let task_id_clone = task_id.clone();
+    tokio::task::spawn_blocking(move || {
+        tokio::runtime::Handle::current().block_on(run_backup_job(
+            state_clone,
+            task_id_clone,
+            tokens,
+            true,
+            user,
+        ))
+    });
+    info!(
+        "Retrying backup task {} (requestor: {})",
+        task_id, user_for_log
+    );
+    (StatusCode::ACCEPTED, Json(BackupResponse { task_id })).into_response()
 }
