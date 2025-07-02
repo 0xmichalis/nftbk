@@ -49,7 +49,7 @@ struct Args {
     server_address: String,
 
     /// Exit on the first error encountered
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     exit_on_error: bool,
 
     /// Force rerunning a completed backup task
