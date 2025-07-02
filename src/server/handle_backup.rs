@@ -259,62 +259,33 @@ async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, f
 
     // Zip the output dir
     let (zip_pathbuf, checksum_path) = get_zipped_backup_paths(&state.base_dir, &task_id);
-    let zip_path = zip_pathbuf.to_str().unwrap();
-    info!("Zipping backup at {}", zip_path);
     let start_time = Instant::now();
-    let tar_gz = std::fs::File::create(zip_path);
-    if let Err(e) = tar_gz {
-        let mut tasks = state.tasks.lock().await;
-        if let Some(task) = tasks.get_mut(&task_id) {
-            task.status = TaskStatus::Error(format!("Failed to create zip: {}", e));
+    match zip_backup(&out_path, &zip_pathbuf) {
+        Ok(checksum) => {
+            info!(
+                "Zipped backup at {} in {:?}s",
+                zip_pathbuf.display(),
+                start_time.elapsed().as_secs()
+            );
+            // Update task and write checksum
+            let mut tasks = state.tasks.lock().await;
+            if let Some(task) = tasks.get_mut(&task_id) {
+                if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
+                    error!("Failed to write checksum file: {}", e);
+                    task.status = TaskStatus::Error("Failed to write checksum file".to_string());
+                    return;
+                }
+                task.status = TaskStatus::Done;
+                task.zip_path = Some(zip_pathbuf.clone());
+            }
         }
-        return;
-    }
-    let tar_gz = tar_gz.unwrap();
-    let mut hasher = Sha256::new();
-    let tee_writer = TeeWriter::new(tar_gz, &mut hasher);
-    let enc = GzEncoder::new(tee_writer, Compression::default());
-    let mut tar = tar::Builder::new(enc);
-
-    // Custom recursive add to tar with relative paths
-    if let Err(e) = add_dir_recursively(&mut tar, out_path.as_path(), out_path.as_path()) {
-        let mut tasks = state.tasks.lock().await;
-        if let Some(task) = tasks.get_mut(&task_id) {
-            task.status = TaskStatus::Error(format!("Failed to tar dir: {}", e));
-        }
-        return;
-    }
-    // Finish writing and flush everything
-    let enc = match tar.into_inner() {
-        Ok(enc) => enc,
         Err(e) => {
             let mut tasks = state.tasks.lock().await;
             if let Some(task) = tasks.get_mut(&task_id) {
-                task.status = TaskStatus::Error(format!("Failed to finish tar: {}", e));
+                task.status = TaskStatus::Error(e);
             }
             return;
         }
-    };
-    if let Err(e) = enc.finish() {
-        let mut tasks = state.tasks.lock().await;
-        if let Some(task) = tasks.get_mut(&task_id) {
-            task.status = TaskStatus::Error(format!("Failed to finish zip: {}", e));
-        }
-        return;
-    }
-    info!("Zipped backup in {:?}s", start_time.elapsed().as_secs());
-
-    // Update task and write checksum
-    let mut tasks = state.tasks.lock().await;
-    if let Some(task) = tasks.get_mut(&task_id) {
-        let checksum = format!("{:x}", hasher.finalize());
-        if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
-            error!("Failed to write checksum file: {}", e);
-            task.status = TaskStatus::Error("Failed to write checksum file".to_string());
-            return;
-        }
-        task.status = TaskStatus::Done;
-        task.zip_path = Some(zip_pathbuf);
     }
     info!("Backup {} ready", task_id);
 }
@@ -335,6 +306,26 @@ fn sync_files(files_written: &[std::path::PathBuf]) {
             }
         }
     }
+}
+
+fn zip_backup(out_path: &std::path::Path, zip_path: &std::path::Path) -> Result<String, String> {
+    let zip_path_str = zip_path.to_str().unwrap();
+    let tar_gz =
+        fs::File::create(zip_path_str).map_err(|e| format!("Failed to create zip: {}", e))?;
+    let mut hasher = Sha256::new();
+    let tee_writer = TeeWriter::new(tar_gz, &mut hasher);
+    let enc = GzEncoder::new(tee_writer, Compression::default());
+    let mut tar = tar::Builder::new(enc);
+    if let Err(e) = add_dir_recursively(&mut tar, out_path, out_path) {
+        return Err(format!("Failed to tar dir: {}", e));
+    }
+    let enc = tar
+        .into_inner()
+        .map_err(|e| format!("Failed to finish tar: {}", e))?;
+    enc.finish()
+        .map_err(|e| format!("Failed to encode tar: {}", e))?;
+    let checksum = format!("{:x}", hasher.finalize());
+    Ok(checksum)
 }
 
 fn add_dir_recursively<T: Write>(
