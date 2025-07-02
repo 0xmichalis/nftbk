@@ -5,6 +5,7 @@ use tokio::fs;
 use tracing::{debug, info, warn};
 use url::Url;
 
+use crate::content::stream_http_to_file;
 use crate::url::get_url;
 
 pub async fn download_html_resources(
@@ -63,8 +64,7 @@ pub async fn download_html_resources(
         match client.get(&absolute_url).send().await {
             Ok(response) => {
                 info!("Saving HTML resource at {}", resource_path.display());
-                let content = response.bytes().await?;
-                fs::write(resource_path, content).await?;
+                stream_http_to_file(response, &resource_path).await?;
             }
             Err(e) => {
                 warn!("Failed to download HTML resource {}: {}", absolute_url, e);

@@ -1,11 +1,10 @@
 use anyhow::Result;
-use flate2::read::GzDecoder;
-use std::io::Read;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs;
 use tracing::{debug, info, warn};
 
+use crate::content::{stream_gzip_http_to_file, stream_http_to_file};
 use crate::url::get_url;
 
 async fn fetch_croquet_challenge_content(
@@ -49,20 +48,20 @@ async fn fetch_croquet_challenge_content(
         }
 
         let response = client.get(&url).send().await?;
-        let content = response.bytes().await?;
-
-        // Decompress if it's a gzipped file
-        let final_content = if source_file.ends_with(".gz") {
-            let mut decoder = GzDecoder::new(&content[..]);
-            let mut decompressed = Vec::new();
-            decoder.read_to_end(&mut decompressed)?;
-            decompressed
+        let status = response.status();
+        if !status.is_success() {
+            return Err(anyhow::anyhow!(
+                "Failed to fetch content from {} (status: {})",
+                url,
+                status
+            ));
+        }
+        if source_file.ends_with(".gz") {
+            stream_gzip_http_to_file(response, &file_path).await?;
         } else {
-            content.to_vec()
-        };
-
+            stream_http_to_file(response, &file_path).await?;
+        }
         files_created.push(file_path.clone());
-        fs::write(&file_path, final_content).await?;
         info!("Saved {} from {}", target_file, url);
     }
 
@@ -119,9 +118,13 @@ async fn fetch_the_fisherman_content(
 
         match client.get(&url).send().await {
             Ok(response) => {
-                let content = response.bytes().await?;
+                let status = response.status();
+                if !status.is_success() {
+                    warn!("Failed to download {}: HTTP {}", file, status);
+                    continue;
+                }
+                stream_http_to_file(response, &file_path).await?;
                 files_created.push(file_path.clone());
-                fs::write(&file_path, content).await?;
                 info!("Saved {} from {}", file, url);
             }
             Err(e) => {

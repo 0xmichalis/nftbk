@@ -1,7 +1,13 @@
 use anyhow::Result;
+use async_compression::tokio::bufread::GzipDecoder;
+use futures_util::TryStreamExt;
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tokio::io::AsyncRead;
+use tokio::io::AsyncWriteExt;
+use tokio::io::BufReader;
+use tokio_util::io::StreamReader;
 use tracing::{debug, info};
 
 use crate::content::html::download_html_resources;
@@ -10,29 +16,6 @@ use crate::url::{get_data_url, get_last_path_segment, get_url, is_data_url};
 pub mod extensions;
 pub mod extra;
 pub mod html;
-
-async fn fetch_http_content(url: &str) -> Result<Vec<u8>> {
-    let client = reqwest::Client::new();
-    let response = client.get(url).send().await?;
-
-    let status = response.status();
-    if !status.is_success() {
-        return Err(anyhow::anyhow!(
-            "Failed to fetch content from {} (status: {})",
-            url,
-            status
-        ));
-    }
-
-    let content = response.bytes().await?.to_vec();
-
-    Ok(content)
-}
-
-pub struct Options {
-    pub overriden_filename: Option<String>,
-    pub fallback_filename: Option<String>,
-}
 
 async fn get_filename(
     url: &str,
@@ -100,6 +83,71 @@ async fn try_exists(path: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
+pub struct Options {
+    pub overriden_filename: Option<String>,
+    pub fallback_filename: Option<String>,
+}
+
+/// Streams an AsyncRead to a file and flushes it.
+async fn stream_response_to_file<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    file: &mut tokio::fs::File,
+) -> anyhow::Result<()> {
+    tokio::io::copy(reader, file).await?;
+    file.flush().await?;
+    Ok(())
+}
+
+/// Streams a reqwest::Response to a file, detecting extension if needed.
+pub async fn stream_http_to_file(
+    response: reqwest::Response,
+    file_path: &Path,
+) -> anyhow::Result<PathBuf> {
+    use tokio::io::AsyncReadExt;
+    let stream = response
+        .bytes_stream()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+    let mut reader = StreamReader::new(stream);
+    let mut buffer = Vec::new();
+    let mut prefix = [0u8; 32];
+    let n = reader.read(&mut prefix).await?;
+    buffer.extend_from_slice(&prefix[..n]);
+
+    // Detect extension
+    let mut file_path = file_path.to_path_buf();
+    if !extensions::has_known_extension(&file_path) {
+        if let Some(detected_ext) = extensions::detect_media_extension(&buffer) {
+            let current_path_str = file_path.to_string_lossy();
+            debug!("Appending detected media extension: {}", detected_ext);
+            file_path = PathBuf::from(format!("{}.{}", current_path_str, detected_ext));
+        }
+    }
+
+    // Create file and write the buffer
+    let mut file = tokio::fs::File::create(&file_path).await?;
+    file.write_all(&buffer).await?;
+
+    // Stream the rest
+    tokio::io::copy(&mut reader, &mut file).await?;
+    file.flush().await?;
+
+    Ok(file_path)
+}
+
+/// Streams a gzipped reqwest::Response to a file, decompressing on the fly.
+pub async fn stream_gzip_http_to_file(
+    response: reqwest::Response,
+    file_path: &Path,
+) -> anyhow::Result<()> {
+    let mut file = tokio::fs::File::create(file_path).await?;
+    let stream = response
+        .bytes_stream()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+    let reader = StreamReader::new(stream);
+    let mut decoder = GzipDecoder::new(BufReader::new(reader));
+    stream_response_to_file(&mut decoder, &mut file).await
+}
+
 pub async fn fetch_and_save_content(
     url: &str,
     chain: &str,
@@ -120,51 +168,71 @@ pub async fn fetch_and_save_content(
         return Ok(existing_path);
     }
 
-    // Get content based on URL type
-    let content = if is_data_url(url) {
-        get_data_url(url).unwrap()
-    } else {
-        let content_url = get_url(url);
-        // TODO: Rotate IPFS gateways to handle rate limits
-        fetch_http_content(&content_url).await?
-    };
-
-    // Create directory and save content
+    // Create directory for the file
     fs::create_dir_all(file_path.parent().unwrap()).await?;
 
-    // Detect media extension from content if not already known from the filename
-    if !extensions::has_known_extension(&file_path) {
-        if let Some(detected_ext) = extensions::detect_media_extension(&content) {
-            let current_path_str = file_path.to_string_lossy();
-            debug!("Appending detected media extension: {}", detected_ext);
-            file_path = PathBuf::from(format!("{}.{}", current_path_str, detected_ext));
+    // Handle data URLs (still buffer, as they're usually small)
+    if is_data_url(url) {
+        let content = get_data_url(url).unwrap();
+        // Detect media extension from content if not already known from the filename
+        if !extensions::has_known_extension(&file_path) {
+            if let Some(detected_ext) = extensions::detect_media_extension(&content) {
+                let current_path_str = file_path.to_string_lossy();
+                debug!("Appending detected media extension: {}", detected_ext);
+                file_path = PathBuf::from(format!("{}.{}", current_path_str, detected_ext));
+            }
+        }
+        info!("Saving {} (url: {})", file_path.display(), url);
+        let write_result = match file_path.extension().unwrap_or_default().to_str() {
+            Some("json") => {
+                let json_value: Value = serde_json::from_slice(&content)?;
+                let pretty = serde_json::to_string_pretty(&json_value)?;
+                fs::write(&file_path, pretty)
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e))
+            }
+            Some("html") => {
+                let content_str = String::from_utf8_lossy(&content).to_string();
+                let write_res = fs::write(&file_path, &content)
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e));
+                if write_res.is_ok() {
+                    download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
+                }
+                write_res
+            }
+            _ => fs::write(&file_path, &content)
+                .await
+                .map_err(|e| anyhow::anyhow!(e)),
+        };
+        write_result?;
+        debug!("Successfully saved {}", file_path.display());
+        return Ok(file_path);
+    }
+
+    // For HTTP/IPFS URLs, stream directly to disk and detect extension
+    let content_url = get_url(url);
+    let client = reqwest::Client::new();
+    let response = client.get(&content_url).send().await?;
+    let status = response.status();
+    if !status.is_success() {
+        return Err(anyhow::anyhow!(
+            "Failed to fetch content from {} (status: {})",
+            url,
+            status
+        ));
+    }
+    let file_path = stream_http_to_file(response, &file_path).await?;
+
+    // If the file is JSON, pretty-print it
+    if file_path.extension().and_then(|e| e.to_str()) == Some("json") {
+        let content = tokio::fs::read(&file_path).await?;
+        if let Ok(json_value) = serde_json::from_slice::<Value>(&content) {
+            let pretty = serde_json::to_string_pretty(&json_value)?;
+            fs::write(&file_path, pretty).await?;
         }
     }
 
-    info!("Saving {} (url: {})", file_path.display(), url);
-    let write_result = match file_path.extension().unwrap_or_default().to_str() {
-        Some("json") => {
-            let json_value: Value = serde_json::from_slice(&content)?;
-            let pretty = serde_json::to_string_pretty(&json_value)?;
-            fs::write(&file_path, pretty)
-                .await
-                .map_err(|e| anyhow::anyhow!(e))
-        }
-        Some("html") => {
-            let content_str = String::from_utf8_lossy(&content).to_string();
-            let write_res = fs::write(&file_path, &content)
-                .await
-                .map_err(|e| anyhow::anyhow!(e));
-            if write_res.is_ok() {
-                download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
-            }
-            write_res
-        }
-        _ => fs::write(&file_path, &content)
-            .await
-            .map_err(|e| anyhow::anyhow!(e)),
-    };
-    write_result?;
     debug!("Successfully saved {}", file_path.display());
     Ok(file_path)
 }

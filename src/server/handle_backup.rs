@@ -250,6 +250,7 @@ async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, f
 
     // Zip the output dir
     let (zip_pathbuf, checksum_path) = get_zipped_backup_paths(&state.base_dir, &task_id);
+    info!("Zipping backup to {}", zip_pathbuf.display());
     let start_time = Instant::now();
     match zip_backup(&out_path, &zip_pathbuf) {
         Ok(checksum) => {
