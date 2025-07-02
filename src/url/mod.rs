@@ -17,7 +17,20 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
         return Some(json_content.as_bytes().to_vec());
     }
 
-    // Handle base64 encoded data URLs
+    // Handle SVG utf8 data URLs
+    if url.starts_with("data:image/svg+xml;utf8,") {
+        let svg_content = url.trim_start_matches("data:image/svg+xml;utf8,");
+        return Some(svg_content.as_bytes().to_vec());
+    }
+
+    // Handle SVG base64 data URLs
+    if url.starts_with("data:image/svg+xml;base64,") {
+        let b64 = url.trim_start_matches("data:image/svg+xml;base64,");
+        let data = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
+        return Some(data);
+    }
+
+    // Handle base64 encoded data URLs (generic)
     let parts: Vec<&str> = url.splitn(2, "base64,").collect();
     if parts.len() != 2 {
         return None;
@@ -203,6 +216,24 @@ mod tests {
         assert_eq!(
             get_url(bad_ipfs_url),
             "https://ipfs.io/ipfs/QmdVGrVGuymQRaPxPhVBbCQS2VJ2aZmUMHHubuMnbunTFq"
+        );
+    }
+
+    #[test]
+    fn test_get_data_url_svg() {
+        // SVG base64 (valid minimal SVG)
+        let svg_base64 = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0naHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmcnPjwvc3ZnPg==";
+        let content = get_data_url(svg_base64).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&content),
+            "<svg xmlns='http://www.w3.org/2000/svg'></svg>"
+        );
+        // SVG utf8
+        let svg_utf8 = "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg'></svg>";
+        let content = get_data_url(svg_utf8).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&content),
+            "<svg xmlns='http://www.w3.org/2000/svg'></svg>"
         );
     }
 }

@@ -6,7 +6,7 @@ use tokio::io::AsyncReadExt;
 
 /// List of known media file extensions that we handle
 const KNOWN_EXTENSIONS: &[&str] = &[
-    "png", "jpg", "jpeg", "gif", "webp", "mp3", "mp4", "mov", "mpg", "html", "json", "glb",
+    "png", "jpg", "jpeg", "gif", "webp", "mp3", "mp4", "mov", "mpg", "html", "json", "glb", "svg",
 ];
 
 /// Checks if a path has a known media file extension
@@ -80,7 +80,26 @@ pub fn detect_media_extension(content: &[u8]) -> Option<&'static str> {
         // GLB
         [0x47, 0x4C, 0x42, 0x0D, 0x0A, 0x1A, 0x0A, ..] => Some("glb"),
         [0x67, 0x6C, 0x54, 0x46, 0x02, 0x00, 0x00, 0x00, ..] => Some("glb"),
-        _ => None,
+        // SVG (starts with <svg, <?xml, or <!DOCTYPE svg)
+        [b'<', b's', b'v', b'g', ..] => Some("svg"),
+        [b'<', b'?', b'x', b'm', b'l', ..] => Some("svg"),
+        [b'<', b'!', b'D', b'O', b'C', b'T', b'Y', b'P', b'E', b' ', b's', b'v', b'g', ..] => {
+            Some("svg")
+        }
+        _ => {
+            // Also check for <svg after whitespace or xml declaration
+            let whitespace: &[u8] = b" \t\r\n";
+            let trimmed = content
+                .iter()
+                .skip_while(|b| whitespace.contains(b))
+                .cloned()
+                .collect::<Vec<u8>>();
+            if trimmed.starts_with(b"<svg") {
+                Some("svg")
+            } else {
+                None
+            }
+        }
     }
 }
 
