@@ -213,15 +213,6 @@ async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, f
         return;
     }
 
-    // Prepare output dir
-    if let Err(e) = tokio::fs::create_dir_all(&out_path).await {
-        let mut tasks = state.tasks.lock().await;
-        if let Some(task) = tasks.get_mut(&task_id) {
-            task.status = TaskStatus::Error(format!("Failed to create output dir: {}", e));
-        }
-        return;
-    }
-
     // Build TokenConfig from request
     let mut token_map = std::collections::HashMap::new();
     for entry in tokens {
