@@ -178,7 +178,6 @@ pub async fn fetch_and_save_content(
                 file_path = PathBuf::from(format!("{}.{}", current_path_str, detected_ext));
             }
         }
-        info!("Saving {} (url: {})", file_path.display(), url);
         let write_result = match file_path.extension().unwrap_or_default().to_str() {
             Some("json") => {
                 let json_value: Value = serde_json::from_slice(&content)?;
@@ -202,7 +201,7 @@ pub async fn fetch_and_save_content(
                 .map_err(|e| anyhow::anyhow!(e)),
         };
         write_result?;
-        debug!("Successfully saved {}", file_path.display());
+        info!("Saved {} (data url)", file_path.display());
         return Ok(file_path);
     }
 
@@ -229,6 +228,6 @@ pub async fn fetch_and_save_content(
         }
     }
 
-    debug!("Successfully saved {}", file_path.display());
+    info!("Saved {} (url: {})", file_path.display(), url);
     Ok(file_path)
 }
