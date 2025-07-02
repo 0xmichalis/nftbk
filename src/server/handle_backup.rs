@@ -1,4 +1,4 @@
-use super::{AppState, TaskInfo, TaskStatus};
+use super::{AppState, BackupMetadata, TaskInfo, TaskStatus};
 use crate::api::{BackupRequest, BackupResponse, Tokens};
 use crate::backup::{self, BackupConfig, TokenConfig};
 use crate::hashing::compute_array_sha256;
@@ -11,7 +11,6 @@ use axum::{
 use chrono::Utc;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use serde::Serialize;
 use serde_json;
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
@@ -43,14 +42,6 @@ impl<W: Write, H: Write> Write for TeeWriter<W, H> {
         self.writer.flush()?;
         self.hasher.flush()
     }
-}
-
-#[derive(Serialize, serde::Deserialize)]
-struct BackupMetadata {
-    created_at: String,
-    requestor: String,
-    tokens: Vec<Tokens>,
-    nft_count: usize,
 }
 
 pub async fn handle_backup(

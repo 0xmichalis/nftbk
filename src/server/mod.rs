@@ -9,6 +9,7 @@ use crate::backup::ChainConfig;
 use crate::hashing::compute_file_sha256;
 
 pub mod handle_backup;
+pub mod handle_backup_delete;
 pub mod handle_backups;
 pub mod handle_download;
 pub mod handle_error_log;
@@ -17,11 +18,20 @@ pub mod privy;
 pub mod pruner;
 pub use handle_backup::handle_backup;
 pub use handle_backup::handle_backup_retry;
+pub use handle_backup_delete::handle_backup_delete;
 pub use handle_backups::handle_backups;
 pub use handle_download::handle_download;
 pub use handle_download::handle_download_token;
 pub use handle_error_log::handle_error_log;
 pub use handle_status::handle_status;
+
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct BackupMetadata {
+    pub created_at: String,
+    pub requestor: String,
+    pub tokens: Vec<crate::api::Tokens>,
+    pub nft_count: usize,
+}
 
 #[derive(Debug, Clone)]
 pub enum TaskStatus {

@@ -4,7 +4,7 @@ use axum::middleware::Next;
 use axum::{
     extract::{Request, State},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use clap::Parser;
@@ -23,8 +23,8 @@ use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::privy::verify_privy_jwt;
 use nftbk::server::{
-    handle_backup, handle_backup_retry, handle_backups, handle_download, handle_download_token,
-    handle_error_log, handle_status, AppState,
+    handle_backup, handle_backup_delete, handle_backup_retry, handle_backups, handle_download,
+    handle_download_token, handle_error_log, handle_status, AppState,
 };
 
 #[derive(Parser, Debug)]
@@ -121,6 +121,7 @@ async fn main() {
         )
         .route("/backup/:task_id/error_log", get(handle_error_log))
         .route("/backup/:task_id/retry", post(handle_backup_retry))
+        .route("/backup/:task_id", delete(handle_backup_delete))
         .route("/backups", get(handle_backups))
         .with_state(state.clone());
 
