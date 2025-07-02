@@ -58,16 +58,7 @@ pub async fn handle_backup(
     Extension(requestor): Extension<Option<String>>,
     Json(req): Json<BackupRequest>,
 ) -> impl IntoResponse {
-    // Validate requested chains
-    let configured_chains: HashSet<_> = state.chain_config.0.keys().cloned().collect();
-    let mut unknown_chains = Vec::new();
-    for entry in &req.tokens {
-        if !configured_chains.contains(&entry.chain) {
-            unknown_chains.push(entry.chain.clone());
-        }
-    }
-    if !unknown_chains.is_empty() {
-        let msg = format!("Unknown chains requested: {}", unknown_chains.join(", "));
+    if let Err(msg) = validate_backup_request(&state, &req) {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": msg})),
@@ -185,6 +176,22 @@ pub async fn handle_backup(
         requestor.unwrap_or_default()
     );
     (StatusCode::CREATED, Json(BackupResponse { task_id })).into_response()
+}
+
+fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), String> {
+    // Validate requested chains
+    let configured_chains: HashSet<_> = state.chain_config.0.keys().cloned().collect();
+    let mut unknown_chains = Vec::new();
+    for entry in &req.tokens {
+        if !configured_chains.contains(&entry.chain) {
+            unknown_chains.push(entry.chain.clone());
+        }
+    }
+    if !unknown_chains.is_empty() {
+        let msg = format!("Unknown chains requested: {}", unknown_chains.join(", "));
+        return Err(msg);
+    }
+    Ok(())
 }
 
 async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, force: bool) {
