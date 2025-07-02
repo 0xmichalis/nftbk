@@ -144,3 +144,25 @@ pub async fn check_backup_on_disk(
         _ => None,
     }
 }
+
+/// Returns (status, error) for a given task_id, checking in-memory and on-disk state
+pub async fn get_backup_status_and_error(
+    state: &AppState,
+    task_id: &str,
+    tasks: &std::collections::HashMap<String, TaskInfo>,
+) -> (String, Option<String>) {
+    if let Some(task) = tasks.get(task_id) {
+        match &task.status {
+            TaskStatus::InProgress => ("in_progress".to_string(), None),
+            TaskStatus::Done => ("done".to_string(), None),
+            TaskStatus::Error(e) => ("error".to_string(), Some(e.clone())),
+        }
+    } else if check_backup_on_disk(&state.base_dir, task_id, state.unsafe_skip_checksum_check)
+        .await
+        .is_some()
+    {
+        ("done".to_string(), None)
+    } else {
+        ("expired".to_string(), None)
+    }
+}

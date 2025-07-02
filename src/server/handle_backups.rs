@@ -1,4 +1,4 @@
-use crate::server::{check_backup_on_disk, AppState, TaskStatus};
+use crate::server::{get_backup_status_and_error, AppState};
 use axum::{
     extract::{Extension, State},
     http::StatusCode,
@@ -43,20 +43,7 @@ pub async fn handle_backups(
     let mut results = Vec::new();
     let tasks = state.tasks.lock().await;
     for task_id in &task_ids {
-        let (status, error) = if let Some(task) = tasks.get(task_id) {
-            match &task.status {
-                TaskStatus::InProgress => ("in_progress".to_string(), None),
-                TaskStatus::Done => ("done".to_string(), None),
-                TaskStatus::Error(e) => ("error".to_string(), Some(e.clone())),
-            }
-        } else if check_backup_on_disk(&state.base_dir, task_id, state.unsafe_skip_checksum_check)
-            .await
-            .is_some()
-        {
-            ("done".to_string(), None)
-        } else {
-            ("expired".to_string(), None)
-        };
+        let (status, error) = get_backup_status_and_error(&state, task_id, &tasks).await;
         let log_path = format!("{}/nftbk-{}.log", state.base_dir, task_id);
         let error_log = (tokio::fs::read_to_string(&log_path).await).ok();
         let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
