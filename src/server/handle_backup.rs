@@ -250,21 +250,7 @@ async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, f
 
     // Sync all files and directories to disk before zipping
     info!("Syncing {} to disk before zipping", out_path.display());
-    let mut synced_dirs = HashSet::new();
-    for file in &files_written {
-        if file.is_file() {
-            if let Ok(f) = std::fs::File::open(file) {
-                let _ = f.sync_all();
-            }
-        }
-        if let Some(parent) = file.parent() {
-            if synced_dirs.insert(parent.to_path_buf()) {
-                if let Ok(dir) = std::fs::File::open(parent) {
-                    let _ = dir.sync_all();
-                }
-            }
-        }
-    }
+    sync_files(&files_written);
     info!(
         "Synced {} to disk before zipping ({} files)",
         out_path.display(),
@@ -331,6 +317,24 @@ async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, f
         task.zip_path = Some(zip_pathbuf);
     }
     info!("Backup {} ready", task_id);
+}
+
+fn sync_files(files_written: &[std::path::PathBuf]) {
+    let mut synced_dirs = HashSet::new();
+    for file in files_written {
+        if file.is_file() {
+            if let Ok(f) = std::fs::File::open(file) {
+                let _ = f.sync_all();
+            }
+        }
+        if let Some(parent) = file.parent() {
+            if synced_dirs.insert(parent.to_path_buf()) {
+                if let Ok(dir) = std::fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+            }
+        }
+    }
 }
 
 fn add_dir_recursively<T: Write>(
