@@ -1,10 +1,3 @@
-use axum::extract::State;
-use axum::Json;
-use base64::Engine;
-use chrono;
-use rand::rngs::OsRng;
-use rand::RngCore;
-use serde_json::json;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,6 +19,7 @@ pub use handle_backup::handle_backup;
 pub use handle_backup::handle_backup_retry;
 pub use handle_backups::handle_backups;
 pub use handle_download::handle_download;
+pub use handle_download::handle_download_token;
 pub use handle_error_log::handle_error_log;
 pub use handle_status::handle_status;
 
@@ -149,19 +143,4 @@ pub async fn check_backup_on_disk(
         }
         _ => None,
     }
-}
-
-pub async fn handle_download_token(
-    State(state): axum::extract::State<AppState>,
-    axum::extract::Path(task_id): axum::extract::Path<String>,
-) -> impl axum::response::IntoResponse {
-    let mut bytes = [0u8; 32];
-    OsRng.fill_bytes(&mut bytes);
-    let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
-    let expires_at = chrono::Utc::now().timestamp() as u64 + 600; // 10 minutes
-    {
-        let mut tokens = state.download_tokens.lock().await;
-        tokens.insert(token.clone(), (task_id.clone(), expires_at));
-    }
-    Json(json!({ "token": token, "expires_at": expires_at }))
 }
