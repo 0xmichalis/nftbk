@@ -153,14 +153,17 @@ pub async fn get_backup_status_and_error(
 ) -> (String, Option<String>) {
     if let Some(task) = tasks.get(task_id) {
         match &task.status {
-            TaskStatus::InProgress => ("in_progress".to_string(), None),
-            TaskStatus::Done => ("done".to_string(), None),
-            TaskStatus::Error(e) => ("error".to_string(), Some(e.clone())),
+            TaskStatus::InProgress => return ("in_progress".to_string(), None),
+            TaskStatus::Error(e) => return ("error".to_string(), Some(e.clone())),
+            TaskStatus::Done => { /* fall through to disk check below */ }
         }
-    } else if check_backup_on_disk(&state.base_dir, task_id, state.unsafe_skip_checksum_check)
-        .await
-        .is_some()
-    {
+    }
+    // For Done or missing tasks, check disk
+    let backup_on_disk =
+        check_backup_on_disk(&state.base_dir, task_id, state.unsafe_skip_checksum_check)
+            .await
+            .is_some();
+    if backup_on_disk {
         ("done".to_string(), None)
     } else {
         ("expired".to_string(), None)
