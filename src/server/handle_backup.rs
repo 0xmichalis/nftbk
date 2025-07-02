@@ -1,52 +1,25 @@
-use super::{AppState, BackupMetadata, TaskInfo, TaskStatus};
-use crate::api::{BackupRequest, BackupResponse, Tokens};
-use crate::backup::{self, BackupConfig, TokenConfig};
-use crate::hashing::compute_array_sha256;
-use crate::server::{check_backup_on_disk, get_zipped_backup_paths};
 use axum::{
     extract::{Extension, Json, Path, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use chrono::Utc;
-use flate2::write::GzEncoder;
-use flate2::Compression;
 use serde_json;
-use sha2::{Digest, Sha256};
 use std::collections::HashSet;
-use std::fs;
-use std::io::{self, Write};
-use std::path::Path as StdPath;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
-/// A writer that writes to two destinations: the archive file and a hasher
-struct TeeWriter<W: Write, H: Write> {
-    writer: W,
-    hasher: H,
-}
-
-impl<W: Write, H: Write> TeeWriter<W, H> {
-    fn new(writer: W, hasher: H) -> Self {
-        Self { writer, hasher }
-    }
-}
-
-impl<W: Write, H: Write> Write for TeeWriter<W, H> {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        let n = self.writer.write(buf)?;
-        self.hasher.write_all(&buf[..n])?;
-        Ok(n)
-    }
-    fn flush(&mut self) -> io::Result<()> {
-        self.writer.flush()?;
-        self.hasher.flush()
-    }
-}
+use crate::api::{BackupRequest, BackupResponse, Tokens};
+use crate::backup::{self, BackupConfig, TokenConfig};
+use crate::hashing::compute_array_sha256;
+use crate::server::archive::{get_zipped_backup_paths, zip_backup};
+use crate::server::check_backup_on_disk;
+use crate::server::{AppState, BackupMetadata, TaskInfo, TaskStatus};
 
 pub async fn handle_backup(
     State(state): State<AppState>,
     Extension(requestor): Extension<Option<String>>,
+    headers: HeaderMap,
     Json(req): Json<BackupRequest>,
 ) -> impl IntoResponse {
     if let Err(msg) = validate_backup_request(&state, &req) {
@@ -102,6 +75,15 @@ pub async fn handle_backup(
     );
     drop(tasks); // Release lock before spawning
 
+    // --- User-Agent and Archive Format Selection ---
+    let archive_format = match headers.get("user-agent").and_then(|v| v.to_str().ok()) {
+        Some(ua) if ua.contains("Windows") || ua.contains("Macintosh") || ua.contains("Mac OS") => {
+            "zip".to_string()
+        }
+        Some(ua) if ua.contains("Linux") || ua.contains("X11") => "tar.gz".to_string(),
+        _ => "zip".to_string(), // Default to zip for max compatibility
+    };
+
     // Write metadata file synchronously as part of the HTTP request
     let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum();
     let metadata = BackupMetadata {
@@ -109,6 +91,7 @@ pub async fn handle_backup(
         requestor: requestor.clone().unwrap_or_default(),
         nft_count,
         tokens: req.tokens.clone(),
+        archive_format: archive_format.clone(),
     };
     let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
     if let Err(e) = tokio::fs::write(
@@ -152,19 +135,23 @@ pub async fn handle_backup(
     let state_clone = state.clone();
     let task_id_clone = task_id.clone();
     let tokens = req.tokens.clone();
+    let archive_format_clone = archive_format.clone();
     tokio::task::spawn_blocking(move || {
         tokio::runtime::Handle::current().block_on(run_backup_job(
             state_clone,
             task_id_clone,
             tokens,
             force,
+            archive_format_clone,
         ))
     });
 
     info!(
-        "Started backup task {} (requestor: {})",
+        "Started backup task {} (requestor: {}, count: {}, archive_format: {})",
         task_id,
-        requestor.unwrap_or_default()
+        requestor.unwrap_or_default(),
+        nft_count,
+        archive_format
     );
     (StatusCode::CREATED, Json(BackupResponse { task_id })).into_response()
 }
@@ -185,7 +172,13 @@ fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), 
     Ok(())
 }
 
-async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, force: bool) {
+async fn run_backup_job(
+    state: AppState,
+    task_id: String,
+    tokens: Vec<Tokens>,
+    force: bool,
+    archive_format: String,
+) {
     let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
     let out_path = std::path::PathBuf::from(&out_dir);
 
@@ -198,8 +191,13 @@ async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, f
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // Ignore if not found
             Err(e) => warn!("Failed to delete error log for task {}: {}", task_id, e),
         }
-    } else if let Some(zip_path) =
-        check_backup_on_disk(&state.base_dir, &task_id, state.unsafe_skip_checksum_check).await
+    } else if let Some(zip_path) = check_backup_on_disk(
+        &state.base_dir,
+        &task_id,
+        state.unsafe_skip_checksum_check,
+        &archive_format,
+    )
+    .await
     {
         // Update task state to reflect the existing backup
         let mut tasks = state.tasks.lock().await;
@@ -249,10 +247,11 @@ async fn run_backup_job(state: AppState, task_id: String, tokens: Vec<Tokens>, f
     );
 
     // Zip the output dir
-    let (zip_pathbuf, checksum_path) = get_zipped_backup_paths(&state.base_dir, &task_id);
+    let (zip_pathbuf, checksum_path) =
+        get_zipped_backup_paths(&state.base_dir, &task_id, &archive_format);
     info!("Zipping backup to {}", zip_pathbuf.display());
     let start_time = Instant::now();
-    match zip_backup(&out_path, &zip_pathbuf) {
+    match zip_backup(&out_path, &zip_pathbuf, archive_format) {
         Ok(checksum) => {
             info!(
                 "Zipped backup at {} in {:?}s",
@@ -298,45 +297,6 @@ fn sync_files(files_written: &[std::path::PathBuf]) {
             }
         }
     }
-}
-
-fn zip_backup(out_path: &std::path::Path, zip_path: &std::path::Path) -> Result<String, String> {
-    let zip_path_str = zip_path.to_str().unwrap();
-    let tar_gz =
-        fs::File::create(zip_path_str).map_err(|e| format!("Failed to create zip: {}", e))?;
-    let mut hasher = Sha256::new();
-    let tee_writer = TeeWriter::new(tar_gz, &mut hasher);
-    let enc = GzEncoder::new(tee_writer, Compression::default());
-    let mut tar = tar::Builder::new(enc);
-    if let Err(e) = add_dir_recursively(&mut tar, out_path, out_path) {
-        return Err(format!("Failed to tar dir: {}", e));
-    }
-    let enc = tar
-        .into_inner()
-        .map_err(|e| format!("Failed to finish tar: {}", e))?;
-    enc.finish()
-        .map_err(|e| format!("Failed to encode tar: {}", e))?;
-    let checksum = format!("{:x}", hasher.finalize());
-    Ok(checksum)
-}
-
-fn add_dir_recursively<T: Write>(
-    tar: &mut tar::Builder<T>,
-    src_dir: &StdPath,
-    base: &StdPath,
-) -> std::io::Result<()> {
-    for entry in fs::read_dir(src_dir)? {
-        let entry = entry?;
-        let path = entry.path();
-        let rel_path = path.strip_prefix(base).unwrap();
-        if path.is_dir() {
-            tar.append_dir(rel_path, &path)?;
-            add_dir_recursively(tar, &path, base)?;
-        } else if path.is_file() {
-            tar.append_path_with_name(&path, rel_path)?;
-        }
-    }
-    Ok(())
 }
 
 pub async fn handle_backup_retry(
@@ -419,6 +379,7 @@ pub async fn handle_backup_retry(
             task_id_clone,
             tokens,
             true,
+            metadata.archive_format.clone(),
         ))
     });
     info!(

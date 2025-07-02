@@ -64,6 +64,18 @@ pub async fn handle_download(
 }
 
 async fn serve_zip_file_for_token(state: &AppState, task_id: &str) -> Response {
+    // Read archive_format from metadata.json
+    let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
+    let archive_format = match tokio::fs::read_to_string(&metadata_path).await {
+        Ok(content) => {
+            let v: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
+            v.get("archive_format")
+                .and_then(|s| s.as_str())
+                .unwrap_or("zip")
+                .to_string()
+        }
+        Err(_) => "zip".to_string(),
+    };
     // Try to serve from memory first
     let tasks = state.tasks.lock().await;
     if let Some(task) = tasks.get(task_id) {
@@ -77,19 +89,24 @@ async fn serve_zip_file_for_token(state: &AppState, task_id: &str) -> Response {
             )
                 .into_response();
         };
-        return serve_zip_file(zip_path, task_id).await;
+        return serve_zip_file(zip_path, task_id, &archive_format).await;
     }
     drop(tasks);
     // If not in memory, check if backup exists on disk
-    if let Some(zip_path) =
-        check_backup_on_disk(&state.base_dir, task_id, state.unsafe_skip_checksum_check).await
+    if let Some(zip_path) = check_backup_on_disk(
+        &state.base_dir,
+        task_id,
+        state.unsafe_skip_checksum_check,
+        &archive_format,
+    )
+    .await
     {
-        return serve_zip_file(&zip_path, task_id).await;
+        return serve_zip_file(&zip_path, task_id, &archive_format).await;
     }
     (StatusCode::NOT_FOUND, Body::from("Task not found")).into_response()
 }
 
-async fn serve_zip_file(zip_path: &PathBuf, task_id: &str) -> Response {
+async fn serve_zip_file(zip_path: &PathBuf, task_id: &str, archive_format: &str) -> Response {
     let file = match File::open(zip_path).await {
         Ok(file) => file,
         Err(_) => {
@@ -114,10 +131,14 @@ async fn serve_zip_file(zip_path: &PathBuf, task_id: &str) -> Response {
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
     let mut headers = HeaderMap::new();
-    headers.insert(header::CONTENT_TYPE, "application/gzip".parse().unwrap());
+    let (content_type, ext) = match archive_format {
+        "zip" => ("application/zip", "zip"),
+        _ => ("application/gzip", "tar.gz"),
+    };
+    headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
     headers.insert(
         header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"{}.tar.gz\"", task_id)
+        format!("attachment; filename=\"nftbk-{}.{}\"", task_id, ext)
             .parse()
             .unwrap(),
     );

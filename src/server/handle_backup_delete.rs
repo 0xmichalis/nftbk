@@ -1,4 +1,3 @@
-use crate::server::{get_backup_status_and_error, AppState, BackupMetadata};
 use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
@@ -8,6 +7,9 @@ use axum::{
 use serde_json;
 use tracing::{error, info, warn};
 
+use crate::server::archive::get_zipped_backup_paths;
+use crate::server::{get_backup_status_and_error, AppState, BackupMetadata};
+
 pub async fn handle_backup_delete(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
@@ -15,8 +17,6 @@ pub async fn handle_backup_delete(
 ) -> impl IntoResponse {
     let base_dir = &state.base_dir;
     let metadata_path = format!("{}/nftbk-{}-metadata.json", base_dir, &task_id);
-    let tar_path = format!("{}/nftbk-{}.tar.gz", base_dir, &task_id);
-    let tar_sha256_path = format!("{}.sha256", tar_path);
     let log_path = format!("{}/nftbk-{}.log", base_dir, &task_id);
     let backup_dir = format!("{}/nftbk-{}", base_dir, &task_id);
 
@@ -71,10 +71,13 @@ pub async fn handle_backup_delete(
 
     let mut errors = Vec::new();
     let mut deleted_anything = false;
+    let (archive_path, archive_checksum_path) =
+        get_zipped_backup_paths(&state.base_dir, &task_id, &metadata.archive_format);
 
     // Check task status using get_backup_status_and_error
     let tasks = state.tasks.lock().await;
-    let (status, _error) = get_backup_status_and_error(&state, &task_id, &tasks).await;
+    let (status, _error) =
+        get_backup_status_and_error(&state, &task_id, &tasks, &metadata.archive_format).await;
     drop(tasks);
     if status == "in_progress" {
         return (
@@ -85,7 +88,11 @@ pub async fn handle_backup_delete(
     }
 
     // Try to delete files (except metadata, should be deleted last)
-    for path in [&tar_path, &tar_sha256_path, &log_path] {
+    for path in [
+        &archive_path,
+        &archive_checksum_path,
+        std::path::Path::new(&log_path),
+    ] {
         match tokio::fs::remove_file(path).await {
             Ok(_) => {
                 deleted_anything = true;
@@ -94,8 +101,8 @@ pub async fn handle_backup_delete(
                 if e.kind() == std::io::ErrorKind::NotFound {
                     // not found is fine
                 } else {
-                    warn!("Failed to delete file {}: {}", path, e);
-                    errors.push(format!("Failed to delete file {}: {}", path, e));
+                    warn!("Failed to delete file {}: {}", path.display(), e);
+                    errors.push(format!("Failed to delete file {}: {}", path.display(), e));
                 }
             }
         }

@@ -8,6 +8,7 @@ use tracing::{debug, info, warn};
 use crate::backup::ChainConfig;
 use crate::hashing::compute_file_sha256;
 
+pub mod archive;
 pub mod handle_backup;
 pub mod handle_backup_delete;
 pub mod handle_backups;
@@ -29,8 +30,9 @@ pub use handle_status::handle_status;
 pub struct BackupMetadata {
     pub created_at: String,
     pub requestor: String,
-    pub tokens: Vec<crate::api::Tokens>,
+    pub archive_format: String,
     pub nft_count: usize,
+    pub tokens: Vec<crate::api::Tokens>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,18 +100,14 @@ impl AppState {
     }
 }
 
-pub fn get_zipped_backup_paths(base_dir: &str, task_id: &str) -> (PathBuf, PathBuf) {
-    let zip_path = PathBuf::from(format!("{}/nftbk-{}.tar.gz", base_dir, task_id));
-    let checksum_path = PathBuf::from(format!("{}.sha256", zip_path.display()));
-    (zip_path, checksum_path)
-}
-
 pub async fn check_backup_on_disk(
     base_dir: &str,
     task_id: &str,
     unsafe_skip_checksum_check: bool,
+    archive_format: &str,
 ) -> Option<PathBuf> {
-    let (path, checksum_path) = get_zipped_backup_paths(base_dir, task_id);
+    let (path, checksum_path) =
+        crate::server::archive::get_zipped_backup_paths(base_dir, task_id, archive_format);
 
     // First check if both files exist
     match (
@@ -160,6 +158,7 @@ pub async fn get_backup_status_and_error(
     state: &AppState,
     task_id: &str,
     tasks: &std::collections::HashMap<String, TaskInfo>,
+    archive_format: &str,
 ) -> (String, Option<String>) {
     if let Some(task) = tasks.get(task_id) {
         match &task.status {
@@ -169,10 +168,14 @@ pub async fn get_backup_status_and_error(
         }
     }
     // For Done or missing tasks, check disk
-    let backup_on_disk =
-        check_backup_on_disk(&state.base_dir, task_id, state.unsafe_skip_checksum_check)
-            .await
-            .is_some();
+    let backup_on_disk = check_backup_on_disk(
+        &state.base_dir,
+        task_id,
+        state.unsafe_skip_checksum_check,
+        archive_format,
+    )
+    .await
+    .is_some();
     if backup_on_disk {
         ("done".to_string(), None)
     } else {

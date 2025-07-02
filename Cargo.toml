@@ -47,6 +47,7 @@ rand = "0.8"
 urlencoding = "2.1"
 async-compression = { version = "0.4", features = ["tokio", "futures-io", "gzip"] }
 futures-util = "0.3"
+zip = "0.6"
 
 [lib]
 name = "nftbk"
