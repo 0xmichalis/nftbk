@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::Path;
@@ -70,7 +71,7 @@ where
                     e
                 );
                 if exit_on_error {
-                    return Err(e);
+                    return Err(anyhow!(msg));
                 }
                 error!("{}", msg);
                 error_log.push(msg);
@@ -91,7 +92,7 @@ where
                     e
                 );
                 if exit_on_error {
-                    return Err(e);
+                    return Err(anyhow!(msg));
                 }
                 error!("{}", msg);
                 error_log.push(msg);
@@ -131,7 +132,7 @@ where
                         e
                     );
                     if exit_on_error {
-                        return Err(e);
+                        return Err(anyhow!(msg));
                     }
                     error!("{}", msg);
                     error_log.push(msg);
@@ -160,7 +161,7 @@ where
                     e
                 );
                 if exit_on_error {
-                    return Err(e);
+                    return Err(anyhow!(msg));
                 }
                 error!("{}", msg);
                 error_log.push(msg);
