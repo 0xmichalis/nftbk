@@ -100,6 +100,17 @@ async fn serve_zip_file(zip_path: &PathBuf, task_id: &str) -> Response {
                 .into_response();
         }
     };
+    // Get file size for Content-Length
+    let file_size = match tokio::fs::metadata(zip_path).await {
+        Ok(meta) => meta.len(),
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Body::from("Failed to get file metadata"),
+            )
+                .into_response();
+        }
+    };
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
     let mut headers = HeaderMap::new();
@@ -109,6 +120,10 @@ async fn serve_zip_file(zip_path: &PathBuf, task_id: &str) -> Response {
         format!("attachment; filename=\"{}.tar.gz\"", task_id)
             .parse()
             .unwrap(),
+    );
+    headers.insert(
+        header::CONTENT_LENGTH,
+        file_size.to_string().parse().unwrap(),
     );
     (StatusCode::OK, headers, body).into_response()
 }
