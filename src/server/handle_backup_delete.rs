@@ -1,4 +1,4 @@
-use crate::server::{AppState, BackupMetadata};
+use crate::server::{get_backup_status_and_error, AppState, BackupMetadata};
 use axum::{
     extract::{Extension, Path, State},
     http::StatusCode,
@@ -16,8 +16,9 @@ pub async fn handle_backup_delete(
     let base_dir = &state.base_dir;
     let metadata_path = format!("{}/nftbk-{}-metadata.json", base_dir, &task_id);
     let tar_path = format!("{}/nftbk-{}.tar.gz", base_dir, &task_id);
+    let tar_sha256_path = format!("{}.sha256", tar_path);
     let log_path = format!("{}/nftbk-{}.log", base_dir, &task_id);
-    let backup_dir = format!("{}/{}", base_dir, &task_id);
+    let backup_dir = format!("{}/nftbk-{}", base_dir, &task_id);
 
     // Require requestor
     let requestor_str = match requestor {
@@ -71,8 +72,20 @@ pub async fn handle_backup_delete(
     let mut errors = Vec::new();
     let mut deleted_anything = false;
 
+    // Check task status using get_backup_status_and_error
+    let tasks = state.tasks.lock().await;
+    let (status, _error) = get_backup_status_and_error(&state, &task_id, &tasks).await;
+    drop(tasks);
+    if status == "in_progress" {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "Can only delete completed tasks"})),
+        )
+            .into_response();
+    }
+
     // Try to delete files (except metadata, should be deleted last)
-    for path in [&tar_path, &log_path] {
+    for path in [&tar_path, &tar_sha256_path, &log_path] {
         match tokio::fs::remove_file(path).await {
             Ok(_) => {
                 deleted_anything = true;
