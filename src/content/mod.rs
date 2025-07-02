@@ -103,31 +103,27 @@ pub async fn stream_http_to_file(
     response: reqwest::Response,
     file_path: &Path,
 ) -> anyhow::Result<PathBuf> {
-    use tokio::io::AsyncReadExt;
     let stream = response
         .bytes_stream()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
     let mut reader = StreamReader::new(stream);
-    let mut buffer = Vec::new();
-    let mut prefix = [0u8; 32];
-    let n = reader.read(&mut prefix).await?;
-    buffer.extend_from_slice(&prefix[..n]);
 
-    // Detect extension
+    // Use the helper to detect extension
     let mut file_path = file_path.to_path_buf();
+    let (detected_ext, prefix_buf) = extensions::detect_extension_from_stream(&mut reader).await;
     if !extensions::has_known_extension(&file_path) {
-        if let Some(detected_ext) = extensions::detect_media_extension(&buffer) {
+        if let Some(detected_ext) = detected_ext {
             let current_path_str = file_path.to_string_lossy();
             debug!("Appending detected media extension: {}", detected_ext);
             file_path = PathBuf::from(format!("{}.{}", current_path_str, detected_ext));
         }
     }
 
-    // Create file and write the buffer
+    // Create file and write the buffer (now we have the prefix buffer to write first)
     let mut file = tokio::fs::File::create(&file_path).await?;
-    file.write_all(&buffer).await?;
-
-    // Stream the rest
+    if !prefix_buf.is_empty() {
+        file.write_all(&prefix_buf).await?;
+    }
     tokio::io::copy(&mut reader, &mut file).await?;
     file.flush().await?;
 

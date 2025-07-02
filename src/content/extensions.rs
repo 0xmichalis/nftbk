@@ -2,6 +2,7 @@ use anyhow::Result;
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tokio::io::AsyncReadExt;
 
 /// List of known media file extensions that we handle
 const KNOWN_EXTENSIONS: &[&str] = &[
@@ -81,4 +82,17 @@ pub fn detect_media_extension(content: &[u8]) -> Option<&'static str> {
         [0x67, 0x6C, 0x54, 0x46, 0x02, 0x00, 0x00, 0x00, ..] => Some("glb"),
         _ => None,
     }
+}
+
+/// Reads the first 32 bytes from a stream and detects the media extension, returning both the extension and the buffer read.
+pub async fn detect_extension_from_stream<R: tokio::io::AsyncRead + Unpin>(
+    reader: &mut R,
+) -> (Option<&'static str>, Vec<u8>) {
+    let mut buf = [0u8; 32];
+    let n = match reader.read(&mut buf).await {
+        Ok(n) => n,
+        Err(_) => return (None, Vec::new()),
+    };
+    let ext = detect_media_extension(&buf[..n]);
+    (ext, buf[..n].to_vec())
 }
