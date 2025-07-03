@@ -5,17 +5,20 @@ use flate2::read::GzDecoder;
 use prettytable::{row, Table};
 use reqwest::Client;
 use std::env;
+use std::fs::File;
 use std::io::Cursor;
 use std::path::PathBuf;
 use tar::Archive;
 use tokio::fs;
 use tracing::warn;
+use zip::ZipArchive;
 
 use nftbk::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
 use nftbk::backup::{backup_from_config, BackupConfig, ChainConfig, TokenConfig};
 use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
+use nftbk::server::archive::archive_format_from_user_agent;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -59,6 +62,10 @@ struct Args {
     /// List existing backups in the server
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     list: bool,
+
+    /// User-Agent to send to the server (affects archive format)
+    #[arg(long, default_value = "Linux")]
+    user_agent: String,
 }
 
 async fn backup_from_server(
@@ -66,6 +73,7 @@ async fn backup_from_server(
     server_address: String,
     output_path: Option<PathBuf>,
     force: bool,
+    user_agent: String,
 ) -> Result<()> {
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
     let client = Client::new();
@@ -75,6 +83,7 @@ async fn backup_from_server(
         &client,
         force,
         auth_token.as_deref(),
+        &user_agent,
     )
     .await?;
     println!("Task ID: {}", backup_resp.task_id);
@@ -95,6 +104,7 @@ async fn backup_from_server(
         &backup_resp.task_id,
         output_path.as_ref(),
         auth_token.as_deref(),
+        &archive_format_from_user_agent(&user_agent),
     )
     .await;
 }
@@ -105,6 +115,7 @@ async fn request_backup(
     client: &Client,
     force: bool,
     auth_token: Option<&str>,
+    user_agent: &str,
 ) -> Result<BackupResponse> {
     let mut backup_req = BackupRequest {
         tokens: Vec::new(),
@@ -123,6 +134,7 @@ async fn request_backup(
         server
     );
     let mut req = client.post(format!("{}/backup", server)).json(&backup_req);
+    req = req.header("User-Agent", user_agent);
     if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
         req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
     }
@@ -223,6 +235,7 @@ async fn download_backup(
     task_id: &str,
     output_path: Option<&PathBuf>,
     _auth_token: Option<&str>,
+    archive_format: &str,
 ) -> Result<()> {
     // Step 1: Get download token
     let token_url = format!(
@@ -255,25 +268,53 @@ async fn download_backup(
         task_id,
         urlencoding::encode(download_token)
     );
-    println!("Downloading zip ...");
+    println!("Downloading archive ...");
     let resp = client
         .get(&download_url)
         .send()
         .await
-        .context("Failed to download zip")?;
+        .context("Failed to download archive")?;
     if !resp.status().is_success() {
-        anyhow::bail!("Failed to download zip: {}", resp.status());
+        anyhow::bail!("Failed to download archive: {}", resp.status());
     }
-    let bytes = resp.bytes().await.context("Failed to read zip bytes")?;
+    let bytes = resp.bytes().await.context("Failed to read archive bytes")?;
     let output_path = output_path.cloned().unwrap_or_else(|| PathBuf::from("."));
 
     println!("Extracting backup to {}...", output_path.display());
-    // Extract tar.gz from bytes
-    let gz = GzDecoder::new(Cursor::new(bytes));
-    let mut archive = Archive::new(gz);
-    archive
-        .unpack(&output_path)
-        .context("Failed to extract backup archive")?;
+    match archive_format {
+        "tar.gz" => {
+            let gz = GzDecoder::new(Cursor::new(bytes));
+            let mut archive = Archive::new(gz);
+            archive
+                .unpack(&output_path)
+                .context("Failed to extract backup archive (tar.gz)")?;
+        }
+        "zip" => {
+            let mut zip =
+                ZipArchive::new(Cursor::new(bytes)).context("Failed to read zip archive")?;
+            for i in 0..zip.len() {
+                let mut file = zip.by_index(i).context("Failed to access file in zip")?;
+                let outpath = match file.enclosed_name() {
+                    Some(path) => output_path.join(path),
+                    None => continue,
+                };
+                if file.name().ends_with('/') {
+                    std::fs::create_dir_all(&outpath)
+                        .context("Failed to create directory from zip")?;
+                } else {
+                    if let Some(p) = outpath.parent() {
+                        std::fs::create_dir_all(p)
+                            .context("Failed to create parent directory for zip file")?;
+                    }
+                    let mut outfile =
+                        File::create(&outpath).context("Failed to create file from zip")?;
+                    std::io::copy(&mut file, &mut outfile)
+                        .context("Failed to extract file from zip")?;
+                }
+            }
+        }
+        _ => anyhow::bail!("Unknown archive format: {}", archive_format),
+    }
     println!("Backup extracted to {}", output_path.display());
     Ok(())
 }
@@ -340,6 +381,7 @@ async fn main() -> Result<()> {
             args.server_address,
             args.output_path,
             args.force,
+            args.user_agent,
         )
         .await;
     }

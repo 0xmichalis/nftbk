@@ -145,3 +145,16 @@ pub fn get_zipped_backup_paths(
     let checksum_path = PathBuf::from(format!("{}.sha256", zip_path.display()));
     (zip_path, checksum_path)
 }
+
+pub fn archive_format_from_user_agent(user_agent: &str) -> String {
+    if user_agent.contains("Windows")
+        || user_agent.contains("Macintosh")
+        || user_agent.contains("Mac OS")
+    {
+        "zip".to_string()
+    } else if user_agent.contains("Linux") || user_agent.contains("X11") {
+        "tar.gz".to_string()
+    } else {
+        "zip".to_string() // Default to zip for max compatibility
+    }
+}

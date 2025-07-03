@@ -12,7 +12,7 @@ use tracing::{debug, error, info, warn};
 use crate::api::{BackupRequest, BackupResponse, Tokens};
 use crate::backup::{self, BackupConfig, TokenConfig};
 use crate::hashing::compute_array_sha256;
-use crate::server::archive::{get_zipped_backup_paths, zip_backup};
+use crate::server::archive::{archive_format_from_user_agent, get_zipped_backup_paths, zip_backup};
 use crate::server::check_backup_on_disk;
 use crate::server::{AppState, BackupMetadata, TaskInfo, TaskStatus};
 
@@ -75,14 +75,12 @@ pub async fn handle_backup(
     );
     drop(tasks); // Release lock before spawning
 
-    // --- User-Agent and Archive Format Selection ---
-    let archive_format = match headers.get("user-agent").and_then(|v| v.to_str().ok()) {
-        Some(ua) if ua.contains("Windows") || ua.contains("Macintosh") || ua.contains("Mac OS") => {
-            "zip".to_string()
-        }
-        Some(ua) if ua.contains("Linux") || ua.contains("X11") => "tar.gz".to_string(),
-        _ => "zip".to_string(), // Default to zip for max compatibility
-    };
+    // Select archive format based on user-agent
+    let archive_format = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .map(archive_format_from_user_agent)
+        .unwrap_or_else(|| "zip".to_string());
 
     // Write metadata file synchronously as part of the HTTP request
     let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum();
