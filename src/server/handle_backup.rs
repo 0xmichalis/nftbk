@@ -332,7 +332,7 @@ pub async fn handle_backup_retry(
                 .into_response();
         }
     };
-    let metadata: BackupMetadata = match serde_json::from_slice(&metadata_bytes) {
+    let mut metadata: BackupMetadata = match serde_json::from_slice(&metadata_bytes) {
         Ok(m) => m,
         Err(_) => {
             return (
@@ -352,6 +352,18 @@ pub async fn handle_backup_retry(
             Json(serde_json::json!({"error": "Requestor does not match task owner"})),
         )
             .into_response();
+    }
+
+    // Bump created_at to now and update metadata file
+    // TODO: Should probably rename to requested_at
+    metadata.created_at = Utc::now().to_rfc3339();
+    if let Err(e) = tokio::fs::write(
+        &metadata_path,
+        serde_json::to_vec_pretty(&metadata).unwrap(),
+    )
+    .await
+    {
+        warn!("Failed to update created_at in metadata: {}", e);
     }
 
     // Set status to in progress
