@@ -1,0 +1,3 @@
+nftbk.tselementes.tech {
+    reverse_proxy nftbk-server:8080
+} 

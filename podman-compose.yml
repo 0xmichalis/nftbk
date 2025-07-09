@@ -3,11 +3,28 @@ services:
   nftbk-server:
     image: ghcr.io/0xmichalis/nftbk-server:latest
     env_file:
-        - .env
-    ports:
-      - "80:8080"
+      - .env
+    expose:
+      - "8080"
     volumes:
       - ./data:/app/data
-    user: "65532:65532"  # nonroot:nonroot in distroless images
+    user: "65532:65532"
     command: ["/app/nftbk-server", "--listen-address", "0.0.0.0:8080", "--unsafe-skip-checksum-check", "true", "--base-dir", "/app/data", "--pruner-retention-days", "3"]
     restart: unless-stopped
+
+  caddy:
+    image: caddy:latest
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - nftbk-server
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
