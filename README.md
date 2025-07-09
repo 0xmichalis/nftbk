@@ -28,7 +28,7 @@ USERNAME=michalis \
 
 ### Privy support
 
-The server supports authenticating Privy JWT tokens, if both a `PRIVY_APP_ID` and a `PRIVY_VERIFICATION_KEY` are provided in its environment. For the key, set `\\n` as newlines so the  key can be set within a single line to work around a limitation in multine support that the latest released `dotenv` version has.
+The server supports authenticating Privy JWT tokens, if both a `PRIVY_APP_ID` and a `PRIVY_VERIFICATION_KEY` are provided in its environment. For the key, set `\n` as newlines so the  key can be set within a single line to work around a limitation in multine support that the latest released `dotenv` version has.
 
 ## Run
 
