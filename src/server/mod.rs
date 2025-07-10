@@ -136,7 +136,7 @@ where
             .read(true)
             .write(true)
             .create(true)
-            .truncate(true)
+            .truncate(false)
             .open(&file_path)?;
         file.lock_exclusive()?;
         // Read current vec
