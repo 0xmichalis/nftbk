@@ -13,8 +13,10 @@ use crate::api::{BackupRequest, BackupResponse, Tokens};
 use crate::backup::{self, BackupConfig, TokenConfig};
 use crate::hashing::compute_array_sha256;
 use crate::server::archive::{archive_format_from_user_agent, get_zipped_backup_paths, zip_backup};
-use crate::server::check_backup_on_disk;
-use crate::server::{AppState, BackupMetadata, TaskInfo, TaskStatus};
+use crate::server::{
+    check_backup_on_disk, locked_update_string_vec_json_file, AppState, BackupMetadata, TaskInfo,
+    TaskStatus,
+};
 
 pub async fn handle_backup(
     State(state): State<AppState>,
@@ -113,18 +115,18 @@ pub async fn handle_backup(
             warn!("Failed to create by_requestor dir: {}", e);
         } else {
             let user_file = format!("{}/{}.json", by_requestor_dir, requestor_str);
-            let mut task_ids: Vec<String> = match tokio::fs::read_to_string(&user_file).await {
-                Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-                Err(_) => Vec::new(),
-            };
-            if !task_ids.contains(&task_id) {
-                task_ids.push(task_id.clone());
-                if let Err(e) =
-                    tokio::fs::write(&user_file, serde_json::to_vec_pretty(&task_ids).unwrap())
-                        .await
-                {
-                    warn!("Failed to update user index for {}: {}", requestor_str, e);
+            let task_id_clone = task_id.clone();
+            let result = locked_update_string_vec_json_file(&user_file, move |task_ids| {
+                if !task_ids.contains(&task_id_clone) {
+                    task_ids.push(task_id_clone);
+                    true
+                } else {
+                    false
                 }
+            })
+            .await;
+            if let Err(e) = result {
+                warn!("Failed to update user index for {}: {}", requestor_str, e);
             }
         }
     }

@@ -1,4 +1,7 @@
+use fs2::FileExt;
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
@@ -98,6 +101,43 @@ impl AppState {
             download_tokens: Arc::new(Mutex::new(HashMap::new())),
         }
     }
+}
+
+/// Helper for locked read-modify-write of a JSON Vec<String> file.
+/// The closure receives the current Vec<String> and returns the new Vec<String>.
+pub async fn locked_update_string_vec_json_file<F, R>(
+    file_path: &str,
+    modify: F,
+) -> Result<R, std::io::Error>
+where
+    F: FnOnce(&mut Vec<String>) -> R + Send + 'static,
+    R: Send + 'static,
+{
+    let file_path = file_path.to_string();
+    tokio::task::spawn_blocking(move || {
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&file_path)?;
+        file.lock_exclusive()?;
+        // Read current vec
+        let mut content = String::new();
+        file.seek(SeekFrom::Start(0))?;
+        file.read_to_string(&mut content)?;
+        let mut vec: Vec<String> = serde_json::from_str(&content).unwrap_or_default();
+        let result = modify(&mut vec);
+        // Write updated vec
+        let new_content = serde_json::to_string_pretty(&vec).unwrap();
+        file.set_len(0)?;
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(new_content.as_bytes())?;
+        file.flush()?;
+        fs2::FileExt::unlock(&file)?;
+        Ok(result)
+    })
+    .await?
 }
 
 pub async fn check_backup_on_disk(

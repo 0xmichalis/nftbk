@@ -124,35 +124,25 @@ pub async fn handle_backup_delete(
     // Remove from by_requestor index
     let by_requestor_dir = format!("{}/by_requestor", base_dir);
     let user_file = format!("{}/{}.json", by_requestor_dir, requestor_str);
-    match tokio::fs::read_to_string(&user_file).await {
-        Ok(content) => {
-            let mut task_ids: Vec<String> = serde_json::from_str(&content).unwrap_or_default();
-            let orig_len = task_ids.len();
-            task_ids.retain(|tid| tid != &task_id);
-            if task_ids.len() != orig_len {
+    let task_id_clone = task_id.clone();
+    let result = crate::server::locked_update_string_vec_json_file(&user_file, move |task_ids| {
+        let orig_len = task_ids.len();
+        task_ids.retain(|tid| tid != &task_id_clone);
+        task_ids.len() != orig_len
+    })
+    .await;
+    match result {
+        Ok(deleted) => {
+            if deleted {
                 deleted_anything = true;
-                if let Err(e) =
-                    tokio::fs::write(&user_file, serde_json::to_vec_pretty(&task_ids).unwrap())
-                        .await
-                {
-                    warn!("Failed to update user index for {}: {}", requestor_str, e);
-                    errors.push(format!(
-                        "Failed to update user index for {}: {}",
-                        requestor_str, e
-                    ));
-                }
             }
         }
         Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                // not found is fine
-            } else {
-                warn!("Failed to read user index for {}: {}", requestor_str, e);
-                errors.push(format!(
-                    "Failed to read user index for {}: {}",
-                    requestor_str, e
-                ));
-            }
+            warn!("Failed to update user index for {}: {}", requestor_str, e);
+            errors.push(format!(
+                "Failed to update user index for {}: {}",
+                requestor_str, e
+            ));
         }
     }
 
