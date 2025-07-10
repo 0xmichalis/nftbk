@@ -49,9 +49,32 @@ async fn get_filename(
         )
     };
 
-    let file_path = dir_path.join(&filename);
+    // Sanitize filename to prevent path traversal
+    let sanitized_filename = sanitize_filename(&filename);
+
+    let file_path = dir_path.join(&sanitized_filename);
 
     Ok(file_path)
+}
+
+/// Remove any path traversal or separator characters from a filename
+fn sanitize_filename(filename: &str) -> String {
+    // Remove any path separators and parent directory references
+    let mut sanitized = String::new();
+    for part in filename.split(['/', '\\'].as_ref()) {
+        if part == ".." || part == "." || part.is_empty() {
+            continue;
+        }
+        if !sanitized.is_empty() {
+            sanitized.push('_');
+        }
+        sanitized.push_str(part);
+    }
+    if sanitized.is_empty() {
+        "file".to_string()
+    } else {
+        sanitized
+    }
 }
 
 async fn try_exists(path: &Path) -> Result<Option<PathBuf>> {
