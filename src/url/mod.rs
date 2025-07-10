@@ -43,25 +43,46 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
     Some(data)
 }
 
+/// Returns all possible IPFS gateway URLs for a given IPFS URL/hash
+fn get_ipfs_gateway_urls(url: &str) -> Vec<String> {
+    let ipfs_path = if url.starts_with("ipfs://ipfs/") {
+        url.trim_start_matches("ipfs://ipfs/")
+    } else if url.starts_with("ipfs://") {
+        url.trim_start_matches("ipfs://")
+    } else if (url.starts_with("Qm") && url.len() == 46) || url.starts_with("bafy") {
+        url
+    } else {
+        return vec![url.to_string()];
+    };
+    IPFS_GATEWAYS
+        .iter()
+        .map(|gw| format!("{}/ipfs/{}", gw.trim_end_matches('/'), ipfs_path))
+        .collect()
+}
+
 /// Converts IPFS URLs to use a gateway, otherwise returns the original URL
 pub fn get_url(url: &str) -> String {
-    // Handle ipfs:// protocol URLs
-    if url.starts_with("ipfs://ipfs/") {
-        // Handle erroneous ipfs://ipfs/... URLs
-        // Saw this pattern in the Makersplace contract
-        format!(
-            "https://ipfs.io/ipfs/{}",
-            url.trim_start_matches("ipfs://ipfs/")
+    get_ipfs_gateway_urls(url)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| url.to_string())
+}
+
+/// Returns all possible gateway URLs for the given URL, or None if not an IPFS path.
+pub fn all_ipfs_gateway_urls(url: &str) -> Option<Vec<String>> {
+    let lower = url.to_ascii_lowercase();
+    if let Some(idx) = lower.find("/ipfs/") {
+        let path = &url[idx..];
+        let end = path.find(&['?', '#'][..]).unwrap_or(path.len());
+        let ipfs_path = &path[..end];
+        Some(
+            IPFS_GATEWAYS
+                .iter()
+                .map(|gw| format!("{}{}", gw.trim_end_matches('/'), ipfs_path))
+                .collect(),
         )
-    } else if url.starts_with("ipfs://") {
-        format!("https://ipfs.io/ipfs/{}", url.trim_start_matches("ipfs://"))
-    }
-    // Handle raw IPFS hashes (Qm... or bafy... format)
-    // TODO: Use a proper IPFS library to validate formats
-    else if url.starts_with("Qm") && url.len() == 46 || url.starts_with("bafy") {
-        format!("https://ipfs.io/ipfs/{}", url)
     } else {
-        url.to_string()
+        None
     }
 }
 
@@ -76,6 +97,15 @@ pub fn get_last_path_segment(url: &str, fallback: &str) -> String {
         })
         .unwrap_or_else(|| fallback.to_string())
 }
+
+/// List of fallback IPFS gateways to try, in order.
+pub const IPFS_GATEWAYS: &[&str] = &[
+    "https://ipfs.io",
+    "https://cloudflare-ipfs.com",
+    "https://gateway.pinata.cloud",
+    "https://nftstorage.link",
+    "https://cf-ipfs.com",
+];
 
 #[cfg(test)]
 mod tests {
@@ -235,5 +265,54 @@ mod tests {
             String::from_utf8_lossy(&content),
             "<svg xmlns='http://www.w3.org/2000/svg'></svg>"
         );
+    }
+
+    #[test]
+    fn test_get_ipfs_gateway_urls_variants() {
+        let valid_qm = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+        let expected: Vec<String> = IPFS_GATEWAYS
+            .iter()
+            .map(|gw| format!("{}/ipfs/{}", gw.trim_end_matches('/'), valid_qm))
+            .collect();
+
+        let ipfs_url = &format!("ipfs://{}", valid_qm);
+        let urls = get_ipfs_gateway_urls(ipfs_url);
+        assert_eq!(urls, expected);
+
+        let ipfs_url2 = &format!("ipfs://ipfs/{}", valid_qm);
+        let urls2 = get_ipfs_gateway_urls(ipfs_url2);
+        assert_eq!(urls2, expected);
+
+        let raw_hash = valid_qm;
+        let urls3 = get_ipfs_gateway_urls(raw_hash);
+        assert_eq!(urls3, expected);
+
+        let bafy_hash = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+        let expected_bafy: Vec<String> = IPFS_GATEWAYS
+            .iter()
+            .map(|gw| format!("{}/ipfs/{}", gw.trim_end_matches('/'), bafy_hash))
+            .collect();
+        let urls4 = get_ipfs_gateway_urls(bafy_hash);
+        assert_eq!(urls4, expected_bafy);
+
+        let http_url = "https://example.com/file.png";
+        let urls5 = get_ipfs_gateway_urls(http_url);
+        assert_eq!(urls5, vec![http_url.to_string()]);
+    }
+
+    #[test]
+    fn test_all_ipfs_gateway_urls() {
+        let url = "https://foo.com/ipfs/QmHash/123?foo=bar";
+        let urls = all_ipfs_gateway_urls(url).unwrap();
+        for gw in IPFS_GATEWAYS {
+            assert!(urls.contains(&format!(
+                "{}{}",
+                gw.trim_end_matches('/'),
+                "/ipfs/QmHash/123"
+            )));
+        }
+        assert_eq!(urls.len(), IPFS_GATEWAYS.len());
+        assert!(all_ipfs_gateway_urls("https://foo.com/notipfs/QmHash").is_none());
+        assert!(all_ipfs_gateway_urls("").is_none());
     }
 }

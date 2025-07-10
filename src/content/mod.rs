@@ -14,6 +14,7 @@ use tokio_util::io::StreamReader;
 use tracing::{debug, info};
 
 use crate::content::html::download_html_resources;
+use crate::url::all_ipfs_gateway_urls;
 use crate::url::{get_data_url, get_last_path_segment, get_url, is_data_url};
 
 pub mod extensions;
@@ -207,6 +208,35 @@ async fn fetch_with_retry(url: &str, max_retries: u32) -> anyhow::Result<reqwest
     }
 }
 
+/// Fetch a URL, and if a DNS error occurs and it's an IPFS URL, retry with other IPFS gateways.
+pub async fn fetch_with_ipfs_gateway_retry(
+    url: &str,
+    max_retries: u32,
+) -> anyhow::Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    let resp = client.get(url).send().await;
+    match resp {
+        Ok(response) => Ok(response),
+        Err(e) => {
+            // Check for DNS error
+            let is_dns = e.is_connect() && format!("{}", e).contains("dns error");
+            if is_dns {
+                if let Some(gateway_urls) = all_ipfs_gateway_urls(url) {
+                    let mut last_err = anyhow::anyhow!(e);
+                    for new_url in gateway_urls {
+                        match fetch_with_retry(&new_url, max_retries).await {
+                            Ok(response) => return Ok(response),
+                            Err(err) => last_err = err,
+                        }
+                    }
+                    return Err(last_err);
+                }
+            }
+            Err(anyhow::anyhow!(e))
+        }
+    }
+}
+
 pub async fn fetch_and_save_content(
     url: &str,
     chain: &str,
@@ -270,7 +300,7 @@ pub async fn fetch_and_save_content(
 
     // For HTTP/IPFS URLs, stream directly to disk and detect extension
     let content_url = get_url(url);
-    let response = fetch_with_retry(&content_url, 5).await?;
+    let response = fetch_with_ipfs_gateway_retry(&content_url, 5).await?;
     let status = response.status();
     if !status.is_success() {
         return Err(anyhow::anyhow!(
