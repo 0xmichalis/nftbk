@@ -2,6 +2,7 @@ version: "3.8"
 services:
   nftbk-server:
     image: ghcr.io/0xmichalis/nftbk-server:latest
+    pull_policy: always
     env_file:
       - .env
     expose:
