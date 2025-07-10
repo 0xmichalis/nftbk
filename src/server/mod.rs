@@ -5,6 +5,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::fs;
+use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
@@ -64,6 +65,17 @@ pub struct AppState {
     pub pruner_retention_days: u64,
     /// Maps download tokens to (task_id, expiration timestamp as unix epoch seconds)
     pub download_tokens: Arc<Mutex<HashMap<String, (String, u64)>>>,
+    pub parallelism: usize,
+    pub backup_job_sender: mpsc::Sender<BackupJob>,
+}
+
+#[derive(Debug, Clone)]
+pub struct BackupJob {
+    pub task_id: String,
+    pub tokens: Vec<crate::api::Tokens>,
+    pub force: bool,
+    pub archive_format: String,
+    pub requestor: Option<String>,
 }
 
 impl Default for AppState {
@@ -73,6 +85,7 @@ impl Default for AppState {
 }
 
 impl AppState {
+    #[allow(clippy::too_many_arguments)]
     pub async fn new(
         chain_config_path: &str,
         base_dir: &str,
@@ -80,6 +93,8 @@ impl AppState {
         auth_token: Option<String>,
         pruner_enabled: bool,
         pruner_retention_days: u64,
+        parallelism: usize,
+        backup_job_sender: mpsc::Sender<BackupJob>,
     ) -> Self {
         let config_content = tokio::fs::read_to_string(chain_config_path)
             .await
@@ -99,6 +114,8 @@ impl AppState {
             pruner_enabled,
             pruner_retention_days,
             download_tokens: Arc::new(Mutex::new(HashMap::new())),
+            parallelism,
+            backup_job_sender,
         }
     }
 }

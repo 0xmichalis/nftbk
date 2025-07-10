@@ -16,6 +16,8 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::signal;
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tracing::info;
 
 use nftbk::envvar::is_defined;
@@ -24,7 +26,7 @@ use nftbk::logging::LogLevel;
 use nftbk::server::privy::verify_privy_jwt;
 use nftbk::server::{
     handle_backup, handle_backup_delete, handle_backup_retry, handle_backups, handle_download,
-    handle_download_token, handle_error_log, handle_status, AppState,
+    handle_download_token, handle_error_log, handle_status, AppState, BackupJob,
 };
 
 #[derive(Parser, Debug)]
@@ -65,6 +67,14 @@ struct Args {
     /// Pruner regex pattern for file names to prune
     #[arg(long, default_value = "^nftbk-")]
     pruner_pattern: String,
+
+    /// Number of backup worker threads to run in parallel
+    #[arg(long, default_value_t = 4)]
+    backup_parallelism: usize,
+
+    /// Maximum number of backup jobs to queue before blocking
+    #[arg(long, default_value_t = 10000)]
+    backup_queue_size: usize,
 }
 
 #[derive(Clone)]
@@ -72,6 +82,42 @@ struct AuthState {
     app_state: AppState,
     privy_verification_key: Option<String>,
     privy_app_id: Option<String>,
+}
+
+fn spawn_backup_workers(
+    parallelism: usize,
+    backup_job_receiver: mpsc::Receiver<BackupJob>,
+    state: AppState,
+) -> Vec<JoinHandle<()>> {
+    let mut worker_handles = Vec::with_capacity(parallelism);
+    let backup_job_receiver = Arc::new(tokio::sync::Mutex::new(backup_job_receiver));
+    for _ in 0..parallelism {
+        let backup_job_receiver = backup_job_receiver.clone();
+        let state_clone = state.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let job = {
+                    let mut rx = backup_job_receiver.lock().await;
+                    rx.recv().await
+                };
+                match job {
+                    Some(job) => {
+                        handle_backup::run_backup_job(
+                            state_clone.clone(),
+                            job.task_id,
+                            job.tokens,
+                            job.force,
+                            job.archive_format,
+                        )
+                        .await;
+                    }
+                    None => break, // Channel closed, exit worker
+                }
+            }
+        });
+        worker_handles.push(handle);
+    }
+    worker_handles
 }
 
 #[tokio::main]
@@ -86,6 +132,8 @@ async fn main() {
         .ok()
         .map(|s| s.replace("\\n", "\n"));
 
+    let (backup_job_sender, backup_job_receiver) =
+        mpsc::channel::<BackupJob>(args.backup_queue_size);
     let state = AppState::new(
         &args.chain_config,
         &args.base_dir,
@@ -93,6 +141,8 @@ async fn main() {
         auth_token.clone(),
         args.enable_pruner,
         args.pruner_retention_days,
+        args.backup_parallelism,
+        backup_job_sender,
     )
     .await;
 
@@ -105,6 +155,10 @@ async fn main() {
         "Privy JWT authentication enabled: {}",
         is_defined(&privy_app_id) && is_defined(&privy_verification_key)
     );
+
+    // Spawn worker pool for backup jobs
+    let worker_handles =
+        spawn_backup_workers(state.parallelism, backup_job_receiver, state.clone());
 
     // Create the public router (no auth middleware)
     let public_router = Router::new()
@@ -177,6 +231,12 @@ async fn main() {
         .unwrap();
     if let Some(handle) = pruner_handle {
         let _ = handle.join();
+    }
+    // Drop the last sender to close the channel and signal workers to exit
+    drop(state.backup_job_sender);
+    // Wait for all workers to finish
+    for handle in worker_handles {
+        let _ = handle.await;
     }
 }
 

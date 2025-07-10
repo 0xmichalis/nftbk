@@ -14,8 +14,8 @@ use crate::backup::{self, BackupConfig, TokenConfig};
 use crate::hashing::compute_array_sha256;
 use crate::server::archive::{archive_format_from_user_agent, get_zipped_backup_paths, zip_backup};
 use crate::server::{
-    check_backup_on_disk, locked_update_string_vec_json_file, AppState, BackupMetadata, TaskInfo,
-    TaskStatus,
+    check_backup_on_disk, locked_update_string_vec_json_file, AppState, BackupJob, BackupMetadata,
+    TaskInfo, TaskStatus,
 };
 
 pub async fn handle_backup(
@@ -131,23 +131,24 @@ pub async fn handle_backup(
         }
     }
 
-    // Spawn background job
-    let state_clone = state.clone();
-    let task_id_clone = task_id.clone();
-    let tokens = req.tokens.clone();
-    let archive_format_clone = archive_format.clone();
-    tokio::task::spawn_blocking(move || {
-        tokio::runtime::Handle::current().block_on(run_backup_job(
-            state_clone,
-            task_id_clone,
-            tokens,
-            force,
-            archive_format_clone,
-        ))
-    });
+    let backup_job = BackupJob {
+        task_id: task_id.clone(),
+        tokens: req.tokens.clone(),
+        force,
+        archive_format: archive_format.clone(),
+        requestor: requestor.clone(),
+    };
+    if let Err(e) = state.backup_job_sender.send(backup_job).await {
+        error!("Failed to enqueue backup job: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to enqueue backup job"})),
+        )
+            .into_response();
+    }
 
     info!(
-        "Started backup task {} (requestor: {}, count: {}, archive_format: {})",
+        "Created backup task {} (requestor: {}, count: {}, archive_format: {})",
         task_id,
         requestor.unwrap_or_default(),
         nft_count,
@@ -172,13 +173,15 @@ fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), 
     Ok(())
 }
 
-async fn run_backup_job(
+pub async fn run_backup_job(
     state: AppState,
     task_id: String,
     tokens: Vec<Tokens>,
     force: bool,
     archive_format: String,
 ) {
+    info!("Running backup job for task {}", task_id);
+
     let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
     let out_path = std::path::PathBuf::from(&out_dir);
 
@@ -380,23 +383,25 @@ pub async fn handle_backup_retry(
     drop(tasks);
 
     // Re-run backup job
-    let tokens = metadata.tokens.clone();
-    let user = req_requestor;
-    let user_for_log = user.clone();
-    let state_clone = state.clone();
-    let task_id_clone = task_id.clone();
-    tokio::task::spawn_blocking(move || {
-        tokio::runtime::Handle::current().block_on(run_backup_job(
-            state_clone,
-            task_id_clone,
-            tokens,
-            true,
-            metadata.archive_format.clone(),
-        ))
-    });
+    let backup_job = BackupJob {
+        task_id: task_id.clone(),
+        tokens: metadata.tokens.clone(),
+        force: true,
+        archive_format: metadata.archive_format.clone(),
+        requestor: requestor.clone(),
+    };
+    if let Err(e) = state.backup_job_sender.send(backup_job).await {
+        error!("Failed to enqueue backup job: {}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "Failed to enqueue backup job"})),
+        )
+            .into_response();
+    }
     info!(
         "Retrying backup task {} (requestor: {})",
-        task_id, user_for_log
+        task_id,
+        requestor.clone().unwrap_or_default()
     );
     (StatusCode::ACCEPTED, Json(BackupResponse { task_id })).into_response()
 }
