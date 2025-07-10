@@ -85,39 +85,54 @@ struct AuthState {
 }
 
 fn spawn_backup_workers(
+    mut backup_job_receiver: mpsc::Receiver<BackupJob>,
     parallelism: usize,
-    backup_job_receiver: mpsc::Receiver<BackupJob>,
+    queue_size: usize,
     state: AppState,
 ) -> Vec<JoinHandle<()>> {
-    let mut worker_handles = Vec::with_capacity(parallelism);
-    let backup_job_receiver = Arc::new(tokio::sync::Mutex::new(backup_job_receiver));
-    for _ in 0..parallelism {
-        let backup_job_receiver = backup_job_receiver.clone();
+    let mut worker_senders = Vec::new();
+    let mut worker_handles = Vec::new();
+    let per_worker_queue_size = queue_size / parallelism;
+    for i in 0..parallelism {
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<BackupJob>(per_worker_queue_size);
         let state_clone = state.clone();
         let handle = tokio::spawn(async move {
-            loop {
-                let job = {
-                    let mut rx = backup_job_receiver.lock().await;
-                    rx.recv().await
-                };
-                match job {
-                    Some(job) => {
-                        handle_backup::run_backup_job(
-                            state_clone.clone(),
-                            job.task_id,
-                            job.tokens,
-                            job.force,
-                            job.archive_format,
-                        )
-                        .await;
-                    }
-                    None => break, // Channel closed, exit worker
-                }
+            info!("Worker {} started", i);
+            while let Some(job) = rx.recv().await {
+                handle_backup::run_backup_job(
+                    state_clone.clone(),
+                    job.task_id,
+                    job.tokens,
+                    job.force,
+                    job.archive_format,
+                )
+                .await;
             }
+            info!("Worker {} exiting: channel closed", i);
         });
+        worker_senders.push(tx);
         worker_handles.push(handle);
     }
-    worker_handles
+    // Dispatcher task
+    let dispatcher_handle = {
+        let worker_senders = worker_senders;
+        tokio::spawn(async move {
+            info!("Dispatcher started");
+            let mut next = 0;
+            while let Some(job) = backup_job_receiver.recv().await {
+                let tx = &worker_senders[next % worker_senders.len()];
+                if tx.send(job).await.is_err() {
+                    // Worker has shut down, skip
+                }
+                next += 1;
+            }
+            info!("Dispatcher exiting: channel closed");
+            drop(worker_senders);
+        })
+    };
+    let mut all_handles = worker_handles;
+    all_handles.push(dispatcher_handle);
+    all_handles
 }
 
 #[tokio::main]
@@ -141,7 +156,6 @@ async fn main() {
         auth_token.clone(),
         args.enable_pruner,
         args.pruner_retention_days,
-        args.backup_parallelism,
         backup_job_sender,
     )
     .await;
@@ -157,8 +171,12 @@ async fn main() {
     );
 
     // Spawn worker pool for backup jobs
-    let worker_handles =
-        spawn_backup_workers(state.parallelism, backup_job_receiver, state.clone());
+    let worker_handles = spawn_backup_workers(
+        backup_job_receiver,
+        args.backup_parallelism,
+        args.backup_queue_size,
+        state.clone(),
+    );
 
     // Create the public router (no auth middleware)
     let public_router = Router::new()
@@ -229,15 +247,21 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal)
         .await
         .unwrap();
+    info!("Server has exited.");
     if let Some(handle) = pruner_handle {
         let _ = handle.join();
     }
+    info!("Pruner has exited.");
+
     // Drop the last sender to close the channel and signal workers to exit
     drop(state.backup_job_sender);
+    info!("Backup job sender has been dropped.");
+
     // Wait for all workers to finish
     for handle in worker_handles {
         let _ = handle.await;
     }
+    info!("All backup workers and dispatcher have exited.");
 }
 
 async fn auth_middleware(
