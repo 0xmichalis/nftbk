@@ -1,12 +1,15 @@
 use anyhow::Result;
 use async_compression::tokio::bufread::GzipDecoder;
 use futures_util::TryStreamExt;
+use rand::{thread_rng, Rng};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tokio::fs;
 use tokio::io::AsyncRead;
 use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
+use tokio::time::sleep;
 use tokio_util::io::StreamReader;
 use tracing::{debug, info};
 
@@ -144,6 +147,43 @@ pub async fn stream_gzip_http_to_file(
     stream_response_to_file(&mut decoder, &mut file).await
 }
 
+/// Helper to fetch a URL with retries on 5xx errors, using exponential backoff and jitter.
+async fn fetch_with_retry(url: &str, max_retries: u32) -> anyhow::Result<reqwest::Response> {
+    let client = reqwest::Client::new();
+    let mut attempt = 0;
+    loop {
+        let resp = client.get(url).send().await;
+        match resp {
+            Ok(response) => {
+                let status = response.status();
+                if !status.is_server_error() {
+                    // Not a 5xx error, return immediately
+                    return Ok(response);
+                }
+                if attempt >= max_retries {
+                    // Retries exhausted, return the last response
+                    return Ok(response);
+                }
+                // Retry on 5xx error
+                attempt += 1;
+                let base_delay = 2u64.pow(attempt).min(30); // cap at 30s
+                let jitter: u64 = thread_rng().gen_range(0..500); // up to 500ms
+                let delay = Duration::from_secs(base_delay) + Duration::from_millis(jitter);
+                debug!(
+                    "HTTP {} received for {}, retrying in {:?} (attempt {}/{})",
+                    status, url, delay, attempt, max_retries
+                );
+                sleep(delay).await;
+                continue;
+            }
+            Err(e) => {
+                // Only retry on HTTP 5xx, otherwise return error
+                return Err(anyhow::anyhow!(e));
+            }
+        }
+    }
+}
+
 pub async fn fetch_and_save_content(
     url: &str,
     chain: &str,
@@ -207,8 +247,7 @@ pub async fn fetch_and_save_content(
 
     // For HTTP/IPFS URLs, stream directly to disk and detect extension
     let content_url = get_url(url);
-    let client = reqwest::Client::new();
-    let response = client.get(&content_url).send().await?;
+    let response = fetch_with_retry(&content_url, 5).await?;
     let status = response.status();
     if !status.is_success() {
         return Err(anyhow::anyhow!(
