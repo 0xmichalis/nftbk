@@ -9,13 +9,13 @@ use std::collections::HashSet;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
-use crate::api::{BackupRequest, BackupResponse, Tokens};
 use crate::backup::{self, BackupConfig, TokenConfig};
-use crate::hashing::compute_array_sha256;
+use crate::server::api::{BackupRequest, BackupResponse};
 use crate::server::archive::{archive_format_from_user_agent, get_zipped_backup_paths, zip_backup};
+use crate::server::hashing::compute_array_sha256;
 use crate::server::{
     check_backup_on_disk, locked_update_string_vec_json_file, AppState, BackupJob, BackupMetadata,
-    TaskInfo, TaskStatus,
+    TaskInfo, TaskStatus, Tokens,
 };
 
 pub async fn handle_backup(

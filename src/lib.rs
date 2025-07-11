@@ -15,11 +15,9 @@ use crate::chain::evm::EvmChainProcessor;
 use crate::chain::process_nfts;
 use crate::chain::tezos::TezosChainProcessor;
 
-pub mod api;
 pub mod chain;
 pub mod content;
 pub mod envvar;
-pub mod hashing;
 pub mod logging;
 pub mod prune;
 pub mod server;

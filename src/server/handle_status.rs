@@ -4,7 +4,7 @@ use axum::{
     Json,
 };
 
-use crate::api::StatusResponse;
+use crate::server::api::StatusResponse;
 use crate::server::{get_backup_status_and_error, AppState};
 
 pub async fn handle_status(

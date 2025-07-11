@@ -1,4 +1,4 @@
-use crate::api::Tokens;
+use crate::server::api::Tokens;
 use sha2::{Digest, Sha256};
 use std::path::Path;
 use tokio::fs::read;
@@ -32,7 +32,7 @@ pub async fn compute_file_sha256(path: &Path) -> anyhow::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::Tokens;
+    use crate::server::api::Tokens;
 
     #[test]
     fn test_deterministic_hashing_order_independence() {

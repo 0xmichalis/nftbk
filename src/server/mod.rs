@@ -10,8 +10,10 @@ use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
 
 use crate::backup::ChainConfig;
-use crate::hashing::compute_file_sha256;
+use crate::server::api::Tokens;
+use crate::server::hashing::compute_file_sha256;
 
+pub mod api;
 pub mod archive;
 pub mod handle_backup;
 pub mod handle_backup_delete;
@@ -19,6 +21,7 @@ pub mod handle_backups;
 pub mod handle_download;
 pub mod handle_error_log;
 pub mod handle_status;
+pub mod hashing;
 pub mod privy;
 pub mod pruner;
 pub use handle_backup::handle_backup;
@@ -36,7 +39,7 @@ pub struct BackupMetadata {
     pub requestor: String,
     pub archive_format: String,
     pub nft_count: usize,
-    pub tokens: Vec<crate::api::Tokens>,
+    pub tokens: Vec<Tokens>,
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +74,7 @@ pub struct AppState {
 #[derive(Debug, Clone)]
 pub struct BackupJob {
     pub task_id: String,
-    pub tokens: Vec<crate::api::Tokens>,
+    pub tokens: Vec<Tokens>,
     pub force: bool,
     pub archive_format: String,
     pub requestor: Option<String>,
