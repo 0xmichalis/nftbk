@@ -3,7 +3,6 @@
 
 # Cursor-specific
 .cursor/
-memory-bank/
 
 # Common files/directories to ignore
 hooks/

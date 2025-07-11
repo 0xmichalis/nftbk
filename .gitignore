@@ -1,6 +1,7 @@
 /target
 **/*.rs.bk
 .env
+.env.caddy
 config_*.toml
 !config_chains.toml
 /nft_backup*
