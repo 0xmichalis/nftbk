@@ -91,10 +91,11 @@ fn spawn_backup_workers(
 ) -> Vec<JoinHandle<()>> {
     let mut worker_handles = Vec::with_capacity(parallelism);
     let backup_job_receiver = Arc::new(tokio::sync::Mutex::new(backup_job_receiver));
-    for _ in 0..parallelism {
+    for i in 0..parallelism {
         let backup_job_receiver = backup_job_receiver.clone();
         let state_clone = state.clone();
         let handle = tokio::spawn(async move {
+            info!("Worker {} started", i);
             loop {
                 let job = {
                     let mut rx = backup_job_receiver.lock().await;
@@ -114,6 +115,7 @@ fn spawn_backup_workers(
                     None => break, // Channel closed, exit worker
                 }
             }
+            info!("Worker {} stopped", i);
         });
         worker_handles.push(handle);
     }
@@ -141,7 +143,6 @@ async fn main() {
         auth_token.clone(),
         args.enable_pruner,
         args.pruner_retention_days,
-        args.backup_parallelism,
         backup_job_sender,
     )
     .await;
@@ -158,7 +159,7 @@ async fn main() {
 
     // Spawn worker pool for backup jobs
     let worker_handles =
-        spawn_backup_workers(state.parallelism, backup_job_receiver, state.clone());
+        spawn_backup_workers(args.backup_parallelism, backup_job_receiver, state.clone());
 
     // Create the public router (no auth middleware)
     let public_router = Router::new()
@@ -229,15 +230,22 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal)
         .await
         .unwrap();
+    info!("Server stopped");
+
     if let Some(handle) = pruner_handle {
         let _ = handle.join();
     }
+    info!("Pruner stopped");
+
     // Drop the last sender to close the channel and signal workers to exit
     drop(state.backup_job_sender);
+    info!("Backup job sender dropped");
+
     // Wait for all workers to finish
     for handle in worker_handles {
         let _ = handle.await;
     }
+    info!("Backup workers stopped");
 }
 
 async fn auth_middleware(

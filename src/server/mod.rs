@@ -65,7 +65,6 @@ pub struct AppState {
     pub pruner_retention_days: u64,
     /// Maps download tokens to (task_id, expiration timestamp as unix epoch seconds)
     pub download_tokens: Arc<Mutex<HashMap<String, (String, u64)>>>,
-    pub parallelism: usize,
     pub backup_job_sender: mpsc::Sender<BackupJob>,
 }
 
@@ -93,7 +92,6 @@ impl AppState {
         auth_token: Option<String>,
         pruner_enabled: bool,
         pruner_retention_days: u64,
-        parallelism: usize,
         backup_job_sender: mpsc::Sender<BackupJob>,
     ) -> Self {
         let config_content = tokio::fs::read_to_string(chain_config_path)
@@ -114,7 +112,6 @@ impl AppState {
             pruner_enabled,
             pruner_retention_days,
             download_tokens: Arc::new(Mutex::new(HashMap::new())),
-            parallelism,
             backup_job_sender,
         }
     }
