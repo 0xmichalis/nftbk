@@ -122,6 +122,60 @@ fn spawn_backup_workers(
     worker_handles
 }
 
+async fn auth_middleware(
+    State(auth_state): State<AuthState>,
+    mut req: Request,
+    next: Next,
+) -> impl IntoResponse {
+    let state = &auth_state.app_state;
+    let privy_app_id = &auth_state.privy_app_id;
+    let privy_verification_key = &auth_state.privy_verification_key;
+
+    // 1. Try symmetric token auth
+    if let Some(ref token) = state.auth_token {
+        let auth_header = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+        let expected = format!("Bearer {}", token);
+        if auth_header == Some(expected.as_str()) {
+            req.extensions_mut().insert(Some("admin".to_string()));
+            return next.run(req).await;
+        }
+    }
+
+    // 2. Try Privy JWT auth
+    if let (Some(app_id), Some(verification_key)) =
+        (privy_app_id.as_ref(), privy_verification_key.as_ref())
+    {
+        let auth_header = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+        if let Some(header_value) = auth_header {
+            if let Some(jwt) = header_value.strip_prefix("Bearer ") {
+                match verify_privy_jwt(jwt, verification_key, app_id).await {
+                    Ok(claims) => {
+                        req.extensions_mut().insert(Some(claims.sub.clone()));
+                        return next.run(req).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Privy JWT verification failed: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. If both fail, return 401
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Bearer")],
+        "Unauthorized",
+    )
+        .into_response()
+}
+
 #[tokio::main]
 async fn main() {
     // We are consuming config both from the environment and from the command line
@@ -246,58 +300,4 @@ async fn main() {
         let _ = handle.await;
     }
     info!("Backup workers stopped");
-}
-
-async fn auth_middleware(
-    State(auth_state): State<AuthState>,
-    mut req: Request,
-    next: Next,
-) -> impl IntoResponse {
-    let state = &auth_state.app_state;
-    let privy_app_id = &auth_state.privy_app_id;
-    let privy_verification_key = &auth_state.privy_verification_key;
-
-    // 1. Try symmetric token auth
-    if let Some(ref token) = state.auth_token {
-        let auth_header = req
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok());
-        let expected = format!("Bearer {}", token);
-        if auth_header == Some(expected.as_str()) {
-            req.extensions_mut().insert(Some("admin".to_string()));
-            return next.run(req).await;
-        }
-    }
-
-    // 2. Try Privy JWT auth
-    if let (Some(app_id), Some(verification_key)) =
-        (privy_app_id.as_ref(), privy_verification_key.as_ref())
-    {
-        let auth_header = req
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok());
-        if let Some(header_value) = auth_header {
-            if let Some(jwt) = header_value.strip_prefix("Bearer ") {
-                match verify_privy_jwt(jwt, verification_key, app_id).await {
-                    Ok(claims) => {
-                        req.extensions_mut().insert(Some(claims.sub.clone()));
-                        return next.run(req).await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Privy JWT verification failed: {}", e);
-                    }
-                }
-            }
-        }
-    }
-
-    // 3. If both fail, return 401
-    (
-        StatusCode::UNAUTHORIZED,
-        [(header::WWW_AUTHENTICATE, "Bearer")],
-        "Unauthorized",
-    )
-        .into_response()
 }
