@@ -1,5 +1,5 @@
 # Builder stage
-FROM docker.io/library/rust:1.86-slim-bookworm as builder
+FROM docker.io/library/rust:1.86-slim-bookworm AS builder
 
 WORKDIR /usr/src/app
 
