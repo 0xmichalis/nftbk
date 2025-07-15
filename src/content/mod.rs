@@ -171,60 +171,70 @@ pub async fn stream_gzip_http_to_file(
     stream_response_to_file(&mut decoder, &mut file).await
 }
 
-/// Helper to fetch a URL with retries on 5xx errors, using exponential backoff and jitter.
-async fn fetch_with_retry(url: &str, max_retries: u32) -> anyhow::Result<reqwest::Response> {
+/// Helper to fetch a URL with retries, using exponential backoff and jitter. The retry condition is provided as a closure.
+async fn fetch_url<F>(
+    url: &str,
+    max_retries: u32,
+    should_retry: F,
+) -> anyhow::Result<reqwest::Response>
+where
+    F: Fn(&Result<reqwest::Response, reqwest::Error>) -> bool,
+{
     let client = reqwest::Client::new();
     let mut attempt = 0;
     loop {
         let resp = client.get(url).send().await;
-        match resp {
-            Ok(response) => {
-                let status = response.status();
-                if !status.is_server_error() {
-                    // Not a 5xx error, return immediately
-                    return Ok(response);
-                }
-                if attempt >= max_retries {
-                    // Retries exhausted, return the last response
-                    return Ok(response);
-                }
-                // Retry on 5xx error
-                attempt += 1;
-                let base_delay = 2u64.pow(attempt).min(30); // cap at 30s
-                let jitter: u64 = thread_rng().gen_range(0..500); // up to 500ms
-                let delay = Duration::from_secs(base_delay) + Duration::from_millis(jitter);
-                debug!(
-                    "HTTP {} received for {}, retrying in {:?} (attempt {}/{})",
-                    status, url, delay, attempt, max_retries
-                );
-                sleep(delay).await;
-                continue;
-            }
-            Err(e) => {
-                // Only retry on HTTP 5xx, otherwise return error
-                return Err(anyhow::anyhow!(e));
-            }
+        if !should_retry(&resp) {
+            // Not a retriable error, return immediately (Ok or Err)
+            return resp.map_err(anyhow::Error::from);
         }
+        if attempt >= max_retries {
+            // Retries exhausted, return the last result
+            return resp.map_err(anyhow::Error::from);
+        }
+        attempt += 1;
+        let base_delay = 2u64.pow(attempt).min(30); // cap at 30s
+        let jitter: u64 = thread_rng().gen_range(0..500); // up to 500ms
+        let delay = Duration::from_secs(base_delay) + Duration::from_millis(jitter);
+        debug!(
+            "Retriable error for {}, retrying in {:?} (attempt {}/{})",
+            url, delay, attempt, max_retries
+        );
+        sleep(delay).await;
     }
 }
 
-/// Fetch a URL, and if a DNS error occurs and it's an IPFS URL, retry with other IPFS gateways.
-pub async fn fetch_with_ipfs_gateway_retry(
-    url: &str,
-    max_retries: u32,
-) -> anyhow::Result<reqwest::Response> {
-    let client = reqwest::Client::new();
-    let resp = client.get(url).send().await;
-    match resp {
+/// Fetch a URL and retry various errors:
+/// - DNS errors
+/// - Server errors (5xx)
+/// - Other retriable errors
+pub async fn fetch_with_retry(url: &str, max_retries: u32) -> anyhow::Result<reqwest::Response> {
+    // Define retriable errors and retry predicate
+    const RETRIABLE_ERRORS: [&str; 1] = ["end of file before message length reached"];
+    let should_retry = |result: &Result<reqwest::Response, reqwest::Error>| match result {
+        Ok(resp) => resp.status().is_server_error(),
+        Err(err) => {
+            let err_str = format!("{}", err);
+            RETRIABLE_ERRORS
+                .iter()
+                .any(|substr| err_str.contains(substr))
+        }
+    };
+    // Try the initial URL with retry logic
+    let initial_result = fetch_url(url, max_retries, &should_retry).await;
+    match initial_result {
         Ok(response) => Ok(response),
         Err(e) => {
-            // Check for DNS error
-            let is_dns = e.is_connect() && format!("{}", e).contains("dns error");
+            // Fallback to other gateways if the error is a DNS error
+            let is_dns = e.is::<reqwest::Error>() && {
+                let err = e.downcast_ref::<reqwest::Error>().unwrap();
+                err.is_connect() && format!("{}", err).contains("dns error")
+            };
             if is_dns {
                 if let Some(gateway_urls) = all_ipfs_gateway_urls(url) {
                     let mut last_err = anyhow::anyhow!(e);
                     for new_url in gateway_urls {
-                        match fetch_with_retry(&new_url, max_retries).await {
+                        match fetch_url(&new_url, max_retries, &should_retry).await {
                             Ok(response) => return Ok(response),
                             Err(err) => last_err = err,
                         }
@@ -300,7 +310,7 @@ pub async fn fetch_and_save_content(
 
     // For HTTP/IPFS URLs, stream directly to disk and detect extension
     let content_url = get_url(url);
-    let response = fetch_with_ipfs_gateway_retry(&content_url, 5).await?;
+    let response = fetch_with_retry(&content_url, 5).await?;
     let status = response.status();
     if !status.is_success() {
         return Err(anyhow::anyhow!(
