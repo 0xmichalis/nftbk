@@ -60,8 +60,12 @@ fn get_ipfs_gateway_urls(url: &str) -> Vec<String> {
         .collect()
 }
 
-/// Converts IPFS URLs to use a gateway, otherwise returns the original URL
+/// Converts IPFS/Arweave URLs to use a gateway, otherwise returns the original URL
 pub fn get_url(url: &str) -> String {
+    // Handle ar:// URLs
+    if url.starts_with("ar://") {
+        return format!("https://arweave.net/{}", url.trim_start_matches("ar://"));
+    }
     get_ipfs_gateway_urls(url)
         .into_iter()
         .next()
@@ -314,5 +318,17 @@ mod tests {
         assert_eq!(urls.len(), IPFS_GATEWAYS.len());
         assert!(all_ipfs_gateway_urls("https://foo.com/notipfs/QmHash").is_none());
         assert!(all_ipfs_gateway_urls("").is_none());
+    }
+
+    #[test]
+    fn test_get_url_arweave() {
+        let ar_url = "ar://zXX4PCmJoOgFmLsObREHHwNBqnNCwoVNXylCbStZmno";
+        assert_eq!(
+            get_url(ar_url),
+            "https://arweave.net/zXX4PCmJoOgFmLsObREHHwNBqnNCwoVNXylCbStZmno"
+        );
+        // Should not affect normal https URLs
+        let normal_url = "https://arweave.net/zXX4PCmJoOgFmLsObREHHwNBqnNCwoVNXylCbStZmno";
+        assert_eq!(get_url(normal_url), normal_url);
     }
 }
