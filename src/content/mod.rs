@@ -210,7 +210,10 @@ where
 /// - Other retriable errors
 pub async fn fetch_with_retry(url: &str, max_retries: u32) -> anyhow::Result<reqwest::Response> {
     // Define retriable errors and retry predicate
-    const RETRIABLE_ERRORS: [&str; 1] = ["end of file before message length reached"];
+    const RETRIABLE_ERRORS: [&str; 2] = [
+        "end of file before message length reached",
+        "tcp connect error",
+    ];
     let should_retry = |result: &Result<reqwest::Response, reqwest::Error>| match result {
         Ok(resp) => resp.status().is_server_error(),
         Err(err) => {
