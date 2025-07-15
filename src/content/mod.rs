@@ -11,7 +11,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::io::BufReader;
 use tokio::time::sleep;
 use tokio_util::io::StreamReader;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::content::html::download_html_resources;
 use crate::url::all_ipfs_gateway_urls;
@@ -196,7 +196,7 @@ where
         let base_delay = 2u64.pow(attempt).min(30); // cap at 30s
         let jitter: u64 = thread_rng().gen_range(0..500); // up to 500ms
         let delay = Duration::from_secs(base_delay) + Duration::from_millis(jitter);
-        debug!(
+        warn!(
             "Retriable error for {}, retrying in {:?} (attempt {}/{})",
             url, delay, attempt, max_retries
         );
