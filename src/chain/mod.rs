@@ -118,15 +118,20 @@ where
                 output_path,
                 Options {
                     overriden_filename: None,
-                    fallback_filename,
+                    fallback_filename: fallback_filename.clone(),
                 },
             )
             .await
             {
                 Ok(path) => all_files.push(path),
                 Err(e) => {
+                    let name_for_log = fallback_filename
+                        .as_deref()
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("content");
                     let msg = format!(
-                        "Failed to fetch content for contract {} (token ID {}): {}",
+                        "Failed to fetch {} for contract {} (token ID {}): {}",
+                        name_for_log,
                         contract.address(),
                         contract.token_id(),
                         e
