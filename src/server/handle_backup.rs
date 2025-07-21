@@ -4,12 +4,14 @@ use axum::{
     response::IntoResponse,
 };
 use chrono::Utc;
+use futures_util::FutureExt;
 use serde_json;
 use std::collections::HashSet;
+use std::panic::AssertUnwindSafe;
 use std::time::Instant;
 use tracing::{debug, error, info, warn};
 
-use crate::backup::{self, BackupConfig, TokenConfig};
+use crate::backup::{backup_from_config, BackupConfig, TokenConfig};
 use crate::server::api::{BackupRequest, BackupResponse};
 use crate::server::archive::{archive_format_from_user_agent, get_zipped_backup_paths, zip_backup};
 use crate::server::hashing::compute_array_sha256;
@@ -173,7 +175,7 @@ fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), 
     Ok(())
 }
 
-pub async fn run_backup_job(
+async fn run_backup_job_inner(
     state: AppState,
     task_id: String,
     tokens: Vec<Tokens>,
@@ -227,7 +229,7 @@ pub async fn run_backup_job(
         prune_redundant: false,
         exit_on_error: false,
     };
-    let backup_result = backup::backup_from_config(backup_cfg).await;
+    let backup_result = backup_from_config(backup_cfg).await;
     let files_written = match backup_result {
         Ok(files) => files,
         Err(e) => {
@@ -282,6 +284,44 @@ pub async fn run_backup_job(
         }
     }
     info!("Backup {} ready", task_id);
+}
+
+pub async fn run_backup_job(
+    state: AppState,
+    task_id: String,
+    tokens: Vec<Tokens>,
+    force: bool,
+    archive_format: String,
+) {
+    let state_clone = state.clone();
+    let task_id_clone = task_id.clone();
+    let fut = AssertUnwindSafe(run_backup_job_inner(
+        state,
+        task_id,
+        tokens,
+        force,
+        archive_format,
+    ))
+    .catch_unwind();
+
+    let result = fut.await;
+    if let Err(panic) = result {
+        let panic_msg = if let Some(s) = panic.downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic".to_string()
+        };
+        error!(
+            "Backup job for task {} panicked: {}",
+            task_id_clone, panic_msg
+        );
+        let mut tasks = state_clone.tasks.lock().await;
+        if let Some(task) = tasks.get_mut(&task_id_clone) {
+            task.status = TaskStatus::Error(format!("Panic: {}", panic_msg));
+        }
+    }
 }
 
 fn sync_files(files_written: &[std::path::PathBuf]) {
