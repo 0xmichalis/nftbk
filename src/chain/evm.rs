@@ -1,5 +1,6 @@
 use alloy::{
     contract::Error,
+    primitives::{Address, U256},
     sol,
     transports::http::{Client, Http},
 };
@@ -188,7 +189,6 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         rpc: &Self::RpcClient,
         contract: &Self::ContractWithToken,
     ) -> anyhow::Result<String> {
-        use alloy::primitives::{Address, U256};
         let contract_addr = contract.address().parse::<Address>()?;
         let token_id = U256::from_str_radix(contract.token_id(), 10)?;
         let nft = INFT::new(contract_addr, rpc);
