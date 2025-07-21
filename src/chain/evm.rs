@@ -59,8 +59,10 @@ where
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct Media {
-    pub uri: String,
+#[serde(untagged)]
+pub enum Media {
+    Uri { uri: String },
+    String(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -152,10 +154,16 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         };
 
         if let Some(media) = &metadata.media {
-            add_if_not_empty(&media.uri, Some("media"));
+            match media {
+                Media::Uri { uri } => add_if_not_empty(uri, Some("media")),
+                Media::String(uri) => add_if_not_empty(uri, Some("media")),
+            }
         }
         if let Some(content) = &metadata.content {
-            add_if_not_empty(&content.uri, Some("content"));
+            match content {
+                Media::Uri { uri } => add_if_not_empty(uri, Some("content")),
+                Media::String(uri) => add_if_not_empty(uri, Some("content")),
+            }
         }
         if let Some(assets) = &metadata.assets {
             if let Some(glb) = &assets.glb {
@@ -210,5 +218,53 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         }
 
         Ok(uri)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json;
+
+    #[test]
+    fn test_deserialize_metadata_content_string() {
+        let json = r#"{
+            "name": "Filmmaking in the Age of the Feed 1",
+            "description": "https://mirror.xyz/10/0x84b4ee3c0b5d5da3f44c93814490270aec9af2e5",
+            "content": "ar://YIhysXzc499Si_YLcGbzFyd-i5VsQRodP_DCPyc1B2Q",
+            "animation_url": "https://mirror.xyz/10/0x84b4ee3c0b5d5da3f44c93814490270aec9af2e5/render",
+            "image": "ipfs://QmYiudjqgZwma6siYmaMJELgPVjCJMzhu3cz3tsxaFUw8Q",
+            "attributes": [
+                { "trait_type": "Serial", "value": 1 }
+            ]
+        }"#;
+        let meta: NFTMetadata = serde_json::from_str(json).expect("Deserialization failed");
+        assert_eq!(
+            meta.name.as_deref(),
+            Some("Filmmaking in the Age of the Feed 1")
+        );
+        assert_eq!(
+            meta.description.as_deref(),
+            Some("https://mirror.xyz/10/0x84b4ee3c0b5d5da3f44c93814490270aec9af2e5")
+        );
+        match meta.content {
+            Some(Media::String(ref s)) => {
+                assert_eq!(s, "ar://YIhysXzc499Si_YLcGbzFyd-i5VsQRodP_DCPyc1B2Q")
+            }
+            _ => panic!("content should be Media::String variant"),
+        }
+        assert_eq!(
+            meta.animation_url.as_deref(),
+            Some("https://mirror.xyz/10/0x84b4ee3c0b5d5da3f44c93814490270aec9af2e5/render")
+        );
+        assert_eq!(
+            meta.image.as_deref(),
+            Some("ipfs://QmYiudjqgZwma6siYmaMJELgPVjCJMzhu3cz3tsxaFUw8Q")
+        );
+        assert!(meta.attributes.is_some());
+        let attrs = meta.attributes.unwrap();
+        assert_eq!(attrs.len(), 1);
+        assert_eq!(attrs[0].trait_type, "Serial");
+        assert_eq!(attrs[0].value, serde_json::json!(1));
     }
 }
