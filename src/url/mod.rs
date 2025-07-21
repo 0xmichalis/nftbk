@@ -54,7 +54,6 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
     Some(data)
 }
 
-/// Returns true if the string is an inline SVG (starts with <svg, ignoring leading whitespace)
 pub fn is_inline_svg(s: &str) -> bool {
     s.trim_start().starts_with("<svg")
 }
@@ -78,7 +77,6 @@ fn get_ipfs_gateway_urls(url: &str) -> Vec<String> {
 
 /// Converts IPFS/Arweave URLs to use a gateway, otherwise returns the original URL
 pub fn get_url(url: &str) -> String {
-    // Handle ar:// URLs
     if url.starts_with("ar://") {
         return format!("https://arweave.net/{}", url.trim_start_matches("ar://"));
     }
