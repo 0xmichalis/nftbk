@@ -288,6 +288,8 @@ pub async fn fetch_and_save_content(
                 file_path = PathBuf::from(format!("{}.{}", current_path_str, detected_ext));
             }
         }
+
+        info!("Saving {} (data url)", file_path.display());
         let ext_str = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let write_result = match ext_str {
             "json" => {
@@ -318,11 +320,13 @@ pub async fn fetch_and_save_content(
                 .map_err(|e| anyhow::anyhow!(e)),
         };
         write_result?;
+
         info!("Saved {} (data url)", file_path.display());
         return Ok(file_path);
     }
 
-    // For HTTP/IPFS URLs, stream directly to disk and detect extension
+    // For HTTP URLs, stream directly to disk
+    info!("Saving {} (url: {})", file_path.display(), url);
     let content_url = get_url(url);
     let response = fetch_with_retry(&content_url, 5).await?;
     let status = response.status();
