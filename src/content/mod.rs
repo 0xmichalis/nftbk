@@ -180,7 +180,9 @@ async fn fetch_url<F>(
 where
     F: Fn(&Result<reqwest::Response, reqwest::Error>) -> bool,
 {
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .user_agent(crate::USER_AGENT)
+        .build()?;
     let mut attempt = 0;
     loop {
         let resp = client.get(url).send().await;

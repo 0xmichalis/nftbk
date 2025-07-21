@@ -23,6 +23,8 @@ pub mod prune;
 pub mod server;
 pub mod url;
 
+pub const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChainConfig(pub HashMap<String, String>);
 
@@ -66,6 +68,10 @@ pub struct BackupConfig {
 pub mod backup {
     use super::*;
     pub async fn backup_from_config(cfg: BackupConfig) -> Result<Vec<PathBuf>> {
+        info!(
+            "The following user agent will be used to fetch content: {}",
+            USER_AGENT
+        );
         let output_path = cfg.output_path.unwrap();
         fs::create_dir_all(&output_path).await?;
 
