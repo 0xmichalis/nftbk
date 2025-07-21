@@ -271,11 +271,15 @@ pub async fn fetch_and_save_content(
     }
 
     // Create directory for the file
-    fs::create_dir_all(file_path.parent().unwrap()).await?;
+    let parent = file_path.parent().ok_or_else(|| {
+        anyhow::anyhow!("File path has no parent directory: {}", file_path.display())
+    })?;
+    fs::create_dir_all(parent).await?;
 
     // Handle data URLs (still buffer, as they're usually small)
     if is_data_url(url) {
-        let content = get_data_url(url).unwrap();
+        let content = get_data_url(url)
+            .ok_or_else(|| anyhow::anyhow!("Failed to parse data URL: {}", url))?;
         // Detect media extension from content if not already known from the filename
         if !extensions::has_known_extension(&file_path) {
             if let Some(detected_ext) = extensions::detect_media_extension(&content) {
@@ -284,21 +288,28 @@ pub async fn fetch_and_save_content(
                 file_path = PathBuf::from(format!("{}.{}", current_path_str, detected_ext));
             }
         }
-        let write_result = match file_path.extension().unwrap_or_default().to_str() {
-            Some("json") => {
+        let ext_str = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let write_result = match ext_str {
+            "json" => {
                 let json_value: Value = serde_json::from_slice(&content)?;
                 let pretty = serde_json::to_string_pretty(&json_value)?;
                 fs::write(&file_path, pretty)
                     .await
                     .map_err(|e| anyhow::anyhow!(e))
             }
-            Some("html") => {
+            "html" => {
                 let content_str = String::from_utf8_lossy(&content).to_string();
                 let write_res = fs::write(&file_path, &content)
                     .await
                     .map_err(|e| anyhow::anyhow!(e));
                 if write_res.is_ok() {
-                    download_html_resources(&content_str, url, file_path.parent().unwrap()).await?;
+                    let parent = file_path.parent().ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "File path has no parent directory: {}",
+                            file_path.display()
+                        )
+                    })?;
+                    download_html_resources(&content_str, url, parent).await?;
                 }
                 write_res
             }
