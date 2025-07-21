@@ -5,13 +5,13 @@
 .cursor/
 
 # Common files/directories to ignore
-hooks/
 scripts/
 target/
+.dockerignore
 .git/
 .github/
 .gitignore
 .env*
+.hooks/
 Dockerfile
-.dockerignore
 README.md 

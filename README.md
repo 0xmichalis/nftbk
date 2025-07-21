@@ -43,3 +43,11 @@ To run the server:
 ```
 cargo run --bin nftbk-server -- [args]
 ```
+
+## Contribute
+
+Install the pre-commit hook to aid with development:
+
+```
+cp .hooks/pre-commit .git/hooks/pre-commit
+```
