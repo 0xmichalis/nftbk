@@ -217,8 +217,8 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
             return Ok(uri.replace("{id}", &hex_token_id));
         }
 
-        // Handle ENS URI pattern
-        if let Some(new_uri) = replace_ens_pattern(&uri, &token_id) {
+        // Handle URIs with {id} patterns
+        if let Some(new_uri) = replace_id_pattern(&uri, &token_id) {
             return Ok(new_uri);
         }
 
@@ -226,11 +226,20 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
     }
 }
 
-fn replace_ens_pattern(uri: &str, token_id: &U256) -> Option<String> {
+fn replace_id_pattern(uri: &str, token_id: &U256) -> Option<String> {
     if let Some(idx) = uri.rfind("/0x{id}") {
         if idx + 7 == uri.len() {
             let hex_token_id = format!("0x{:x}", token_id);
             let new_uri = format!("{}{}", &uri[..idx + 1], hex_token_id);
+            return Some(new_uri);
+        }
+    }
+
+    // Catch-all pattern: /{id} at end
+    if let Some(idx) = uri.rfind("/{id}") {
+        if idx + 5 == uri.len() {
+            let dec_token_id = token_id.to_string();
+            let new_uri = format!("{}{}", &uri[..idx + 1], dec_token_id);
             return Some(new_uri);
         }
     }
@@ -285,20 +294,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_uri_ens_contract_pattern() {
+    async fn test_replace_id_pattern() {
         use alloy::primitives::U256;
         let ens_uri = "https://metadata.ens.domains/mainnet/0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401/0x{id}";
         let token_id = U256::from(123456u64);
         let expected_uri = "https://metadata.ens.domains/mainnet/0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401/0x1e240";
-        let replaced = replace_ens_pattern(ens_uri, &token_id);
+        let replaced = replace_id_pattern(ens_uri, &token_id);
         assert_eq!(replaced.as_deref(), Some(expected_uri));
 
         // Should not replace if pattern is not at end
         let not_at_end = "https://foo.com/0x{id}/extra";
-        assert_eq!(replace_ens_pattern(not_at_end, &token_id), None);
+        assert_eq!(replace_id_pattern(not_at_end, &token_id), None);
 
         // Should not replace if pattern is missing
         let no_pattern = "https://foo.com/bar";
-        assert_eq!(replace_ens_pattern(no_pattern, &token_id), None);
+        assert_eq!(replace_id_pattern(no_pattern, &token_id), None);
+
+        // Test new pattern: /{id} at end, decimal
+        let dec_uri = "https://api.example.com/metadata/{id}";
+        let expected_dec_uri = "https://api.example.com/metadata/123456";
+        let replaced_dec = replace_id_pattern(dec_uri, &token_id);
+        assert_eq!(replaced_dec.as_deref(), Some(expected_dec_uri));
     }
 }
