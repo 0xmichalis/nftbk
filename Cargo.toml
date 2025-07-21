@@ -46,6 +46,7 @@ scraper = "0.17"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
+subtle = "2"
 tar = "0.4"
 tezos-contract = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
 tezos-core = { git = "https://github.com/0xmichalis/tezos-rust-sdk", features = ["full_crypto"] }

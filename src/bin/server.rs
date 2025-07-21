@@ -28,6 +28,7 @@ use nftbk::server::{
     handle_backup, handle_backup_delete, handle_backup_retry, handle_backups, handle_download,
     handle_download_token, handle_error_log, handle_status, AppState, BackupJob,
 };
+use subtle::ConstantTimeEq;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -138,9 +139,16 @@ async fn auth_middleware(
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
         let expected = format!("Bearer {}", token);
-        if auth_header == Some(expected.as_str()) {
-            req.extensions_mut().insert(Some("admin".to_string()));
-            return next.run(req).await;
+        if let Some(auth_header) = auth_header {
+            if auth_header
+                .as_bytes()
+                .ct_eq(expected.as_bytes())
+                .unwrap_u8()
+                == 1
+            {
+                req.extensions_mut().insert(Some("admin".to_string()));
+                return next.run(req).await;
+            }
         }
     }
 
