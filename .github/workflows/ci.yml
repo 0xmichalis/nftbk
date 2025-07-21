@@ -27,8 +27,9 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
+          ~/.cargo/bin
           target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-bin-${{ hashFiles('.github/workflows/ci.yml') }}
 
     - name: Check Format
       run: cargo fmt --all -- --check
@@ -38,6 +39,13 @@ jobs:
 
     - name: Check
       run: cargo check --verbose
+
+    - name: Check cargo sort
+      run: |
+        if ! command -v cargo-sort > /dev/null; then
+          cargo install cargo-sort
+        fi
+        cargo sort --check
 
     - name: Run tests
       run: cargo test --verbose

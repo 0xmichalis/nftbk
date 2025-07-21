@@ -4,53 +4,6 @@ version = "0.1.0"
 edition = "2021"
 description = "CLI tool for backing up NFT metadata and content"
 
-[dependencies]
-tokio = { version = "1.28", features = ["full"] }
-toml = "0.7"
-clap = { version = "4.3", features = ["derive", "env"] }
-alloy = { version = "0.9.2", features = ["full"] }
-alloy-contract = { version = "0.9.2" }
-alloy-sol-types = "0.8.19"
-reqwest = { version = "0.11", features = ["json", "stream"] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-anyhow = "1.0"
-url = "2.4"
-futures = "0.3"
-tezos-core = { git = "https://github.com/0xmichalis/tezos-rust-sdk", features = ["full_crypto"] }
-tezos-contract = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
-tezos-michelson = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
-tezos-rpc = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "time"] }
-hex = "0.4.3"
-scraper = "0.17"
-flate2 = "1.0"
-base64 = "0.21"
-axum = "0.7"
-tower = "0.4"
-tokio-util = "0.7"
-sha2 = "0.10"
-uuid = { version = "1.4", features = ["v4"] }
-hyper = { version = "1.0", features = ["full"] }
-tar = "0.4"
-dotenv = "0.15"
-async-trait = "0.1.88"
-time = { version = "0.3", features = ["macros", "formatting"] }
-regex = "1"
-ctrlc = "3"
-libc = "0.2"
-josekit = "0.10.3"
-prettytable = "0.10"
-chrono = { version = "0.4.39", features = ["serde"] }
-rand = "0.8"
-urlencoding = "2.1"
-async-compression = { version = "0.4", features = ["tokio", "futures-io", "gzip"] }
-futures-util = "0.3"
-zip = "0.6"
-fs2 = "0.4"
-httpdate = "1.0"
-
 [lib]
 name = "nftbk"
 path = "src/lib.rs"
@@ -62,3 +15,50 @@ path = "src/bin/cli.rs"
 [[bin]]
 name = "nftbk-server"
 path = "src/bin/server.rs"
+
+[dependencies]
+alloy = { version = "0.9.2", features = ["full"] }
+alloy-contract = { version = "0.9.2" }
+alloy-sol-types = "0.8.19"
+anyhow = "1.0"
+async-compression = { version = "0.4", features = ["tokio", "futures-io", "gzip"] }
+async-trait = "0.1.88"
+axum = "0.7"
+base64 = "0.21"
+chrono = { version = "0.4.39", features = ["serde"] }
+clap = { version = "4.3", features = ["derive", "env"] }
+ctrlc = "3"
+dotenv = "0.15"
+flate2 = "1.0"
+fs2 = "0.4"
+futures = "0.3"
+futures-util = "0.3"
+hex = "0.4.3"
+httpdate = "1.0"
+hyper = { version = "1.0", features = ["full"] }
+josekit = "0.10.3"
+libc = "0.2"
+prettytable = "0.10"
+rand = "0.8"
+regex = "1"
+reqwest = { version = "0.11", features = ["json", "stream"] }
+scraper = "0.17"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10"
+tar = "0.4"
+tezos-contract = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
+tezos-core = { git = "https://github.com/0xmichalis/tezos-rust-sdk", features = ["full_crypto"] }
+tezos-michelson = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
+tezos-rpc = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
+time = { version = "0.3", features = ["macros", "formatting"] }
+tokio = { version = "1.28", features = ["full"] }
+tokio-util = "0.7"
+toml = "0.7"
+tower = "0.4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "time"] }
+url = "2.4"
+urlencoding = "2.1"
+uuid = { version = "1.4", features = ["v4"] }
+zip = "0.6"

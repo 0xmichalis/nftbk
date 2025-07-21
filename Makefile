@@ -1,5 +1,5 @@
 .PHONY: all
-all: fmt clippy test
+all: fmt clippy sort test
 
 .PHONY: fmt
 fmt:
@@ -8,6 +8,14 @@ fmt:
 .PHONY: clippy
 clippy:
 	cargo clippy -- -D warnings
+
+.PHONY: sort
+sort:
+	if ! command -v cargo-sort >/dev/null 2>&1; then \
+		echo "cargo-sort not found! Install with: cargo install cargo-sort"; \
+		exit 1; \
+	fi
+	cargo sort
 
 .PHONY: test
 test:
