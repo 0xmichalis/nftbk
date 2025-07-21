@@ -49,6 +49,7 @@ async-compression = { version = "0.4", features = ["tokio", "futures-io", "gzip"
 futures-util = "0.3"
 zip = "0.6"
 fs2 = "0.4"
+httpdate = "1.0"
 
 [lib]
 name = "nftbk"

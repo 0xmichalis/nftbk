@@ -171,6 +171,39 @@ pub async fn stream_gzip_http_to_file(
     stream_response_to_file(&mut decoder, &mut file).await
 }
 
+fn get_retry_after_delay(resp: &Result<reqwest::Response, reqwest::Error>) -> Option<Duration> {
+    let response = match resp {
+        Ok(r) => r,
+        Err(_) => return None,
+    };
+    if response.status().as_u16() != 429 {
+        return None;
+    }
+    let retry_after = response.headers().get("Retry-After")?;
+    let retry_after_str = retry_after.to_str().ok()?;
+    // Try parsing as integer seconds
+    if let Ok(secs) = retry_after_str.parse::<u64>() {
+        let delay = Duration::from_secs(secs);
+        debug!(
+            "429 Retry-After header present as integer seconds, parsed delay: {:?}",
+            delay
+        );
+        return Some(delay);
+    }
+    // Try parsing as HTTP-date
+    if let Ok(date) = httpdate::parse_http_date(retry_after_str) {
+        let now = std::time::SystemTime::now();
+        if let Ok(duration) = date.duration_since(now) {
+            debug!(
+                "429 Retry-After header present as HTTP-date, parsed delay: {:?}",
+                duration
+            );
+            return Some(duration);
+        }
+    }
+    None
+}
+
 /// Helper to fetch a URL with retries, using exponential backoff and jitter. The retry condition is provided as a closure.
 async fn fetch_url<F>(
     url: &str,
@@ -197,7 +230,8 @@ where
         attempt += 1;
         let base_delay = 2u64.pow(attempt).min(30); // cap at 30s
         let jitter: u64 = thread_rng().gen_range(0..500); // up to 500ms
-        let delay = Duration::from_secs(base_delay) + Duration::from_millis(jitter);
+        let default_delay = Duration::from_secs(base_delay) + Duration::from_millis(jitter);
+        let delay = get_retry_after_delay(&resp).unwrap_or(default_delay);
         warn!(
             "Retriable error for {}, retrying in {:?} (attempt {}/{})",
             url, delay, attempt, max_retries
