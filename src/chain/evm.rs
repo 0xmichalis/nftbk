@@ -217,8 +217,24 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
             return Ok(uri.replace("{id}", &hex_token_id));
         }
 
+        // Handle ENS URI pattern
+        if let Some(new_uri) = replace_ens_pattern(&uri, &token_id) {
+            return Ok(new_uri);
+        }
+
         Ok(uri)
     }
+}
+
+fn replace_ens_pattern(uri: &str, token_id: &U256) -> Option<String> {
+    if let Some(idx) = uri.rfind("/0x{id}") {
+        if idx + 7 == uri.len() {
+            let hex_token_id = format!("0x{:x}", token_id);
+            let new_uri = format!("{}{}", &uri[..idx + 1], hex_token_id);
+            return Some(new_uri);
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -266,5 +282,23 @@ mod tests {
         assert_eq!(attrs.len(), 1);
         assert_eq!(attrs[0].trait_type, "Serial");
         assert_eq!(attrs[0].value, serde_json::json!(1));
+    }
+
+    #[tokio::test]
+    async fn test_get_uri_ens_contract_pattern() {
+        use alloy::primitives::U256;
+        let ens_uri = "https://metadata.ens.domains/mainnet/0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401/0x{id}";
+        let token_id = U256::from(123456u64);
+        let expected_uri = "https://metadata.ens.domains/mainnet/0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401/0x1e240";
+        let replaced = replace_ens_pattern(ens_uri, &token_id);
+        assert_eq!(replaced.as_deref(), Some(expected_uri));
+
+        // Should not replace if pattern is not at end
+        let not_at_end = "https://foo.com/0x{id}/extra";
+        assert_eq!(replace_ens_pattern(not_at_end, &token_id), None);
+
+        // Should not replace if pattern is missing
+        let no_pattern = "https://foo.com/bar";
+        assert_eq!(replace_ens_pattern(no_pattern, &token_id), None);
     }
 }
