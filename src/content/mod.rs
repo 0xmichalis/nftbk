@@ -217,7 +217,7 @@ pub async fn fetch_with_retry(url: &str, max_retries: u32) -> anyhow::Result<req
         "tcp connect error",
     ];
     let should_retry = |result: &Result<reqwest::Response, reqwest::Error>| match result {
-        Ok(resp) => resp.status().is_server_error(),
+        Ok(resp) => resp.status().is_server_error() || resp.status().as_u16() == 429,
         Err(err) => {
             let err_str = format!("{}", err);
             RETRIABLE_ERRORS
