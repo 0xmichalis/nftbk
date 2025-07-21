@@ -57,7 +57,8 @@ where
     let mut error_log = Vec::new();
     for contract in contracts {
         debug!(
-            "Processing contract {} (token ID {})",
+            "Processing {} contract {} (token ID {})",
+            chain_name,
             contract.address(),
             contract.token_id()
         );
@@ -65,7 +66,8 @@ where
             Ok(uri) => uri,
             Err(e) => {
                 let msg = format!(
-                    "Failed to get token URI for contract {} (token ID {}): {}",
+                    "Failed to get token URI for {} contract {} (token ID {}): {}",
+                    chain_name,
                     contract.address(),
                     contract.token_id(),
                     e
@@ -86,7 +88,8 @@ where
             Ok(pair) => pair,
             Err(e) => {
                 let msg = format!(
-                    "Failed to fetch metadata for contract {} (token ID {}): {}",
+                    "Failed to fetch metadata for {} contract {} (token ID {}): {}",
+                    chain_name,
                     contract.address(),
                     contract.token_id(),
                     e
@@ -130,8 +133,9 @@ where
                         .filter(|s| !s.is_empty())
                         .unwrap_or("content");
                     let msg = format!(
-                        "Failed to fetch {} for contract {} (token ID {}): {}",
+                        "Failed to fetch {} for {} contract {} (token ID {}): {}",
                         name_for_log,
+                        chain_name,
                         contract.address(),
                         contract.token_id(),
                         e
@@ -160,7 +164,8 @@ where
             }
             Err(e) => {
                 let msg = format!(
-                    "Failed to fetch extra content (contract: {}, token ID: {}): {}",
+                    "Failed to fetch extra content for {} contract {} (token ID {}): {}",
+                    chain_name,
                     contract.address(),
                     contract.token_id(),
                     e
