@@ -116,16 +116,17 @@ pub struct Options {
 }
 
 /// Streams an AsyncRead to a file and flushes it.
-async fn stream_response_to_file<R: AsyncRead + Unpin>(
+async fn stream_reader_to_file<R: AsyncRead + Unpin>(
     reader: &mut R,
     file: &mut tokio::fs::File,
-) -> anyhow::Result<()> {
+    file_path: &Path,
+) -> anyhow::Result<PathBuf> {
     tokio::io::copy(reader, file).await?;
     file.flush().await?;
-    Ok(())
+    Ok(file_path.to_path_buf())
 }
 
-/// Streams a reqwest::Response to a file, detecting extension if needed.
+/// Streams an HTTP response to a file.
 pub async fn stream_http_to_file(
     response: reqwest::Response,
     file_path: &Path,
@@ -135,7 +136,7 @@ pub async fn stream_http_to_file(
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
     let mut reader = StreamReader::new(stream);
 
-    // Use the helper to detect extension
+    // Detect extension and append to file path if needed
     let mut file_path = file_path.to_path_buf();
     let (detected_ext, prefix_buf) = extensions::detect_extension_from_stream(&mut reader).await;
     if !extensions::has_known_extension(&file_path) {
@@ -146,29 +147,26 @@ pub async fn stream_http_to_file(
         }
     }
 
-    // Create file and write the buffer (now we have the prefix buffer to write first)
+    // Create file, write the prefix buffer and the rest of the stream
     let mut file = tokio::fs::File::create(&file_path).await?;
     if !prefix_buf.is_empty() {
         file.write_all(&prefix_buf).await?;
     }
-    tokio::io::copy(&mut reader, &mut file).await?;
-    file.flush().await?;
-
-    Ok(file_path)
+    stream_reader_to_file(&mut reader, &mut file, &file_path).await
 }
 
-/// Streams a gzipped reqwest::Response to a file, decompressing on the fly.
+/// Streams a gzipped HTTP response to a file, decompressing on the fly.
 pub async fn stream_gzip_http_to_file(
     response: reqwest::Response,
     file_path: &Path,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<PathBuf> {
     let mut file = tokio::fs::File::create(file_path).await?;
     let stream = response
         .bytes_stream()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
     let reader = StreamReader::new(stream);
     let mut decoder = GzipDecoder::new(BufReader::new(reader));
-    stream_response_to_file(&mut decoder, &mut file).await
+    stream_reader_to_file(&mut decoder, &mut file, file_path).await
 }
 
 fn get_retry_after_delay(resp: &Result<reqwest::Response, reqwest::Error>) -> Option<Duration> {
