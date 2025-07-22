@@ -144,43 +144,90 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         Ok((metadata, metadata_content))
     }
 
-    fn collect_urls_to_download(metadata: &Self::Metadata) -> Vec<(String, Option<String>)> {
+    fn collect_urls_to_download(metadata: &Self::Metadata) -> Vec<(String, Options)> {
         let mut urls_to_download = Vec::new();
         let mut seen = std::collections::HashSet::new();
 
-        let mut add_if_not_empty = |url: &str, name: Option<&str>| {
+        let mut add_if_not_empty = |url: &str, options: Options| {
             if !url.is_empty() && seen.insert(url.to_string()) {
-                urls_to_download.push((url.to_string(), name.map(|s| s.to_string())));
+                urls_to_download.push((url.to_string(), options));
             }
         };
 
         if let Some(media) = &metadata.media {
             match media {
-                Media::Uri { uri } => add_if_not_empty(uri, Some("media")),
-                Media::String(uri) => add_if_not_empty(uri, Some("media")),
+                Media::Uri { uri } => add_if_not_empty(
+                    uri,
+                    Options {
+                        fallback_filename: Some("media".to_string()),
+                        overriden_filename: None,
+                    },
+                ),
+                Media::String(uri) => add_if_not_empty(
+                    uri,
+                    Options {
+                        fallback_filename: Some("media".to_string()),
+                        overriden_filename: None,
+                    },
+                ),
             }
         }
         if let Some(content) = &metadata.content {
             match content {
-                Media::Uri { uri } => add_if_not_empty(uri, Some("content")),
-                Media::String(uri) => add_if_not_empty(uri, Some("content")),
+                Media::Uri { uri } => add_if_not_empty(
+                    uri,
+                    Options {
+                        fallback_filename: Some("content".to_string()),
+                        overriden_filename: None,
+                    },
+                ),
+                Media::String(uri) => add_if_not_empty(
+                    uri,
+                    Options {
+                        fallback_filename: Some("content".to_string()),
+                        overriden_filename: None,
+                    },
+                ),
             }
         }
         if let Some(assets) = &metadata.assets {
             if let Some(glb) = &assets.glb {
-                add_if_not_empty(glb, Some("glb"));
+                add_if_not_empty(
+                    glb,
+                    Options {
+                        fallback_filename: Some("glb".to_string()),
+                        overriden_filename: None,
+                    },
+                );
             }
         }
         if let Some(image) = &metadata.image {
-            add_if_not_empty(image, Some("image"));
+            add_if_not_empty(
+                image,
+                Options {
+                    fallback_filename: Some("image".to_string()),
+                    overriden_filename: None,
+                },
+            );
         }
         if let Some(image_url) = &metadata.image_url {
-            add_if_not_empty(image_url, Some("image"));
+            add_if_not_empty(
+                image_url,
+                Options {
+                    fallback_filename: Some("image".to_string()),
+                    overriden_filename: None,
+                },
+            );
         }
         if let Some(animation_url) = &metadata.animation_url {
-            add_if_not_empty(animation_url, Some("animation"));
+            add_if_not_empty(
+                animation_url,
+                Options {
+                    fallback_filename: Some("animation".to_string()),
+                    overriden_filename: None,
+                },
+            );
         }
-
         urls_to_download
     }
 

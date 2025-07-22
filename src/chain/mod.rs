@@ -29,7 +29,7 @@ pub trait NFTChainProcessor {
     ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)>;
 
     /// Collect all URLs to download from the metadata.
-    fn collect_urls_to_download(metadata: &Self::Metadata) -> Vec<(String, Option<String>)>;
+    fn collect_urls_to_download(metadata: &Self::Metadata) -> Vec<(String, Options)>;
 
     /// Get the token URI for a contract using the chain's RPC client.
     async fn get_uri(
@@ -107,28 +107,30 @@ where
         let urls_to_download = C::collect_urls_to_download(&metadata);
 
         let mut downloaded = HashSet::new();
-        for (url, fallback_filename) in urls_to_download {
+        for (url, opts) in urls_to_download {
             if !downloaded.insert(url.clone()) {
-                debug!("Skipping duplicate {:?} from {}", fallback_filename, url);
+                debug!(
+                    "Skipping duplicate {:?} from {}",
+                    opts.fallback_filename, url
+                );
                 continue;
             }
-            debug!("Downloading {:?} from {}", fallback_filename, url);
+            debug!("Downloading {:?} from {}", opts.fallback_filename, url);
+            let opts_for_log = opts.clone();
             match fetch_and_save_content(
                 &url,
                 chain_name,
                 contract.address(),
                 contract.token_id(),
                 output_path,
-                Options {
-                    overriden_filename: None,
-                    fallback_filename: fallback_filename.clone(),
-                },
+                opts,
             )
             .await
             {
                 Ok(path) => all_files.push(path),
                 Err(e) => {
-                    let name_for_log = fallback_filename
+                    let name_for_log = opts_for_log
+                        .fallback_filename
                         .as_deref()
                         .filter(|s| !s.is_empty())
                         .unwrap_or("content");

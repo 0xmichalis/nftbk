@@ -9,6 +9,7 @@ use tracing::debug;
 use crate::chain::common::ContractWithToken;
 use crate::chain::ContractTokenInfo;
 use crate::content::fetch_and_save_content;
+use crate::content::Options;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -47,8 +48,6 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         output_path: &std::path::Path,
         chain_name: &str,
     ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)> {
-        use crate::content::Options;
-
         debug!(
             "Fetching metadata from {} for contract {}",
             token_uri,
@@ -71,7 +70,7 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         Ok((metadata, metadata_content))
     }
 
-    fn collect_urls_to_download(metadata: &Self::Metadata) -> Vec<(String, Option<String>)> {
+    fn collect_urls_to_download(metadata: &Self::Metadata) -> Vec<(String, Options)> {
         let mut urls_to_download = Vec::new();
         let mut seen = std::collections::HashSet::new();
         let nft_name = metadata.name.as_deref().unwrap_or("untitled");
@@ -88,7 +87,13 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
                     format.file_name.clone()
                 };
                 if seen.insert(format.uri.clone()) {
-                    urls_to_download.push((format.uri.clone(), Some(file_name)));
+                    urls_to_download.push((
+                        format.uri.clone(),
+                        Options {
+                            fallback_filename: Some(file_name),
+                            overriden_filename: None,
+                        },
+                    ));
                 }
             }
         }
@@ -97,7 +102,13 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         let mut add_if_not_empty = |url: &Option<String>, name: &str| {
             if let Some(url) = url {
                 if !url.is_empty() && seen.insert(url.clone()) {
-                    urls_to_download.push((url.clone(), Some(name.to_string())));
+                    urls_to_download.push((
+                        url.clone(),
+                        Options {
+                            fallback_filename: Some(name.to_string()),
+                            overriden_filename: None,
+                        },
+                    ));
                 }
             }
         };

@@ -110,6 +110,7 @@ async fn try_exists(path: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
+#[derive(Clone)]
 pub struct Options {
     pub overriden_filename: Option<String>,
     pub fallback_filename: Option<String>,
