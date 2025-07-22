@@ -23,6 +23,7 @@ pub struct NFTMetadata {
     #[serde(alias = "imageUrl")]
     pub image_url: Option<String>,
     pub animation_url: Option<String>,
+    pub animation_details: Option<AnimationDetails>,
     pub external_url: Option<String>,
     #[serde(default)]
     #[serde(deserialize_with = "deserialize_attributes")]
@@ -30,6 +31,13 @@ pub struct NFTMetadata {
     pub media: Option<Media>,
     pub content: Option<Media>,
     pub assets: Option<Assets>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum AnimationDetails {
+    String(String),
+    Object { format: Option<String> },
 }
 
 // Helper enum to deserialize both formats
@@ -220,11 +228,32 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
             );
         }
         if let Some(animation_url) = &metadata.animation_url {
+            let mut overriden_filename = None;
+            if let Some(details) = &metadata.animation_details {
+                match details {
+                    AnimationDetails::String(s) => {
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(s) {
+                            if let Some(fmt) = json.get("format").and_then(|v| v.as_str()) {
+                                if fmt.eq_ignore_ascii_case("html") {
+                                    overriden_filename = Some("index.html".to_string());
+                                }
+                            }
+                        }
+                    }
+                    AnimationDetails::Object { format, .. } => {
+                        if let Some(fmt) = format {
+                            if fmt.eq_ignore_ascii_case("html") {
+                                overriden_filename = Some("index.html".to_string());
+                            }
+                        }
+                    }
+                }
+            }
             add_if_not_empty(
                 animation_url,
                 Options {
                     fallback_filename: Some("animation".to_string()),
-                    overriden_filename: None,
+                    overriden_filename,
                 },
             );
         }
