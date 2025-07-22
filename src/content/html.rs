@@ -18,6 +18,7 @@ pub async fn download_html_resources(
         let selectors = [
             (Selector::parse("[src]").unwrap(), "src"),
             (Selector::parse("link[href]").unwrap(), "href"),
+            (Selector::parse("script[src]").unwrap(), "src"),
         ];
         let mut resources = Vec::new();
         for (selector, attr) in selectors.iter() {

@@ -286,6 +286,51 @@ pub async fn fetch_with_retry(url: &str, max_retries: u32) -> anyhow::Result<req
     }
 }
 
+// Helper to write file and postprocess (pretty-print JSON, download HTML resources)
+async fn write_and_postprocess_file(
+    file_path: &Path,
+    content: &[u8],
+    url: &str,
+) -> anyhow::Result<()> {
+    let ext_str = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    match ext_str {
+        "json" => {
+            let data = if content.is_empty() {
+                tokio::fs::read(file_path).await?
+            } else {
+                content.to_vec()
+            };
+            if let Ok(json_value) = serde_json::from_slice::<Value>(&data) {
+                let pretty = serde_json::to_string_pretty(&json_value)?;
+                fs::write(file_path, pretty).await?;
+            } else {
+                fs::write(file_path, &data).await?;
+            }
+        }
+        "html" => {
+            let content_str = if content.is_empty() {
+                tokio::fs::read_to_string(file_path).await?
+            } else {
+                String::from_utf8_lossy(content).to_string()
+            };
+            if !content.is_empty() {
+                fs::write(file_path, content).await?;
+            }
+            let parent = file_path.parent().ok_or_else(|| {
+                anyhow::anyhow!("File path has no parent directory: {}", file_path.display())
+            })?;
+            download_html_resources(&content_str, url, parent).await?;
+        }
+        _ => {
+            if !content.is_empty() {
+                fs::write(file_path, content).await?;
+            }
+            // Otherwise, do nothing (file already written by streaming)
+        }
+    }
+    Ok(())
+}
+
 pub async fn fetch_and_save_content(
     url: &str,
     chain: &str,
@@ -326,37 +371,7 @@ pub async fn fetch_and_save_content(
         }
 
         info!("Saving {} (data url)", file_path.display());
-        let ext_str = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let write_result = match ext_str {
-            "json" => {
-                let json_value: Value = serde_json::from_slice(&content)?;
-                let pretty = serde_json::to_string_pretty(&json_value)?;
-                fs::write(&file_path, pretty)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e))
-            }
-            "html" => {
-                let content_str = String::from_utf8_lossy(&content).to_string();
-                let write_res = fs::write(&file_path, &content)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e));
-                if write_res.is_ok() {
-                    let parent = file_path.parent().ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "File path has no parent directory: {}",
-                            file_path.display()
-                        )
-                    })?;
-                    download_html_resources(&content_str, url, parent).await?;
-                }
-                write_res
-            }
-            _ => fs::write(&file_path, &content)
-                .await
-                .map_err(|e| anyhow::anyhow!(e)),
-        };
-        write_result?;
-
+        write_and_postprocess_file(&file_path, &content, url).await?;
         info!("Saved {} (data url)", file_path.display());
         return Ok(file_path);
     }
@@ -375,14 +390,8 @@ pub async fn fetch_and_save_content(
     }
     let file_path = stream_http_to_file(response, &file_path).await?;
 
-    // If the file is JSON, pretty-print it
-    if file_path.extension().and_then(|e| e.to_str()) == Some("json") {
-        let content = tokio::fs::read(&file_path).await?;
-        if let Ok(json_value) = serde_json::from_slice::<Value>(&content) {
-            let pretty = serde_json::to_string_pretty(&json_value)?;
-            fs::write(&file_path, pretty).await?;
-        }
-    }
+    // Pass empty content since we already streamed to disk and only need to postprocess
+    write_and_postprocess_file(&file_path, &[], url).await?;
 
     info!("Saved {} (url: {})", file_path.display(), url);
     Ok(file_path)
