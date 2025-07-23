@@ -23,12 +23,15 @@ use tracing::info;
 use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
+use nftbk::server::handlers::handle_backup::{handle_backup, run_backup_job};
+use nftbk::server::handlers::handle_backup_delete::handle_backup_delete;
+use nftbk::server::handlers::handle_backup_retry::handle_backup_retry;
+use nftbk::server::handlers::handle_backups::handle_backups;
+use nftbk::server::handlers::handle_download::{handle_download, handle_download_token};
+use nftbk::server::handlers::handle_status::handle_status;
 use nftbk::server::privy::verify_privy_jwt;
 use nftbk::server::pruner::run_pruner;
-use nftbk::server::{
-    handle_backup, handle_backup_delete, handle_backup_retry, handle_backups, handle_download,
-    handle_download_token, handle_status, AppState, BackupJob,
-};
+use nftbk::server::{AppState, BackupJob};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -104,7 +107,7 @@ fn spawn_backup_workers(
                 };
                 match job {
                     Some(job) => {
-                        handle_backup::run_backup_job(
+                        run_backup_job(
                             state_clone.clone(),
                             job.task_id,
                             job.tokens,

@@ -14,22 +14,17 @@ use crate::server::hashing::compute_file_sha256;
 pub mod api;
 pub mod archive;
 pub mod db;
-pub mod handle_backup;
-pub mod handle_backup_delete;
-pub mod handle_backup_retry;
-pub mod handle_backups;
-pub mod handle_download;
-pub mod handle_status;
+pub mod handlers;
 pub mod hashing;
 pub mod privy;
 pub mod pruner;
-pub use handle_backup::handle_backup;
-pub use handle_backup_delete::handle_backup_delete;
-pub use handle_backup_retry::handle_backup_retry;
-pub use handle_backups::handle_backups;
-pub use handle_download::handle_download;
-pub use handle_download::handle_download_token;
-pub use handle_status::handle_status;
+pub use handlers::handle_backup::handle_backup;
+pub use handlers::handle_backup_delete::handle_backup_delete;
+pub use handlers::handle_backup_retry::handle_backup_retry;
+pub use handlers::handle_backups::handle_backups;
+pub use handlers::handle_download::handle_download;
+pub use handlers::handle_download::handle_download_token;
+pub use handlers::handle_status::handle_status;
 
 #[derive(Clone)]
 pub struct AppState {
