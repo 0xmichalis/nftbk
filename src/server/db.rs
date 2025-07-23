@@ -29,9 +29,9 @@ pub struct Db {
 }
 
 impl Db {
-    pub async fn new(database_url: &str) -> Self {
+    pub async fn new(database_url: &str, max_connections: u32) -> Self {
         let pool = PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(max_connections)
             .connect(database_url)
             .await
             .expect("Failed to connect to Postgres");

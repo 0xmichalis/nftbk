@@ -211,7 +211,8 @@ async fn main() {
         args.enable_pruner,
         args.pruner_retention_days,
         backup_job_sender,
-        &db_url, // pass db_url
+        &db_url,
+        args.backup_parallelism as u32,
     )
     .await;
 

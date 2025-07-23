@@ -65,6 +65,7 @@ impl AppState {
         pruner_retention_days: u64,
         backup_job_sender: mpsc::Sender<BackupJob>,
         db_url: &str,
+        max_connections: u32,
     ) -> Self {
         let config_content = tokio::fs::read_to_string(chain_config_path)
             .await
@@ -75,9 +76,8 @@ impl AppState {
         chain_config
             .resolve_env_vars()
             .expect("Failed to resolve environment variables in chain config");
-        let db = Arc::new(Db::new(db_url).await);
+        let db = Arc::new(Db::new(db_url, max_connections).await);
         AppState {
-            // tasks: Arc::new(Mutex::new(HashMap::new())), // REMOVED
             chain_config: Arc::new(chain_config),
             base_dir: Arc::new(base_dir.to_string()),
             unsafe_skip_checksum_check,
