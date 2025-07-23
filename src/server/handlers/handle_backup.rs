@@ -206,7 +206,12 @@ async fn run_backup_job_inner(
 
     // Sync all files and directories to disk before zipping
     info!("Syncing {} to disk before zipping", out_path.display());
-    sync_files(&files_written);
+    let files_written_clone = files_written.clone();
+    tokio::task::spawn_blocking(move || {
+        sync_files(&files_written_clone);
+    })
+    .await
+    .unwrap();
     info!(
         "Synced {} to disk before zipping ({} files)",
         out_path.display(),
@@ -218,7 +223,15 @@ async fn run_backup_job_inner(
         get_zipped_backup_paths(&state.base_dir, &task_id, &archive_format);
     info!("Zipping backup to {}", zip_pathbuf.display());
     let start_time = Instant::now();
-    match zip_backup(&out_path, &zip_pathbuf, archive_format) {
+    let out_path_clone = out_path.clone();
+    let zip_pathbuf_clone = zip_pathbuf.clone();
+    let archive_format_clone = archive_format.clone();
+    let zip_result = tokio::task::spawn_blocking(move || {
+        zip_backup(&out_path_clone, &zip_pathbuf_clone, archive_format_clone)
+    })
+    .await
+    .unwrap();
+    match zip_result {
         Ok(checksum) => {
             info!(
                 "Zipped backup at {} in {:?}s",
