@@ -2,7 +2,7 @@ use std::fs::{remove_dir_all, remove_file};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::time::{sleep, Duration as TokioDuration};
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::server::archive::get_zipped_backup_paths;
 use crate::server::db::{Db, ExpiredBackup};
@@ -32,9 +32,10 @@ pub async fn run_pruner(
                 }
             }
             Err(e) => {
-                tracing::warn!("Failed to query expired backups: {}", e);
+                warn!("Failed to query expired backups: {}", e);
             }
         }
+        info!("Pruning process completed");
         let mut slept = 0;
         let sleep_step = 1;
         while slept < interval_seconds && running.load(Ordering::SeqCst) {
@@ -42,5 +43,5 @@ pub async fn run_pruner(
             slept += sleep_step;
         }
     }
-    info!("Pruner shutting down");
+    info!("Pruner stopped");
 }
