@@ -64,8 +64,8 @@ stop-all:
 
 .PHONY: restart
 restart:
-	podman-compose -p nftbk-server pull
-	podman-compose -p nftbk-server restart nftbk-server
+	podman-compose -p nftbk-server down nftbk-server
+	podman-compose -p nftbk-server up --pull nftbk-server -d
 
 .PHONY: start-db
 start-db:
