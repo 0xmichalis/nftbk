@@ -73,10 +73,10 @@ start-db:
 .PHONY: stop-db
 stop-db:
 	podman-compose stop db
+	podman pod rm -f nftbk
 
 .PHONY: nuke-db
-nuke-db:
-	podman-compose stop db
+nuke-db: stop-db
 	podman volume rm nftbk_pgdata
 
 .PHONY: migrate-db
