@@ -144,6 +144,34 @@ impl Db {
         Ok(())
     }
 
+    /// Batch update: set status for multiple task_ids at once
+    pub async fn batch_update_backup_status(
+        &self,
+        task_ids: &[String],
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        if task_ids.is_empty() {
+            return Ok(());
+        }
+        // Build the query with a dynamic number of parameters
+        let mut query = String::from(
+            "UPDATE backup_metadata SET status = $1, updated_at = NOW() WHERE task_id IN (",
+        );
+        for (i, _) in task_ids.iter().enumerate() {
+            if i > 0 {
+                query.push_str(", ");
+            }
+            query.push_str(&format!("${}", i + 2));
+        }
+        query.push(')');
+        let mut q = sqlx::query(&query).bind(status);
+        for task_id in task_ids {
+            q = q.bind(task_id);
+        }
+        q.execute(&self.pool).await?;
+        Ok(())
+    }
+
     pub async fn clear_backup_errors(&self, task_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"

@@ -17,18 +17,28 @@ pub async fn run_pruner(
         info!("Running pruning process...");
         match db.list_expired_backups().await {
             Ok(expired) => {
+                let mut pruned_task_ids = Vec::new();
                 for ExpiredBackup {
                     task_id,
                     archive_format,
-                } in expired
+                } in &expired
                 {
                     let (archive_path, archive_checksum_path) =
-                        get_zipped_backup_paths(&base_dir, &task_id, &archive_format);
+                        get_zipped_backup_paths(&base_dir, task_id, archive_format);
                     let backup_dir = format!("{}/nftbk-{}", base_dir, task_id);
                     let _ = remove_file(&archive_path);
                     let _ = remove_file(&archive_checksum_path);
                     let _ = remove_dir_all(&backup_dir);
                     info!("Pruned expired backup {}", task_id);
+                    pruned_task_ids.push(task_id.clone());
+                }
+                if !pruned_task_ids.is_empty() {
+                    if let Err(e) = db
+                        .batch_update_backup_status(&pruned_task_ids, "expired")
+                        .await
+                    {
+                        warn!("Failed to update status for pruned backups: {}", e);
+                    }
                 }
             }
             Err(e) => {
