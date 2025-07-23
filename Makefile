@@ -1,5 +1,10 @@
 .PHONY: all
-all: fmt clippy sort sqlxprepare test
+all:
+	@export SQLX_OFFLINE=true
+	@cargo fmt --all
+	@cargo clippy -- -D warnings
+	@cargo sort
+	@cargo test
 
 .PHONY: fmt
 fmt:
@@ -49,17 +54,29 @@ run-cli-test:
 run-server:
 	cargo run --bin nftbk-server -- --unsafe-skip-checksum-check true --backup-parallelism 2 $(filter-out $@,$(MAKECMDGOALS))
 
+.PHONY: start-all
+start-all:
+	podman-compose -p nftbk-server up -d
+
+.PHONY: stop-all
+stop-all:
+	podman-compose -p nftbk-server down
+
+.PHONY: restart
+restart:
+	podman-compose -p nftbk-server restart nftbk-server
+
 .PHONY: start-db
 start-db:
-	scripts/start-postgres.sh
+	podman-compose up -d db
 
 .PHONY: stop-db
 stop-db:
-	scripts/stop-postgres.sh
+	podman-compose stop db
 
 .PHONY: nuke-db
 nuke-db:
-	scripts/stop-postgres.sh
+	podman-compose stop db
 	podman volume rm nftbk_pgdata
 
 .PHONY: migrate-db
