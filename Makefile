@@ -64,4 +64,8 @@ nuke-db:
 
 .PHONY: migrate-db
 migrate-db:
+	@if ! command -v cargo sqlx >/dev/null 2>&1; then \
+		echo "cargo sqlx not found! Install with: cargo install sqlx-cli"; \
+		exit 1; \
+	fi
 	sqlx migrate run
