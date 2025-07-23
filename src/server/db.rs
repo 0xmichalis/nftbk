@@ -1,0 +1,236 @@
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use sqlx::{postgres::PgPoolOptions, PgPool};
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BackupMetadataRow {
+    pub task_id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub requestor: String,
+    pub archive_format: String,
+    pub nft_count: i32,
+    pub tokens: serde_json::Value,
+    pub status: String,
+    pub expires_at: Option<DateTime<Utc>>,
+    pub error_log: Option<String>,
+    pub fatal_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ExpiredBackup {
+    pub task_id: String,
+    pub archive_format: String,
+}
+
+#[derive(Clone)]
+pub struct Db {
+    pub pool: PgPool,
+}
+
+impl Db {
+    pub async fn new(database_url: &str) -> Self {
+        let pool = PgPoolOptions::new()
+            .max_connections(5)
+            .connect(database_url)
+            .await
+            .expect("Failed to connect to Postgres");
+        // Health check: run a simple query
+        sqlx::query("SELECT 1")
+            .execute(&pool)
+            .await
+            .expect("Postgres connection is not healthy");
+        tracing::info!("Postgres connection is healthy");
+        Db { pool }
+    }
+
+    pub async fn insert_backup_metadata(
+        &self,
+        task_id: &str,
+        requestor: &str,
+        archive_format: &str,
+        nft_count: i32,
+        tokens: &serde_json::Value,
+        retention_days: Option<u64>,
+    ) -> Result<(), sqlx::Error> {
+        let (expires_at_sql, expires_at_arg) = if let Some(days) = retention_days {
+            ("NOW() + ($6 || ' days')::interval", Some(days as i64))
+        } else {
+            ("NULL", None)
+        };
+        let query = format!(
+            r#"
+            INSERT INTO backup_metadata (
+                task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, expires_at
+            ) VALUES (
+                $1, NOW(), NOW(), $2, $3, $4, $5, {}
+            )
+            ON CONFLICT (task_id) DO UPDATE SET
+                updated_at = NOW(),
+                status = EXCLUDED.status,
+                archive_format = EXCLUDED.archive_format,
+                nft_count = EXCLUDED.nft_count,
+                tokens = EXCLUDED.tokens,
+                expires_at = {},
+                error_log = EXCLUDED.error_log
+            "#,
+            expires_at_sql, expires_at_sql
+        );
+        if let Some(days) = expires_at_arg {
+            sqlx::query(&query)
+                .bind(task_id)
+                .bind(requestor)
+                .bind(archive_format)
+                .bind(nft_count)
+                .bind(tokens)
+                .bind(days)
+                .execute(&self.pool)
+                .await?;
+        } else {
+            sqlx::query(&query)
+                .bind(task_id)
+                .bind(requestor)
+                .bind(archive_format)
+                .bind(nft_count)
+                .bind(tokens)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn delete_backup_metadata(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query!("DELETE FROM backup_metadata WHERE task_id = $1", task_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn update_backup_metadata_error_log(
+        &self,
+        task_id: &str,
+        error_log: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            UPDATE backup_metadata
+            SET error_log = $2, updated_at = NOW()
+            WHERE task_id = $1
+            "#,
+            task_id,
+            error_log
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn update_backup_metadata_status(
+        &self,
+        task_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            UPDATE backup_metadata
+            SET status = $2, updated_at = NOW()
+            WHERE task_id = $1
+            "#,
+            task_id,
+            status
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn clear_backup_errors(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            UPDATE backup_metadata
+            SET error_log = NULL, fatal_error = NULL
+            WHERE task_id = $1
+            "#,
+            task_id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_backup_error(
+        &self,
+        task_id: &str,
+        fatal_error: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            UPDATE backup_metadata
+            SET status = 'error', fatal_error = $2, updated_at = NOW()
+            WHERE task_id = $1
+            "#,
+            task_id,
+            fatal_error
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn get_backup_metadata(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<BackupMetadataRow>, sqlx::Error> {
+        let rec = sqlx::query_as!(
+            BackupMetadataRow,
+            r#"
+            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, status, expires_at, error_log, fatal_error
+            FROM backup_metadata WHERE task_id = $1
+            "#,
+            task_id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(rec)
+    }
+
+    pub async fn list_requestor_backups(
+        &self,
+        requestor: &str,
+    ) -> Result<Vec<BackupMetadataRow>, sqlx::Error> {
+        let recs = sqlx::query_as!(
+            BackupMetadataRow,
+            r#"
+            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, status, expires_at, error_log, fatal_error
+            FROM backup_metadata WHERE requestor = $1
+            ORDER BY created_at DESC
+            "#,
+            requestor
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(recs)
+    }
+
+    pub async fn list_expired_backups(&self) -> Result<Vec<ExpiredBackup>, sqlx::Error> {
+        let recs = sqlx::query_as!(
+            ExpiredBackup,
+            r#"
+            SELECT task_id, archive_format FROM backup_metadata WHERE expires_at IS NOT NULL AND expires_at < NOW()
+            "#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(recs)
+    }
+
+    pub async fn get_backup_status(&self, task_id: &str) -> Result<Option<String>, sqlx::Error> {
+        let rec = sqlx::query!(
+            r#"SELECT status FROM backup_metadata WHERE task_id = $1"#,
+            task_id
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(rec.map(|r| r.status))
+    }
+}

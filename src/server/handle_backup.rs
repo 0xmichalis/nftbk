@@ -3,22 +3,18 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use chrono::Utc;
 use futures_util::FutureExt;
 use serde_json;
 use std::collections::HashSet;
 use std::panic::AssertUnwindSafe;
 use std::time::Instant;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 use crate::backup::{backup_from_config, BackupConfig, TokenConfig};
 use crate::server::api::{BackupRequest, BackupResponse};
 use crate::server::archive::{archive_format_from_user_agent, get_zipped_backup_paths, zip_backup};
 use crate::server::hashing::compute_array_sha256;
-use crate::server::{
-    check_backup_on_disk, locked_update_string_vec_json_file, AppState, BackupJob, BackupMetadata,
-    TaskInfo, TaskStatus, Tokens,
-};
+use crate::server::{check_backup_on_disk, AppState, BackupJob, Tokens};
 
 pub async fn handle_backup(
     State(state): State<AppState>,
@@ -35,21 +31,18 @@ pub async fn handle_backup(
     }
 
     let task_id = compute_array_sha256(&req.tokens);
-    let mut tasks = state.tasks.lock().await;
-
     let force = req.force.unwrap_or(false);
 
-    // Check if task exists and its status
-    if let Some(task) = tasks.get(&task_id) {
-        match &task.status {
-            TaskStatus::InProgress => {
+    if let Ok(Some(status)) = state.db.get_backup_status(&task_id).await {
+        match status.as_str() {
+            "in_progress" => {
                 debug!(
                     "Duplicate backup request, returning existing task_id {}",
                     task_id
                 );
                 return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
             }
-            TaskStatus::Done => {
+            "done" => {
                 if force {
                     info!("Force rerunning backup task {}", task_id);
                 } else {
@@ -60,24 +53,16 @@ pub async fn handle_backup(
                     return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
                 }
             }
-            TaskStatus::Error(e) => {
-                info!(
-                    "Rerunning task {} because previous backup failed: {}",
-                    task_id, e
-                );
+            "error" => {
+                info!("Rerunning task {} because previous backup failed", task_id);
             }
+            _ => {}
         }
     }
 
-    // Insert/update as pending
-    tasks.insert(
-        task_id.clone(),
-        TaskInfo {
-            status: TaskStatus::InProgress,
-            zip_path: None,
-        },
-    );
-    drop(tasks); // Release lock before spawning
+    if force {
+        let _ = state.db.clear_backup_errors(&task_id).await;
+    }
 
     // Select archive format based on user-agent
     let archive_format = headers
@@ -86,51 +71,26 @@ pub async fn handle_backup(
         .map(archive_format_from_user_agent)
         .unwrap_or_else(|| "zip".to_string());
 
-    // Write metadata file synchronously as part of the HTTP request
-    let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum();
-    let metadata = BackupMetadata {
-        created_at: Utc::now().to_rfc3339(),
-        requestor: requestor.clone().unwrap_or_default(),
-        nft_count,
-        tokens: req.tokens.clone(),
-        archive_format: archive_format.clone(),
-    };
-    let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
-    if let Err(e) = tokio::fs::write(
-        &metadata_path,
-        serde_json::to_vec_pretty(&metadata).unwrap(),
-    )
-    .await
+    // Write metadata to Postgres
+    let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum::<usize>() as i32;
+    let tokens_json = serde_json::to_value(&req.tokens).unwrap();
+    if let Err(e) = state
+        .db
+        .insert_backup_metadata(
+            &task_id,
+            requestor.as_deref().unwrap_or(""),
+            &archive_format,
+            nft_count,
+            &tokens_json,
+            Some(state.pruner_retention_days),
+        )
+        .await
     {
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write metadata file: {}", e)})),
+            Json(serde_json::json!({"error": format!("Failed to write metadata to DB: {}", e)})),
         )
             .into_response();
-    }
-
-    // Update by_requestor index if requestor is not empty
-    let requestor_str = requestor.as_deref().unwrap_or("");
-    if !requestor_str.is_empty() {
-        let by_requestor_dir = format!("{}/by_requestor", state.base_dir);
-        if let Err(e) = tokio::fs::create_dir_all(&by_requestor_dir).await {
-            warn!("Failed to create by_requestor dir: {}", e);
-        } else {
-            let user_file = format!("{}/{}.json", by_requestor_dir, requestor_str);
-            let task_id_clone = task_id.clone();
-            let result = locked_update_string_vec_json_file(&user_file, move |task_ids| {
-                if !task_ids.contains(&task_id_clone) {
-                    task_ids.push(task_id_clone);
-                    true
-                } else {
-                    false
-                }
-            })
-            .await;
-            if let Err(e) = result {
-                warn!("Failed to update user index for {}: {}", requestor_str, e);
-            }
-        }
     }
 
     let backup_job = BackupJob {
@@ -184,42 +144,35 @@ async fn run_backup_job_inner(
 ) {
     info!("Running backup job for task {}", task_id);
 
-    let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
-    let out_path = std::path::PathBuf::from(&out_dir);
-
-    // If force is set, delete the error log if it exists
+    // If force is set, clean up the error log if it exists
     // Otherwise, check if backup already exists on disk
     if force {
-        let log_path = format!("{}/nftbk-{}.log", state.base_dir, task_id);
-        match tokio::fs::remove_file(&log_path).await {
-            Ok(_) => info!("Deleted error log for task {}", task_id),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {} // Ignore if not found
-            Err(e) => warn!("Failed to delete error log for task {}: {}", task_id, e),
-        }
-    } else if let Some(zip_path) = check_backup_on_disk(
+        let _ = state.db.clear_backup_errors(&task_id).await;
+    } else if check_backup_on_disk(
         &state.base_dir,
         &task_id,
         state.unsafe_skip_checksum_check,
         &archive_format,
     )
     .await
+    .is_some()
     {
-        // Update task state to reflect the existing backup
-        let mut tasks = state.tasks.lock().await;
-        if let Some(task) = tasks.get_mut(&task_id) {
-            task.status = TaskStatus::Done;
-            task.zip_path = Some(zip_path);
-        }
+        let _ = state
+            .db
+            .update_backup_metadata_status(&task_id, "done")
+            .await;
         info!("Found existing backup for task {}", task_id);
         return;
     }
 
-    // Build TokenConfig from request
+    // Prepare backup config
     let mut token_map = std::collections::HashMap::new();
-    for entry in tokens {
+    for entry in tokens.clone() {
         token_map.insert(entry.chain, entry.tokens);
     }
     let token_config = TokenConfig { chains: token_map };
+    let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
+    let out_path = std::path::PathBuf::from(&out_dir);
 
     // Run backup
     let backup_cfg = BackupConfig {
@@ -230,17 +183,26 @@ async fn run_backup_job_inner(
         exit_on_error: false,
     };
     let backup_result = backup_from_config(backup_cfg).await;
-    let files_written = match backup_result {
-        Ok(files) => files,
+    let (files_written, error_log) = match backup_result {
+        Ok((files, errors)) => (files, errors),
         Err(e) => {
             error!("Backup {task_id} failed: {}", e);
-            let mut tasks = state.tasks.lock().await;
-            if let Some(task) = tasks.get_mut(&task_id) {
-                task.status = TaskStatus::Error(format!("Backup failed: {}", e));
-            }
+            let _ = state
+                .db
+                .set_backup_error(&task_id, &format!("Backup failed: {}", e))
+                .await;
             return;
         }
     };
+
+    // Store non-fatal error log in DB if present
+    if !error_log.is_empty() {
+        let log_str = error_log.join("\n");
+        let _ = state
+            .db
+            .update_backup_metadata_error_log(&task_id, &log_str)
+            .await;
+    }
 
     // Sync all files and directories to disk before zipping
     info!("Syncing {} to disk before zipping", out_path.display());
@@ -263,23 +225,24 @@ async fn run_backup_job_inner(
                 zip_pathbuf.display(),
                 start_time.elapsed().as_secs()
             );
-            // Update task and write checksum
-            let mut tasks = state.tasks.lock().await;
-            if let Some(task) = tasks.get_mut(&task_id) {
-                if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
-                    error!("Failed to write checksum file: {}", e);
-                    task.status = TaskStatus::Error("Failed to write checksum file".to_string());
-                    return;
-                }
-                task.status = TaskStatus::Done;
-                task.zip_path = Some(zip_pathbuf.clone());
+            if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
+                error!("Failed to write checksum file: {}", e);
+                let _ = state
+                    .db
+                    .set_backup_error(&task_id, &format!("Failed to write checksum file: {}", e))
+                    .await;
+                return;
             }
+            let _ = state
+                .db
+                .update_backup_metadata_status(&task_id, "done")
+                .await;
         }
         Err(e) => {
-            let mut tasks = state.tasks.lock().await;
-            if let Some(task) = tasks.get_mut(&task_id) {
-                task.status = TaskStatus::Error(e);
-            }
+            let _ = state
+                .db
+                .set_backup_error(&task_id, &format!("Failed to zip backup: {}", e))
+                .await;
             return;
         }
     }
@@ -317,10 +280,10 @@ pub async fn run_backup_job(
             "Backup job for task {} panicked: {}",
             task_id_clone, panic_msg
         );
-        let mut tasks = state_clone.tasks.lock().await;
-        if let Some(task) = tasks.get_mut(&task_id_clone) {
-            task.status = TaskStatus::Error(format!("Panic: {}", panic_msg));
-        }
+        let _ = state_clone
+            .db
+            .set_backup_error(&task_id_clone, &format!("Panic: {}", panic_msg))
+            .await;
     }
 }
 
@@ -347,17 +310,27 @@ pub async fn handle_backup_retry(
     Path(task_id): Path<String>,
     Extension(requestor): Extension<Option<String>>,
 ) -> impl IntoResponse {
-    // Check if task is not InProgress
-    let tasks = state.tasks.lock().await;
-    let in_progress = matches!(
-        tasks.get(&task_id),
-        Some(TaskInfo {
-            status: TaskStatus::InProgress,
-            ..
-        })
-    );
-    drop(tasks);
-    if in_progress {
+    // Fetch metadata from DB once
+    let meta = match state.db.get_backup_metadata(&task_id).await {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Metadata not found"})),
+            )
+                .into_response();
+        }
+        Err(_) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to read metadata from DB"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Check if task is in progress
+    if meta.status == "in_progress" {
         return (
             StatusCode::BAD_REQUEST,
             Json(serde_json::json!({"error": "Task is already in progress"})),
@@ -365,32 +338,9 @@ pub async fn handle_backup_retry(
             .into_response();
     }
 
-    // Load tokens from metadata file
-    let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
-    let metadata_bytes = match tokio::fs::read(&metadata_path).await {
-        Ok(bytes) => bytes,
-        Err(_) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Metadata file not found"})),
-            )
-                .into_response();
-        }
-    };
-    let mut metadata: BackupMetadata = match serde_json::from_slice(&metadata_bytes) {
-        Ok(m) => m,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Invalid metadata format"})),
-            )
-                .into_response();
-        }
-    };
-
     // Ensure the requestor matches the one in the metadata
     let req_requestor = requestor.clone().unwrap_or_default();
-    let meta_requestor = metadata.requestor.clone();
+    let meta_requestor = meta.requestor.clone();
     if !meta_requestor.is_empty() && req_requestor != meta_requestor {
         return (
             StatusCode::FORBIDDEN,
@@ -399,35 +349,18 @@ pub async fn handle_backup_retry(
             .into_response();
     }
 
-    // Bump created_at to now and update metadata file
-    // TODO: Should probably rename to requested_at
-    metadata.created_at = Utc::now().to_rfc3339();
-    if let Err(e) = tokio::fs::write(
-        &metadata_path,
-        serde_json::to_vec_pretty(&metadata).unwrap(),
-    )
-    .await
-    {
-        warn!("Failed to update created_at in metadata: {}", e);
-    }
-
-    // Set status to in progress
-    let mut tasks = state.tasks.lock().await;
-    tasks.insert(
-        task_id.clone(),
-        TaskInfo {
-            status: TaskStatus::InProgress,
-            zip_path: None,
-        },
-    );
-    drop(tasks);
+    let _ = state
+        .db
+        .update_backup_metadata_status(&task_id, "in_progress")
+        .await;
 
     // Re-run backup job
+    let tokens: Vec<Tokens> = serde_json::from_value(meta.tokens.clone()).unwrap_or_default();
     let backup_job = BackupJob {
         task_id: task_id.clone(),
-        tokens: metadata.tokens.clone(),
+        tokens,
         force: true,
-        archive_format: metadata.archive_format.clone(),
+        archive_format: meta.archive_format.clone(),
         requestor: requestor.clone(),
     };
     if let Err(e) = state.backup_job_sender.send(backup_job).await {

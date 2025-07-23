@@ -1,8 +1,9 @@
 /target
 **/*.rs.bk
-.env
-.env.caddy
+.env*
+!.env.*.example
 config_*.toml
 !config_chains.toml
 /nft_backup*
 *.json
+!.sqlx/*

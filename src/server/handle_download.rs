@@ -14,7 +14,7 @@ use std::path::PathBuf;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 
-use crate::server::{check_backup_on_disk, AppState, TaskStatus};
+use crate::server::{check_backup_on_disk, AppState};
 
 #[derive(serde::Deserialize)]
 pub struct DownloadQuery {
@@ -64,44 +64,27 @@ pub async fn handle_download(
 }
 
 async fn serve_zip_file_for_token(state: &AppState, task_id: &str) -> Response {
-    // Read archive_format from metadata.json
-    let metadata_path = format!("{}/nftbk-{}-metadata.json", state.base_dir, task_id);
-    let archive_format = match tokio::fs::read_to_string(&metadata_path).await {
-        Ok(content) => {
-            let v: serde_json::Value = serde_json::from_str(&content).unwrap_or_default();
-            v.get("archive_format")
-                .and_then(|s| s.as_str())
-                .unwrap_or("zip")
-                .to_string()
+    // Read archive_format and status from the database
+    let meta = match state.db.get_backup_metadata(task_id).await {
+        Ok(Some(m)) => m,
+        _ => {
+            return (StatusCode::NOT_FOUND, Body::from("Task not found")).into_response();
         }
-        Err(_) => "zip".to_string(),
     };
-    // Try to serve from memory first
-    let tasks = state.tasks.lock().await;
-    if let Some(task) = tasks.get(task_id) {
-        if !matches!(task.status, TaskStatus::Done) {
-            return (StatusCode::ACCEPTED, Body::from("Task not completed yet")).into_response();
-        }
-        let Some(ref zip_path) = task.zip_path else {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Body::from("No zip file found"),
-            )
-                .into_response();
-        };
-        return serve_zip_file(zip_path, task_id, &archive_format).await;
+    if meta.status != "done" {
+        return (StatusCode::ACCEPTED, Body::from("Task not completed yet")).into_response();
     }
-    drop(tasks);
-    // If not in memory, check if backup exists on disk
+    let archive_format = &meta.archive_format;
+    // If backup exists on disk, serve it
     if let Some(zip_path) = check_backup_on_disk(
         &state.base_dir,
         task_id,
         state.unsafe_skip_checksum_check,
-        &archive_format,
+        archive_format,
     )
     .await
     {
-        return serve_zip_file(&zip_path, task_id, &archive_format).await;
+        return serve_zip_file(&zip_path, task_id, archive_format).await;
     }
     (StatusCode::NOT_FOUND, Body::from("Task not found")).into_response()
 }

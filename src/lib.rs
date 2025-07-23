@@ -67,7 +67,7 @@ pub struct BackupConfig {
 
 pub mod backup {
     use super::*;
-    pub async fn backup_from_config(cfg: BackupConfig) -> Result<Vec<PathBuf>> {
+    pub async fn backup_from_config(cfg: BackupConfig) -> Result<(Vec<PathBuf>, Vec<String>)> {
         info!(
             "The following user agent will be used to fetch content: {}",
             USER_AGENT
@@ -80,6 +80,7 @@ pub mod backup {
 
         let start = Instant::now();
         let mut all_files = Vec::new();
+        let mut all_errors = Vec::new();
         let mut nft_count = 0;
         for (chain_name, contracts) in &token_config.chains {
             if contracts.is_empty() {
@@ -97,7 +98,7 @@ pub mod backup {
             let contracts = ContractWithToken::parse_contracts(contracts);
             nft_count += contracts.len();
 
-            let files = if chain_name == "tezos" {
+            let (files, errors) = if chain_name == "tezos" {
                 let processor = Arc::new(TezosChainProcessor);
                 let provider = Arc::new(TezosRpc::<HttpClient>::new(rpc_url.to_string()));
                 process_nfts(
@@ -125,6 +126,7 @@ pub mod backup {
                 .await?
             };
             all_files.extend(files);
+            all_errors.extend(errors);
         }
 
         if cfg.prune_redundant {
@@ -140,7 +142,7 @@ pub mod backup {
             output_path.display(),
         );
 
-        Ok(all_files)
+        Ok((all_files, all_errors))
     }
     pub use super::{BackupConfig, ChainConfig, TokenConfig};
 }

@@ -2,10 +2,11 @@
 
 A library, server, and CLI tool for backing up NFT metadata and content from EVM and Tezos NFT contracts.
 
-## Prerequisites
+## Requirements
 
 - Rust toolchain (install from [rustup.rs](https://rustup.rs))
 - Chain-specific RPC URLs
+- PostgreSQL (server-specific; used for backup metadata storage)
 
 ## Configuration
 
@@ -42,6 +43,20 @@ To run the server:
 
 ```
 cargo run --bin nftbk-server -- [args]
+```
+
+### Postgres
+
+Deploy Postgres and run migrations:
+
+```sh
+cp .env.postgres.example .env.postgres
+# fill out .env.postgres
+make start-db
+export DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+sqlx migrate run
+# to update the sqlx cache if needed
+cargo sqlx prepare
 ```
 
 ## Contribute

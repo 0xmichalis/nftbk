@@ -8,18 +8,13 @@ use serde_json;
 use tracing::{error, info, warn};
 
 use crate::server::archive::get_zipped_backup_paths;
-use crate::server::{get_backup_status_and_error, AppState, BackupMetadata};
+use crate::server::AppState;
 
 pub async fn handle_backup_delete(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
     Extension(requestor): Extension<Option<String>>,
 ) -> impl IntoResponse {
-    let base_dir = &state.base_dir;
-    let metadata_path = format!("{}/nftbk-{}-metadata.json", base_dir, &task_id);
-    let log_path = format!("{}/nftbk-{}.log", base_dir, &task_id);
-    let backup_dir = format!("{}/nftbk-{}", base_dir, &task_id);
-
     // Require requestor
     let requestor_str = match requestor {
         Some(ref s) if !s.is_empty() => s,
@@ -32,54 +27,32 @@ pub async fn handle_backup_delete(
         }
     };
 
-    // Read metadata.json and check requestor
-    let metadata_bytes = match tokio::fs::read(&metadata_path).await {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                return (
-                    StatusCode::NOT_FOUND,
-                    Json(serde_json::json!({"error": "Nothing found to delete"})),
-                )
-                    .into_response();
-            } else {
-                return (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": format!("Failed to read metadata: {}", e)})),
-                )
-                    .into_response();
-            }
+    // Read metadata from DB and check requestor
+    let meta = match state.db.get_backup_metadata(&task_id).await {
+        Ok(Some(m)) => m,
+        Ok(None) => {
+            return (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Nothing found to delete"})),
+            )
+                .into_response();
         }
-    };
-    let metadata: BackupMetadata = match serde_json::from_slice(&metadata_bytes) {
-        Ok(m) => m,
         Err(e) => {
             return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": format!("Invalid metadata format: {}", e)})),
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": format!("Failed to read metadata: {}", e)})),
             )
                 .into_response();
         }
     };
-    if metadata.requestor != *requestor_str {
+    if meta.requestor != *requestor_str {
         return (
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Requestor does not match task owner"})),
         )
             .into_response();
     }
-
-    let mut errors = Vec::new();
-    let mut deleted_anything = false;
-    let (archive_path, archive_checksum_path) =
-        get_zipped_backup_paths(&state.base_dir, &task_id, &metadata.archive_format);
-
-    // Check task status using get_backup_status_and_error
-    let tasks = state.tasks.lock().await;
-    let (status, _error) =
-        get_backup_status_and_error(&state, &task_id, &tasks, &metadata.archive_format).await;
-    drop(tasks);
-    if status == "in_progress" {
+    if meta.status == "in_progress" {
         return (
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": "Can only delete completed tasks"})),
@@ -87,12 +60,11 @@ pub async fn handle_backup_delete(
             .into_response();
     }
 
-    // Try to delete files (except metadata, should be deleted last)
-    for path in [
-        &archive_path,
-        &archive_checksum_path,
-        std::path::Path::new(&log_path),
-    ] {
+    let mut errors = Vec::new();
+    let mut deleted_anything = false;
+    let (archive_path, archive_checksum_path) =
+        get_zipped_backup_paths(&state.base_dir, &task_id, &meta.archive_format);
+    for path in [&archive_path, &archive_checksum_path] {
         match tokio::fs::remove_file(path).await {
             Ok(_) => {
                 deleted_anything = true;
@@ -107,6 +79,7 @@ pub async fn handle_backup_delete(
             }
         }
     }
+    let backup_dir = format!("{}/nftbk-{}", state.base_dir, &task_id);
     match tokio::fs::remove_dir_all(&backup_dir).await {
         Ok(_) => {
             deleted_anything = true;
@@ -121,52 +94,11 @@ pub async fn handle_backup_delete(
         }
     }
 
-    // Remove from by_requestor index
-    let by_requestor_dir = format!("{}/by_requestor", base_dir);
-    let user_file = format!("{}/{}.json", by_requestor_dir, requestor_str);
-    let task_id_clone = task_id.clone();
-    let result = crate::server::locked_update_string_vec_json_file(&user_file, move |task_ids| {
-        let orig_len = task_ids.len();
-        task_ids.retain(|tid| tid != &task_id_clone);
-        task_ids.len() != orig_len
-    })
-    .await;
-    match result {
-        Ok(deleted) => {
-            if deleted {
-                deleted_anything = true;
-            }
-        }
-        Err(e) => {
-            warn!("Failed to update user index for {}: {}", requestor_str, e);
-            errors.push(format!(
-                "Failed to update user index for {}: {}",
-                requestor_str, e
-            ));
-        }
-    }
-
-    // Remove from tasks map
-    let mut tasks = state.tasks.lock().await;
-    let existed = tasks.remove(&task_id).is_some();
-    if existed {
+    // Delete metadata from DB
+    if let Err(e) = state.db.delete_backup_metadata(&task_id).await {
+        errors.push(format!("Failed to delete metadata from DB: {}", e));
+    } else {
         deleted_anything = true;
-    }
-    drop(tasks);
-
-    // Delete metadata.json last
-    match tokio::fs::remove_file(&metadata_path).await {
-        Ok(_) => {
-            deleted_anything = true;
-        }
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                // not found is fine
-            } else {
-                warn!("Failed to delete file {}: {}", &metadata_path, e);
-                errors.push(format!("Failed to delete file {}: {}", &metadata_path, e));
-            }
-        }
     }
 
     if !deleted_anything {

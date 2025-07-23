@@ -21,4 +21,5 @@ pub struct BackupResponse {
 pub struct StatusResponse {
     pub status: String,
     pub error: Option<String>,
+    pub error_log: Option<String>,
 }

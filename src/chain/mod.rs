@@ -47,14 +47,14 @@ pub async fn process_nfts<C, FExtraUri>(
     chain_name: &str,
     exit_on_error: bool,
     get_extra_content_uri: FExtraUri,
-) -> anyhow::Result<Vec<std::path::PathBuf>>
+) -> anyhow::Result<(Vec<std::path::PathBuf>, Vec<String>)>
 where
     C: NFTChainProcessor + Sync + Send + 'static,
     C::ContractWithToken: ContractTokenInfo,
     FExtraUri: Fn(&C::Metadata) -> Option<&str>,
 {
     let mut all_files = Vec::new();
-    let mut error_log = Vec::new();
+    let mut errors = Vec::new();
     for contract in contracts {
         debug!(
             "Processing {} contract {} (token ID {})",
@@ -76,7 +76,7 @@ where
                     return Err(anyhow!(msg));
                 }
                 error!("{}", msg);
-                error_log.push(msg);
+                errors.push(msg);
                 continue;
             }
         };
@@ -98,7 +98,7 @@ where
                     return Err(anyhow!(msg));
                 }
                 error!("{}", msg);
-                error_log.push(msg);
+                errors.push(msg);
                 continue;
             }
         };
@@ -146,7 +146,7 @@ where
                         return Err(anyhow!(msg));
                     }
                     error!("{}", msg);
-                    error_log.push(msg);
+                    errors.push(msg);
                 }
             }
         }
@@ -176,37 +176,10 @@ where
                     return Err(anyhow!(msg));
                 }
                 error!("{}", msg);
-                error_log.push(msg);
+                errors.push(msg);
             }
         }
     }
 
-    // Write error log if needed
-    if !exit_on_error && !error_log.is_empty() {
-        use tokio::fs::OpenOptions;
-        use tokio::io::AsyncWriteExt;
-        let mut log_path = output_path.to_path_buf();
-        log_path.set_extension("log");
-        let log_content = error_log.join("\n") + "\n";
-        match OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .await
-        {
-            Ok(mut file) => {
-                if let Err(e) = file.write_all(log_content.as_bytes()).await {
-                    error!("Failed to write error log to {}: {}", log_path.display(), e);
-                }
-            }
-            Err(e) => {
-                error!(
-                    "Failed to create error log file {}: {}",
-                    log_path.display(),
-                    e
-                );
-            }
-        }
-    }
-    Ok(all_files)
+    Ok((all_files, errors))
 }

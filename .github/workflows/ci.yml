@@ -47,6 +47,13 @@ jobs:
         fi
         cargo sort --check
 
+    - name: Check SQLx cache
+      run: |
+        if ! command -v sqlx > /dev/null; then
+          cargo install sqlx-cli
+        fi
+        cargo sqlx prepare --check
+
     - name: Run tests
       run: cargo test --verbose
 

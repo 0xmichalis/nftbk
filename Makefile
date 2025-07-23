@@ -1,5 +1,5 @@
 .PHONY: all
-all: fmt clippy sort test
+all: fmt clippy sort sqlxprepare test
 
 .PHONY: fmt
 fmt:
@@ -11,11 +11,19 @@ clippy:
 
 .PHONY: sort
 sort:
-	if ! command -v cargo-sort >/dev/null 2>&1; then \
+	@if ! command -v cargo-sort >/dev/null 2>&1; then \
 		echo "cargo-sort not found! Install with: cargo install cargo-sort"; \
 		exit 1; \
 	fi
 	cargo sort
+
+.PHONY: sqlxprepare
+sqlxprepare:
+	@if ! command -v cargo sqlx >/dev/null 2>&1; then \
+		echo "cargo sqlx not found! Install with: cargo install sqlx-cli"; \
+		exit 1; \
+	fi
+	cargo sqlx prepare
 
 .PHONY: test
 test:
@@ -40,3 +48,20 @@ run-cli-test:
 .PHONY: run-server
 run-server:
 	cargo run --bin nftbk-server -- --unsafe-skip-checksum-check true --backup-parallelism 2 $(filter-out $@,$(MAKECMDGOALS))
+
+.PHONY: start-db
+start-db:
+	scripts/start-postgres.sh
+
+.PHONY: stop-db
+stop-db:
+	scripts/stop-postgres.sh
+
+.PHONY: nuke-db
+nuke-db:
+	scripts/stop-postgres.sh
+	podman volume rm nftbk_pgdata
+
+.PHONY: migrate-db
+migrate-db:
+	sqlx migrate run

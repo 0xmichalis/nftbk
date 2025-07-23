@@ -174,6 +174,7 @@ async fn wait_for_done_backup(
                     let status: StatusResponse = r.json().await.unwrap_or(StatusResponse {
                         status: "error".to_string(),
                         error: Some("Invalid status response".to_string()),
+                        error_log: None,
                     });
                     match status.status.as_str() {
                         "in_progress" => {
@@ -393,13 +394,26 @@ async fn main() -> Result<()> {
         toml::from_str(&chains_content).context("Failed to parse chains config file")?;
     chain_config.resolve_env_vars()?;
 
+    let output_path = args.output_path.clone();
     let backup_config = BackupConfig {
         chain_config,
         token_config,
-        output_path: args.output_path,
+        output_path: output_path.clone(),
         prune_redundant: args.prune_redundant,
         exit_on_error: args.exit_on_error,
     };
-    backup_from_config(backup_config).await?;
+    let (_files, error_log) = backup_from_config(backup_config).await?;
+    // Write error log to file if present
+    if !error_log.is_empty() {
+        if let Some(ref out_path) = output_path {
+            let mut log_path = out_path.clone();
+            log_path.set_extension("log");
+            let log_content = error_log.join("\n") + "\n";
+            use tokio::io::AsyncWriteExt;
+            let mut file = tokio::fs::File::create(&log_path).await?;
+            file.write_all(log_content.as_bytes()).await?;
+            println!("Error log written to {}", log_path.display());
+        }
+    }
     Ok(())
 }

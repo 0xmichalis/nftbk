@@ -9,12 +9,12 @@ use axum::{
 };
 use clap::Parser;
 use dotenv::dotenv;
-use nftbk::server::pruner::{run_pruner, PrunerConfig};
 use std::env;
 use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use subtle::ConstantTimeEq;
 use tokio::signal;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -24,11 +24,11 @@ use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::privy::verify_privy_jwt;
+use nftbk::server::pruner::run_pruner;
 use nftbk::server::{
     handle_backup, handle_backup_delete, handle_backup_retry, handle_backups, handle_download,
-    handle_download_token, handle_error_log, handle_status, AppState, BackupJob,
+    handle_download_token, handle_status, AppState, BackupJob,
 };
-use subtle::ConstantTimeEq;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -198,6 +198,8 @@ async fn main() {
 
     let (backup_job_sender, backup_job_receiver) =
         mpsc::channel::<BackupJob>(args.backup_queue_size);
+    let db_url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL env var must be set for Postgres");
     let state = AppState::new(
         &args.chain_config,
         &args.base_dir,
@@ -206,6 +208,7 @@ async fn main() {
         args.enable_pruner,
         args.pruner_retention_days,
         backup_job_sender,
+        &db_url, // pass db_url
     )
     .await;
 
@@ -236,7 +239,6 @@ async fn main() {
             "/backup/:task_id/download_token",
             get(handle_download_token),
         )
-        .route("/backup/:task_id/error_log", get(handle_error_log))
         .route("/backup/:task_id/retry", post(handle_backup_retry))
         .route("/backup/:task_id", delete(handle_backup_delete))
         .route("/backups", get(handle_backups))
@@ -259,15 +261,12 @@ async fn main() {
     // Start the pruner thread
     let running = Arc::new(AtomicBool::new(true));
     let pruner_handle = if args.enable_pruner {
-        let pruner_config = PrunerConfig {
-            base_dir: args.base_dir.clone(),
-            retention_days: args.pruner_retention_days,
-            interval_seconds: args.pruner_interval_seconds,
-            pattern: args.pruner_pattern.clone(),
-        };
         let running_clone = running.clone();
-        Some(std::thread::spawn(move || {
-            run_pruner(pruner_config, running_clone);
+        let db = state.db.clone();
+        let base_dir = args.base_dir.clone();
+        let interval = args.pruner_interval_seconds;
+        Some(tokio::spawn(async move {
+            run_pruner(db, base_dir, interval, running_clone).await;
         }))
     } else {
         None
@@ -295,7 +294,7 @@ async fn main() {
     info!("Server stopped");
 
     if let Some(handle) = pruner_handle {
-        let _ = handle.join();
+        let _ = handle.await;
     }
     info!("Pruner stopped");
 
