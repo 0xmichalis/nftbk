@@ -143,3 +143,74 @@ pub async fn check_backup_on_disk(
         _ => None,
     }
 }
+
+/// Recover incomplete backup jobs from the database and enqueue them for processing
+/// This is called on server startup to handle jobs that were interrupted by server shutdown
+pub async fn recover_incomplete_jobs(
+    state: &AppState,
+) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
+    debug!("Recovering incomplete backup jobs from database...");
+
+    let incomplete_jobs = state.db.get_incomplete_backup_jobs().await?;
+    let job_count = incomplete_jobs.len();
+
+    if job_count == 0 {
+        debug!("No incomplete backup jobs found");
+        return Ok(0);
+    }
+
+    debug!(
+        "Found {} incomplete backup jobs, re-queueing for processing",
+        job_count
+    );
+
+    for job_meta in incomplete_jobs {
+        // Parse the tokens JSON back to Vec<Tokens>
+        let tokens: Vec<Tokens> = match serde_json::from_value(job_meta.tokens) {
+            Ok(tokens) => tokens,
+            Err(e) => {
+                warn!(
+                    "Failed to parse tokens for job {}: {}, skipping",
+                    job_meta.task_id, e
+                );
+                // Mark this job as error since we can't process it
+                let _ = state
+                    .db
+                    .set_backup_error(
+                        &job_meta.task_id,
+                        &format!("Failed to parse tokens during recovery: {}", e),
+                    )
+                    .await;
+                continue;
+            }
+        };
+
+        let backup_job = BackupJob {
+            task_id: job_meta.task_id.clone(),
+            tokens,
+            force: false, // Don't force on recovery, just resume
+            archive_format: job_meta.archive_format,
+            requestor: Some(job_meta.requestor),
+        };
+
+        // Try to enqueue the job
+        if let Err(e) = state.backup_job_sender.send(backup_job).await {
+            warn!(
+                "Failed to enqueue recovered job {}: {}",
+                job_meta.task_id, e
+            );
+            // Mark as error if we can't enqueue it
+            let _ = state
+                .db
+                .set_backup_error(
+                    &job_meta.task_id,
+                    &format!("Failed to enqueue during recovery: {}", e),
+                )
+                .await;
+        } else {
+            debug!("Re-queued backup job: {}", job_meta.task_id);
+        }
+    }
+
+    Ok(job_count)
+}

@@ -261,4 +261,38 @@ impl Db {
         .await?;
         Ok(rec.map(|r| r.status))
     }
+
+    /// Retrieve all backup jobs that are in 'in_progress' status
+    /// This is used to recover incomplete jobs on server restart
+    pub async fn get_incomplete_backup_jobs(&self) -> Result<Vec<BackupMetadataRow>, sqlx::Error> {
+        let rows = sqlx::query!(
+            r#"
+            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, status, expires_at, error_log, fatal_error
+            FROM backup_metadata 
+            WHERE status = 'in_progress'
+            ORDER BY created_at ASC
+            "#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let recs = rows
+            .into_iter()
+            .map(|row| BackupMetadataRow {
+                task_id: row.task_id,
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                requestor: row.requestor,
+                archive_format: row.archive_format,
+                nft_count: row.nft_count,
+                tokens: row.tokens,
+                status: row.status,
+                expires_at: row.expires_at,
+                error_log: row.error_log,
+                fatal_error: row.fatal_error,
+            })
+            .collect();
+
+        Ok(recs)
+    }
 }

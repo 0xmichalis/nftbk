@@ -18,7 +18,7 @@ use subtle::ConstantTimeEq;
 use tokio::signal;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::info;
+use tracing::{error, info};
 
 use nftbk::envvar::is_defined;
 use nftbk::logging;
@@ -31,7 +31,7 @@ use nftbk::server::handlers::handle_download::{handle_download, handle_download_
 use nftbk::server::handlers::handle_status::handle_status;
 use nftbk::server::privy::verify_privy_jwt;
 use nftbk::server::pruner::run_pruner;
-use nftbk::server::{AppState, BackupJob};
+use nftbk::server::{recover_incomplete_jobs, AppState, BackupJob};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -229,6 +229,19 @@ async fn main() {
     // Spawn worker pool for backup jobs
     let worker_handles =
         spawn_backup_workers(args.backup_parallelism, backup_job_receiver, state.clone());
+
+    // Recover incomplete backup jobs from previous server runs
+    match recover_incomplete_jobs(&state).await {
+        Ok(count) => {
+            if count > 0 {
+                info!("Successfully recovered {} incomplete backup jobs", count);
+            }
+        }
+        Err(e) => {
+            error!("Failed to recover incomplete backup jobs: {}", e);
+            // Don't exit the server, just log the error and continue
+        }
+    }
 
     // Create the public router (no auth middleware)
     let public_router = Router::new()
