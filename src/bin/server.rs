@@ -212,7 +212,7 @@ async fn main() {
         args.pruner_retention_days,
         backup_job_sender,
         &db_url,
-        args.backup_parallelism as u32,
+        (args.backup_queue_size + 1) as u32,
     )
     .await;
 
