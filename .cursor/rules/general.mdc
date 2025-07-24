@@ -5,23 +5,37 @@ alwaysApply: true
 ---
 ## Documentation Changes
 
-- Keep [README.md](mdc:README.md) up to date with latest capabilities but avoid unnecessary changes. Only update when latest capabilities introduce breakages to the documented README commands.
+- Update [README.md](mdc:README.md) when code changes introduce breakages to the documented README commands or logic.
 
 ## Code Changes
 
-- Ensure the code you have provided is complete (compiles and tests pass)
-- Ensure the project is formatted, if there is a formatting-specific configuration in the project
+Every time you provide a code change, you need to ensure it follows project standards:
+- code is formatted
+- tests pass
+The best way to ensure that is to run `make all`.
+
+### Refactor
+
+- Do not rename variables or refactor unnecessarily unless explicitly instructed.
+- Do not make formatting changes unless specifically asked.
+- When removing code, delete it entirely — do not just comment it out.
+
+### Structure
+
+- Prefer early returns to avoid long, nested if/else blocks.
+- When writing or refactoring an if/else block, ensure that the longer branch is always the else block for readability.
+
+### Code comments
+
+- Do not add comments just to indicate new code.
+- Only add comments for complex logic; otherwise, code should be self-explanatory.
 
 ## Security Practices
 
-- Never commit sensitive files
-- Use environment variables for secrets
-- Keep credentials out of logs and output
+- Never commit sensitive files.
+- Use environment variables for secrets.
+- Keep credentials out of logs and output.
 
 ## Misc
 
-- Avoid making any formatting changes when not explicitly asked to do so
-- Avoid renaming variables unless explicitly asked to do so
-- When writing an if/else clause, prefer putting the clause with most of the code in the else part to keep the whole conditional more readable
-- Avoid arrowized code whenever possible
-- When providing a solution, give me a score on a scale of 1-10 about how confident you are in the solution
+- When providing a solution, give me a score on a scale of 1-10 about how confident you are in the solution.

@@ -1,10 +1,7 @@
 .PHONY: all
-all:
-	@export SQLX_OFFLINE=true
-	@cargo fmt --all
-	@cargo clippy -- -D warnings
-	@cargo sort
-	@cargo test
+all: fmt sort
+	@SQLX_OFFLINE=true cargo clippy -- -D warnings
+	@SQLX_OFFLINE=true cargo test
 
 .PHONY: fmt
 fmt:
@@ -17,16 +14,14 @@ clippy:
 .PHONY: sort
 sort:
 	@if ! command -v cargo-sort >/dev/null 2>&1; then \
-		echo "cargo-sort not found! Install with: cargo install cargo-sort"; \
-		exit 1; \
+		cargo install cargo-sort; \
 	fi
 	cargo sort
 
 .PHONY: sqlxprepare
 sqlxprepare:
 	@if ! command -v cargo sqlx >/dev/null 2>&1; then \
-		echo "cargo sqlx not found! Install with: cargo install sqlx-cli"; \
-		exit 1; \
+		cargo install sqlx-cli; \
 	fi
 	cargo sqlx prepare
 
