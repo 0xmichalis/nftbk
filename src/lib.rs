@@ -8,7 +8,7 @@ use std::time::Instant;
 use tezos_rpc::client::TezosRpc;
 use tezos_rpc::http::default::HttpClient;
 use tokio::fs;
-use tracing::{info, warn};
+use tracing::{info, warn, Instrument};
 
 use crate::chain::common::ContractWithToken;
 use crate::chain::evm::EvmChainProcessor;
@@ -67,82 +67,92 @@ pub struct BackupConfig {
 
 pub mod backup {
     use super::*;
-    pub async fn backup_from_config(cfg: BackupConfig) -> Result<(Vec<PathBuf>, Vec<String>)> {
-        info!(
-            "The following user agent will be used to fetch content: {}",
-            USER_AGENT
-        );
-        let output_path = cfg.output_path.unwrap();
-        fs::create_dir_all(&output_path).await?;
-
-        let chain_config = &cfg.chain_config.0;
-        let token_config = &cfg.token_config;
-
-        let start = Instant::now();
-        let mut all_files = Vec::new();
-        let mut all_errors = Vec::new();
-        let mut nft_count = 0;
-        for (chain_name, contracts) in &token_config.chains {
-            if contracts.is_empty() {
-                warn!("No contracts configured for chain {}", chain_name);
-                continue;
-            }
+    pub async fn backup_from_config(
+        cfg: BackupConfig,
+        span: Option<tracing::Span>,
+    ) -> Result<(Vec<PathBuf>, Vec<String>)> {
+        async fn inner(cfg: BackupConfig) -> Result<(Vec<PathBuf>, Vec<String>)> {
             info!(
-                "Processing {} contracts on {} ...",
-                contracts.len(),
-                chain_name
+                "The following user agent will be used to fetch content: {}",
+                USER_AGENT
             );
-            let rpc_url = chain_config
-                .get(chain_name)
-                .context(format!("No RPC URL configured for chain {}", chain_name))?;
-            let contracts = ContractWithToken::parse_contracts(contracts);
-            nft_count += contracts.len();
+            let output_path = cfg.output_path.unwrap();
+            fs::create_dir_all(&output_path).await?;
 
-            let (files, errors) = if chain_name == "tezos" {
-                let processor = Arc::new(TezosChainProcessor);
-                let provider = Arc::new(TezosRpc::<HttpClient>::new(rpc_url.to_string()));
-                process_nfts(
-                    processor,
-                    provider,
-                    contracts,
-                    &output_path,
-                    chain_name,
-                    cfg.exit_on_error,
-                    |metadata| metadata.artifact_uri.as_deref(),
-                )
-                .await?
-            } else {
-                let processor = Arc::new(EvmChainProcessor);
-                let provider = Arc::new(ProviderBuilder::new().on_http(rpc_url.parse().unwrap()));
-                process_nfts(
-                    processor,
-                    provider,
-                    contracts,
-                    &output_path,
-                    chain_name,
-                    cfg.exit_on_error,
-                    |_metadata| None,
-                )
-                .await?
-            };
-            all_files.extend(files);
-            all_errors.extend(errors);
+            let chain_config = &cfg.chain_config.0;
+            let token_config = &cfg.token_config;
+
+            let start = Instant::now();
+            let mut all_files = Vec::new();
+            let mut all_errors = Vec::new();
+            let mut nft_count = 0;
+            for (chain_name, contracts) in &token_config.chains {
+                if contracts.is_empty() {
+                    warn!("No contracts configured for chain {}", chain_name);
+                    continue;
+                }
+                info!(
+                    "Processing {} contracts on {} ...",
+                    contracts.len(),
+                    chain_name
+                );
+                let rpc_url = chain_config
+                    .get(chain_name)
+                    .context(format!("No RPC URL configured for chain {}", chain_name))?;
+                let contracts = ContractWithToken::parse_contracts(contracts);
+                nft_count += contracts.len();
+
+                let (files, errors) = if chain_name == "tezos" {
+                    let processor = Arc::new(TezosChainProcessor);
+                    let provider = Arc::new(TezosRpc::<HttpClient>::new(rpc_url.to_string()));
+                    process_nfts(
+                        processor,
+                        provider,
+                        contracts,
+                        &output_path,
+                        chain_name,
+                        cfg.exit_on_error,
+                        |metadata| metadata.artifact_uri.as_deref(),
+                    )
+                    .await?
+                } else {
+                    let processor = Arc::new(EvmChainProcessor);
+                    let provider =
+                        Arc::new(ProviderBuilder::new().on_http(rpc_url.parse().unwrap()));
+                    process_nfts(
+                        processor,
+                        provider,
+                        contracts,
+                        &output_path,
+                        chain_name,
+                        cfg.exit_on_error,
+                        |_metadata| None,
+                    )
+                    .await?
+                };
+                all_files.extend(files);
+                all_errors.extend(errors);
+            }
+
+            if cfg.prune_redundant {
+                info!("Pruning redundant files...");
+                prune::prune_redundant_files(&output_path, token_config, &all_files).await?;
+            }
+
+            info!(
+                "Backup complete in {:?}s. {} NFTs ({} files) saved in {}.",
+                start.elapsed().as_secs(),
+                nft_count,
+                all_files.len(),
+                output_path.display(),
+            );
+
+            Ok((all_files, all_errors))
         }
-
-        if cfg.prune_redundant {
-            info!("Pruning redundant files...");
-            prune::prune_redundant_files(&output_path, token_config, &all_files).await?;
+        match span {
+            Some(span) => inner(cfg).instrument(span).await,
+            None => inner(cfg).await,
         }
-
-        info!(
-            "Backup complete in {:?}s. {} NFTs ({} files) saved in {}.",
-            start.elapsed().as_secs(),
-            nft_count,
-            all_files.len(),
-            output_path.display(),
-        );
-
-        Ok((all_files, all_errors))
     }
     pub use super::{BackupConfig, ChainConfig, TokenConfig};
 }

@@ -382,7 +382,7 @@ async fn main() -> Result<()> {
         prune_redundant: args.prune_redundant,
         exit_on_error: args.exit_on_error,
     };
-    let (_files, error_log) = backup_from_config(backup_config).await?;
+    let (_files, error_log) = backup_from_config(backup_config, None).await?;
     // Write error log to file if present
     if !error_log.is_empty() {
         if let Some(ref out_path) = output_path {

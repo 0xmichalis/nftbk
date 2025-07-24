@@ -182,7 +182,8 @@ async fn run_backup_job_inner(
         prune_redundant: false,
         exit_on_error: false,
     };
-    let backup_result = backup_from_config(backup_cfg).await;
+    let span = tracing::info_span!("backup", task_id = %task_id);
+    let backup_result = backup_from_config(backup_cfg, Some(span)).await;
     let (files_written, error_log) = match backup_result {
         Ok((files, errors)) => (files, errors),
         Err(e) => {
