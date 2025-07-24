@@ -96,8 +96,6 @@ async fn backup_from_server(
     )
     .await?;
 
-    fetch_error_log(&server_address, &backup_resp.task_id, auth_token.as_deref()).await?;
-
     return download_backup(
         &client,
         &server_address,
@@ -185,6 +183,11 @@ async fn wait_for_done_backup(
                         }
                         "done" => {
                             println!("Backup complete.");
+                            if let Some(error_log) = &status.error_log {
+                                if !error_log.is_empty() {
+                                    warn!("{}", error_log);
+                                }
+                            }
                             break;
                         }
                         "error" => {
@@ -203,29 +206,6 @@ async fn wait_for_done_backup(
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-    }
-    Ok(())
-}
-
-async fn fetch_error_log(
-    server_address: &str,
-    task_id: &str,
-    auth_token: Option<&str>,
-) -> Result<()> {
-    let client = reqwest::Client::new();
-    let url = format!(
-        "{}/backup/{}/error_log",
-        server_address.trim_end_matches('/'),
-        task_id
-    );
-    let mut req = client.get(&url);
-    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
-        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
-    }
-    let resp = req.send().await?;
-    if resp.status().is_success() {
-        let text = resp.text().await?;
-        warn!("{}", text);
     }
     Ok(())
 }
