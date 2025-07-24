@@ -14,7 +14,7 @@ use crate::backup::{backup_from_config, BackupConfig, TokenConfig};
 use crate::server::api::{BackupRequest, BackupResponse};
 use crate::server::archive::{archive_format_from_user_agent, get_zipped_backup_paths, zip_backup};
 use crate::server::hashing::compute_array_sha256;
-use crate::server::{check_backup_on_disk, AppState, BackupJob, Tokens};
+use crate::server::{check_backup_on_disk, AppState, BackupJob, BackupJobOrShutdown, Tokens};
 
 pub async fn handle_backup(
     State(state): State<AppState>,
@@ -100,7 +100,11 @@ pub async fn handle_backup(
         archive_format: archive_format.clone(),
         requestor: requestor.clone(),
     };
-    if let Err(e) = state.backup_job_sender.send(backup_job).await {
+    if let Err(e) = state
+        .backup_job_sender
+        .send(BackupJobOrShutdown::Job(backup_job))
+        .await
+    {
         error!("Failed to enqueue backup job: {}", e);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,

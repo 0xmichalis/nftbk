@@ -9,6 +9,7 @@ use axum::{
 use crate::server::api::BackupResponse;
 use crate::server::AppState;
 use crate::server::BackupJob;
+use crate::server::BackupJobOrShutdown;
 use crate::server::Tokens;
 use tracing::{error, info};
 
@@ -70,7 +71,11 @@ pub async fn handle_backup_retry(
         archive_format: meta.archive_format.clone(),
         requestor: requestor.clone(),
     };
-    if let Err(e) = state.backup_job_sender.send(backup_job).await {
+    if let Err(e) = state
+        .backup_job_sender
+        .send(BackupJobOrShutdown::Job(backup_job))
+        .await
+    {
         error!("Failed to enqueue backup job: {}", e);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,

@@ -35,8 +35,14 @@ pub struct AppState {
     pub pruner_enabled: bool,
     pub pruner_retention_days: u64,
     pub download_tokens: Arc<Mutex<HashMap<String, (String, u64)>>>,
-    pub backup_job_sender: mpsc::Sender<BackupJob>,
+    pub backup_job_sender: mpsc::Sender<BackupJobOrShutdown>,
     pub db: Arc<Db>,
+}
+
+#[derive(Debug, Clone)]
+pub enum BackupJobOrShutdown {
+    Job(BackupJob),
+    Shutdown,
 }
 
 #[derive(Debug, Clone)]
@@ -63,7 +69,7 @@ impl AppState {
         auth_token: Option<String>,
         pruner_enabled: bool,
         pruner_retention_days: u64,
-        backup_job_sender: mpsc::Sender<BackupJob>,
+        backup_job_sender: mpsc::Sender<BackupJobOrShutdown>,
         db_url: &str,
         max_connections: u32,
     ) -> Self {
@@ -194,7 +200,11 @@ pub async fn recover_incomplete_jobs(
         };
 
         // Try to enqueue the job
-        if let Err(e) = state.backup_job_sender.send(backup_job).await {
+        if let Err(e) = state
+            .backup_job_sender
+            .send(BackupJobOrShutdown::Job(backup_job))
+            .await
+        {
             warn!(
                 "Failed to enqueue recovered job {}: {}",
                 job_meta.task_id, e

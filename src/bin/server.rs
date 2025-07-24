@@ -31,7 +31,7 @@ use nftbk::server::handlers::handle_download::{handle_download, handle_download_
 use nftbk::server::handlers::handle_status::handle_status;
 use nftbk::server::privy::verify_privy_jwt;
 use nftbk::server::pruner::run_pruner;
-use nftbk::server::{recover_incomplete_jobs, AppState, BackupJob};
+use nftbk::server::{recover_incomplete_jobs, AppState, BackupJobOrShutdown};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -90,7 +90,7 @@ struct AuthState {
 
 fn spawn_backup_workers(
     parallelism: usize,
-    backup_job_receiver: mpsc::Receiver<BackupJob>,
+    backup_job_receiver: mpsc::Receiver<BackupJobOrShutdown>,
     state: AppState,
 ) -> Vec<JoinHandle<()>> {
     let mut worker_handles = Vec::with_capacity(parallelism);
@@ -106,7 +106,7 @@ fn spawn_backup_workers(
                     rx.recv().await
                 };
                 match job {
-                    Some(job) => {
+                    Some(BackupJobOrShutdown::Job(job)) => {
                         run_backup_job(
                             state_clone.clone(),
                             job.task_id,
@@ -116,7 +116,7 @@ fn spawn_backup_workers(
                         )
                         .await;
                     }
-                    None => break, // Channel closed, exit worker
+                    Some(BackupJobOrShutdown::Shutdown) | None => break,
                 }
             }
             info!("Worker {} stopped", i);
@@ -200,7 +200,7 @@ async fn main() {
         .map(|s| s.replace("\\n", "\n"));
 
     let (backup_job_sender, backup_job_receiver) =
-        mpsc::channel::<BackupJob>(args.backup_queue_size);
+        mpsc::channel::<BackupJobOrShutdown>(args.backup_queue_size);
     let db_url =
         std::env::var("DATABASE_URL").expect("DATABASE_URL env var must be set for Postgres");
     let state = AppState::new(
@@ -210,7 +210,7 @@ async fn main() {
         auth_token.clone(),
         args.enable_pruner,
         args.pruner_retention_days,
-        backup_job_sender,
+        backup_job_sender.clone(),
         &db_url,
         (args.backup_queue_size + 1) as u32,
     )
@@ -315,6 +315,13 @@ async fn main() {
     }
     info!("Pruner stopped");
 
+    // On shutdown, send one Shutdown message per worker
+    for _ in 0..args.backup_parallelism {
+        let _ = state
+            .backup_job_sender
+            .send(BackupJobOrShutdown::Shutdown)
+            .await;
+    }
     // Drop the last sender to close the channel and signal workers to exit
     drop(state.backup_job_sender);
     info!("Backup job sender dropped");
