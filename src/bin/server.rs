@@ -308,12 +308,12 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal)
         .await
         .unwrap();
-    info!("Server stopped");
+    info!("Server has exited");
 
     if let Some(handle) = pruner_handle {
         let _ = handle.await;
     }
-    info!("Pruner stopped");
+    info!("Pruner has exited");
 
     // On shutdown, send one Shutdown message per worker
     for _ in 0..args.backup_parallelism {
@@ -324,11 +324,11 @@ async fn main() {
     }
     // Drop the last sender to close the channel and signal workers to exit
     drop(state.backup_job_sender);
-    info!("Backup job sender dropped");
+    info!("Backup job sender has exited");
 
     // Wait for all workers to finish
     for handle in worker_handles {
         let _ = handle.await;
     }
-    info!("Backup workers stopped");
+    info!("Backup workers have exited");
 }
