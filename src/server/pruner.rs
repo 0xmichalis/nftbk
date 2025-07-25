@@ -11,9 +11,9 @@ pub async fn run_pruner(
     db: Arc<Db>,
     base_dir: String,
     interval_seconds: u64,
-    running: Arc<AtomicBool>,
+    shutdown_flag: Arc<AtomicBool>,
 ) {
-    while running.load(Ordering::SeqCst) {
+    while !shutdown_flag.load(Ordering::SeqCst) {
         info!("Running pruning process...");
         match db.list_expired_backups().await {
             Ok(expired) => {
@@ -48,7 +48,7 @@ pub async fn run_pruner(
         info!("Pruning process completed");
         let mut slept = 0;
         let sleep_step = 1;
-        while slept < interval_seconds && running.load(Ordering::SeqCst) {
+        while slept < interval_seconds && !shutdown_flag.load(Ordering::SeqCst) {
             sleep(TokioDuration::from_secs(sleep_step)).await;
             slept += sleep_step;
         }

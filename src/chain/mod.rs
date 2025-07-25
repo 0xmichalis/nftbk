@@ -2,7 +2,8 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::Path;
-use tracing::{debug, error};
+use std::sync::atomic::Ordering;
+use tracing::{debug, error, warn};
 
 use crate::content::extra::fetch_and_save_extra_content;
 use crate::content::{fetch_and_save_content, Options};
@@ -11,6 +12,19 @@ pub use common::ContractTokenInfo;
 pub mod common;
 pub mod evm;
 pub mod tezos;
+
+/// Check for shutdown signal and return error if shutdown is requested
+fn check_shutdown_signal(config: &crate::ProcessManagementConfig) -> anyhow::Result<()> {
+    if let Some(ref shutdown_flag) = config.shutdown_flag {
+        if shutdown_flag.load(Ordering::Relaxed) {
+            warn!("Received shutdown signal, stopping NFT processing");
+            return Err(anyhow::anyhow!(
+                "NFT processing interrupted by shutdown signal"
+            ));
+        }
+    }
+    Ok(())
+}
 
 /// Trait for NFT chain processors to enable shared logic for fetching metadata and collecting URLs.
 #[async_trait]
@@ -45,7 +59,7 @@ pub async fn process_nfts<C, FExtraUri>(
     contracts: Vec<C::ContractWithToken>,
     output_path: &Path,
     chain_name: &str,
-    exit_on_error: bool,
+    config: crate::ProcessManagementConfig,
     get_extra_content_uri: FExtraUri,
 ) -> anyhow::Result<(Vec<std::path::PathBuf>, Vec<String>)>
 where
@@ -56,6 +70,8 @@ where
     let mut all_files = Vec::new();
     let mut errors = Vec::new();
     for contract in contracts {
+        check_shutdown_signal(&config)?;
+
         debug!(
             "Processing {} contract {} (token ID {})",
             chain_name,
@@ -72,7 +88,7 @@ where
                     contract.token_id(),
                     e
                 );
-                if exit_on_error {
+                if config.exit_on_error {
                     return Err(anyhow!(msg));
                 }
                 error!("{}", msg);
@@ -94,7 +110,7 @@ where
                     contract.token_id(),
                     e
                 );
-                if exit_on_error {
+                if config.exit_on_error {
                     return Err(anyhow!(msg));
                 }
                 error!("{}", msg);
@@ -108,6 +124,8 @@ where
 
         let mut downloaded = HashSet::new();
         for (url, opts) in urls_to_download {
+            check_shutdown_signal(&config)?;
+
             if !downloaded.insert(url.clone()) {
                 debug!(
                     "Skipping duplicate {:?} from {}",
@@ -142,7 +160,7 @@ where
                         contract.token_id(),
                         e
                     );
-                    if exit_on_error {
+                    if config.exit_on_error {
                         return Err(anyhow!(msg));
                     }
                     error!("{}", msg);
@@ -172,7 +190,7 @@ where
                     contract.token_id(),
                     e
                 );
-                if exit_on_error {
+                if config.exit_on_error {
                     return Err(anyhow!(msg));
                 }
                 error!("{}", msg);

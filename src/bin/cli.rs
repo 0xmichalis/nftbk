@@ -19,6 +19,7 @@ use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
 use nftbk::server::archive::archive_format_from_user_agent;
+use nftbk::ProcessManagementConfig;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -380,7 +381,10 @@ async fn main() -> Result<()> {
         token_config,
         output_path: output_path.clone(),
         prune_redundant: args.prune_redundant,
-        exit_on_error: args.exit_on_error,
+        process_config: ProcessManagementConfig {
+            exit_on_error: args.exit_on_error,
+            shutdown_flag: None,
+        },
     };
     let (_files, error_log) = backup_from_config(backup_config, None).await?;
     // Write error log to file if present

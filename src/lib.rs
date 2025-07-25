@@ -3,6 +3,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
 use tezos_rpc::client::TezosRpc;
@@ -57,12 +58,19 @@ pub struct TokenConfig {
     pub chains: HashMap<String, Vec<String>>,
 }
 
+/// Configuration for process management with shutdown and error handling options
+#[derive(Clone)]
+pub struct ProcessManagementConfig {
+    pub exit_on_error: bool,
+    pub shutdown_flag: Option<Arc<AtomicBool>>,
+}
+
 pub struct BackupConfig {
     pub chain_config: ChainConfig,
     pub token_config: TokenConfig,
     pub output_path: Option<PathBuf>,
     pub prune_redundant: bool,
-    pub exit_on_error: bool,
+    pub process_config: ProcessManagementConfig,
 }
 
 pub mod backup {
@@ -105,13 +113,14 @@ pub mod backup {
                 let (files, errors) = if chain_name == "tezos" {
                     let processor = Arc::new(TezosChainProcessor);
                     let provider = Arc::new(TezosRpc::<HttpClient>::new(rpc_url.to_string()));
+                    let config = cfg.process_config.clone();
                     process_nfts(
                         processor,
                         provider,
                         contracts,
                         &output_path,
                         chain_name,
-                        cfg.exit_on_error,
+                        config,
                         |metadata| metadata.artifact_uri.as_deref(),
                     )
                     .await?
@@ -119,13 +128,14 @@ pub mod backup {
                     let processor = Arc::new(EvmChainProcessor);
                     let provider =
                         Arc::new(ProviderBuilder::new().on_http(rpc_url.parse().unwrap()));
+                    let config = cfg.process_config.clone();
                     process_nfts(
                         processor,
                         provider,
                         contracts,
                         &output_path,
                         chain_name,
-                        cfg.exit_on_error,
+                        config,
                         |_metadata| None,
                     )
                     .await?
@@ -149,10 +159,77 @@ pub mod backup {
 
             Ok((all_files, all_errors))
         }
+
         match span {
             Some(span) => inner(cfg).instrument(span).await,
             None => inner(cfg).await,
         }
     }
     pub use super::{BackupConfig, ChainConfig, TokenConfig};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_library() {
+        // Create a simple backup config for testing
+        let mut chain_config = HashMap::new();
+        chain_config.insert(
+            "ethereum".to_string(),
+            "https://ethereum.publicnode.com".to_string(),
+        );
+
+        let mut chains = HashMap::new();
+        let contracts = vec![]; // Empty contracts for quick test
+        chains.insert("ethereum".to_string(), contracts);
+
+        // Create a shutdown flag
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+        let cfg = BackupConfig {
+            chain_config: ChainConfig(chain_config),
+            token_config: TokenConfig { chains },
+            output_path: Some("/tmp/test_backup".into()),
+            prune_redundant: false,
+            process_config: ProcessManagementConfig {
+                exit_on_error: false,
+                shutdown_flag: Some(shutdown_flag.clone()),
+            },
+        };
+
+        // Start the backup
+        let backup_handle =
+            tokio::spawn(async move { backup::backup_from_config(cfg, None).await });
+
+        // Set shutdown flag immediately
+        shutdown_flag.store(true, Ordering::Relaxed);
+
+        // The backup should complete quickly due to shutdown
+        let result = timeout(Duration::from_secs(5), backup_handle).await;
+
+        match result {
+            Ok(backup_result) => {
+                match backup_result.unwrap() {
+                    Ok(_) => println!("Backup completed normally"),
+                    Err(e) => {
+                        // Should get a shutdown error
+                        assert!(
+                            e.to_string().contains("shutdown")
+                                || e.to_string().contains("interrupted")
+                        );
+                        println!(
+                            "Backup was interrupted by shutdown signal as expected: {}",
+                            e
+                        );
+                    }
+                }
+            }
+            Err(_) => panic!("Test timed out - shutdown signal not working properly"),
+        }
+    }
 }

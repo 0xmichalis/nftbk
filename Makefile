@@ -50,6 +50,10 @@ run-cli:
 run-cli-test:
 	cargo run --bin nftbk-cli -- --tokens-config-path config_tokens_test.toml --output-path nft_backup_test $(filter-out $@,$(MAKECMDGOALS))
 
+.PHONY: run-cli-server-test
+run-cli-server-test:
+	cargo run --bin nftbk-cli -- --tokens-config-path config_tokens_test.toml --output-path nft_backup_test --server-mode true $(filter-out $@,$(MAKECMDGOALS))
+
 .PHONY: run
 run: start-db run-server
 
