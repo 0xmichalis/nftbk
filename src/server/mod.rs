@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::fs;
 use tokio::sync::mpsc;
@@ -37,6 +38,7 @@ pub struct AppState {
     pub download_tokens: Arc<Mutex<HashMap<String, (String, u64)>>>,
     pub backup_job_sender: mpsc::Sender<BackupJobOrShutdown>,
     pub db: Arc<Db>,
+    pub shutdown_flag: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -72,6 +74,7 @@ impl AppState {
         backup_job_sender: mpsc::Sender<BackupJobOrShutdown>,
         db_url: &str,
         max_connections: u32,
+        shutdown_flag: Arc<AtomicBool>,
     ) -> Self {
         let config_content = tokio::fs::read_to_string(chain_config_path)
             .await
@@ -93,6 +96,7 @@ impl AppState {
             download_tokens: Arc::new(Mutex::new(HashMap::new())),
             backup_job_sender,
             db,
+            shutdown_flag,
         }
     }
 }

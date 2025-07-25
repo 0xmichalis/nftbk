@@ -203,6 +203,7 @@ async fn main() {
         mpsc::channel::<BackupJobOrShutdown>(args.backup_queue_size);
     let db_url =
         std::env::var("DATABASE_URL").expect("DATABASE_URL env var must be set for Postgres");
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
     let state = AppState::new(
         &args.chain_config,
         &args.base_dir,
@@ -213,6 +214,7 @@ async fn main() {
         backup_job_sender.clone(),
         &db_url,
         (args.backup_queue_size + 1) as u32,
+        shutdown_flag.clone(),
     )
     .await;
 
@@ -276,14 +278,13 @@ async fn main() {
     let app = public_router.merge(authed_router);
 
     // Start the pruner thread
-    let running = Arc::new(AtomicBool::new(true));
     let pruner_handle = if args.enable_pruner {
-        let running_clone = running.clone();
         let db = state.db.clone();
         let base_dir = args.base_dir.clone();
         let interval = args.pruner_interval_seconds;
+        let shutdown_flag = state.shutdown_flag.clone();
         Some(tokio::spawn(async move {
-            run_pruner(db, base_dir, interval, running_clone).await;
+            run_pruner(db, base_dir, interval, shutdown_flag).await;
         }))
     } else {
         None
@@ -294,7 +295,7 @@ async fn main() {
         signal::ctrl_c()
             .await
             .expect("failed to install Ctrl+C handler");
-        running.store(false, Ordering::SeqCst);
+        shutdown_flag.store(true, Ordering::SeqCst);
         info!("Received shutdown signal, shutting down server...");
         let _ = std::io::stdout().flush();
         std::thread::sleep(std::time::Duration::from_millis(100));

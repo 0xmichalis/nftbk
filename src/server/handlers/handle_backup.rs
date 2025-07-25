@@ -169,6 +169,9 @@ async fn run_backup_job_inner(
         return;
     }
 
+    // Use the global shutdown flag from AppState
+    let shutdown_flag = Some(state.shutdown_flag.clone());
+
     // Prepare backup config
     let mut token_map = std::collections::HashMap::new();
     for entry in tokens.clone() {
@@ -184,13 +187,26 @@ async fn run_backup_job_inner(
         token_config,
         output_path: Some(out_path.clone()),
         prune_redundant: false,
-        exit_on_error: false,
+        process_config: crate::ProcessManagementConfig {
+            exit_on_error: false,
+            shutdown_flag: shutdown_flag.clone(),
+        },
     };
     let span = tracing::info_span!("backup", task_id = %task_id);
+
     let backup_result = backup_from_config(backup_cfg, Some(span)).await;
+
     let (files_written, error_log) = match backup_result {
         Ok((files, errors)) => (files, errors),
         Err(e) => {
+            let error_msg = e.to_string();
+            if error_msg.contains("interrupted by shutdown signal") {
+                info!(
+                    "Backup {} was gracefully interrupted by shutdown signal",
+                    task_id
+                );
+                return;
+            }
             error!("Backup {task_id} failed: {}", e);
             let _ = state
                 .db
@@ -231,11 +247,19 @@ async fn run_backup_job_inner(
     let out_path_clone = out_path.clone();
     let zip_pathbuf_clone = zip_pathbuf.clone();
     let archive_format_clone = archive_format.clone();
+
+    let shutdown_flag_clone = shutdown_flag.clone();
     let zip_result = tokio::task::spawn_blocking(move || {
-        zip_backup(&out_path_clone, &zip_pathbuf_clone, archive_format_clone)
+        zip_backup(
+            &out_path_clone,
+            &zip_pathbuf_clone,
+            archive_format_clone,
+            shutdown_flag_clone,
+        )
     })
     .await
     .unwrap();
+
     match zip_result {
         Ok(checksum) => {
             info!(
@@ -276,6 +300,7 @@ pub async fn run_backup_job(
 ) {
     let state_clone = state.clone();
     let task_id_clone = task_id.clone();
+
     let fut = AssertUnwindSafe(run_backup_job_inner(
         state,
         task_id,
