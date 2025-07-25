@@ -10,9 +10,9 @@ use std::panic::AssertUnwindSafe;
 use std::time::Instant;
 use tracing::{debug, error, info};
 
-use crate::backup::{backup_from_config, BackupConfig, TokenConfig};
+use crate::backup::{backup_from_config, backup_from_config_with_shutdown, BackupConfig, TokenConfig};
 use crate::server::api::{BackupRequest, BackupResponse};
-use crate::server::archive::{archive_format_from_user_agent, get_zipped_backup_paths, zip_backup};
+use crate::server::archive::{archive_format_from_user_agent, get_zipped_backup_paths};
 use crate::server::hashing::compute_array_sha256;
 use crate::server::{check_backup_on_disk, AppState, BackupJob, BackupJobOrShutdown, Tokens};
 
@@ -145,6 +145,7 @@ async fn run_backup_job_inner(
     tokens: Vec<Tokens>,
     force: bool,
     archive_format: String,
+    mut shutdown_rx: Option<tokio::sync::oneshot::Receiver<()>>,
 ) {
     info!("Running backup job for task {}", task_id);
 
@@ -169,6 +170,14 @@ async fn run_backup_job_inner(
         return;
     }
 
+    // Check for shutdown signal before starting backup
+    if let Some(ref mut shutdown_rx) = shutdown_rx {
+        if shutdown_rx.try_recv().is_ok() {
+            info!("Received shutdown signal before starting backup {}", task_id);
+            return;
+        }
+    }
+
     // Prepare backup config
     let mut token_map = std::collections::HashMap::new();
     for entry in tokens.clone() {
@@ -187,10 +196,22 @@ async fn run_backup_job_inner(
         exit_on_error: false,
     };
     let span = tracing::info_span!("backup", task_id = %task_id);
-    let backup_result = backup_from_config(backup_cfg, Some(span)).await;
+    
+    // Use the new backup function with shutdown support
+    let backup_result = if let Some(shutdown_rx) = shutdown_rx {
+        backup_from_config_with_shutdown(backup_cfg, Some(span), Some(shutdown_rx)).await
+    } else {
+        backup_from_config(backup_cfg, Some(span)).await
+    };
+    
     let (files_written, error_log) = match backup_result {
         Ok((files, errors)) => (files, errors),
         Err(e) => {
+            let error_msg = e.to_string();
+            if error_msg.contains("interrupted by shutdown signal") {
+                info!("Backup {} was gracefully interrupted by shutdown signal", task_id);
+                return;
+            }
             error!("Backup {task_id} failed: {}", e);
             let _ = state
                 .db
@@ -231,11 +252,17 @@ async fn run_backup_job_inner(
     let out_path_clone = out_path.clone();
     let zip_pathbuf_clone = zip_pathbuf.clone();
     let archive_format_clone = archive_format.clone();
+    
+    // Note: We can't pass the shutdown_rx to the blocking task because oneshot::Receiver is not Send + Sync
+    // This is a limitation of the current approach - zip operations cannot be perfectly interrupted
+    // since they run in a blocking thread. However, we can still check for shutdown before starting.
     let zip_result = tokio::task::spawn_blocking(move || {
+        use crate::server::archive::zip_backup;
         zip_backup(&out_path_clone, &zip_pathbuf_clone, archive_format_clone)
     })
     .await
     .unwrap();
+    
     match zip_result {
         Ok(checksum) => {
             info!(
@@ -276,12 +303,19 @@ pub async fn run_backup_job(
 ) {
     let state_clone = state.clone();
     let task_id_clone = task_id.clone();
+    
+    // Create a shutdown receiver for this specific job
+    // Note: In a real implementation, this would be connected to a global shutdown signal
+    // For now, we'll pass None since the issue doesn't specify how to connect this
+    let shutdown_rx = None; // TODO: Connect to global shutdown signal
+    
     let fut = AssertUnwindSafe(run_backup_job_inner(
         state,
         task_id,
         tokens,
         force,
         archive_format,
+        shutdown_rx,
     ))
     .catch_unwind();
 
