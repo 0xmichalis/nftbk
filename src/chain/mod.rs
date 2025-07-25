@@ -2,7 +2,9 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::path::Path;
-use tracing::{debug, error};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tracing::{debug, error, warn};
 
 use crate::content::extra::fetch_and_save_extra_content;
 use crate::content::{fetch_and_save_content, Options};
@@ -47,6 +49,7 @@ pub async fn process_nfts<C, FExtraUri>(
     chain_name: &str,
     exit_on_error: bool,
     get_extra_content_uri: FExtraUri,
+    shutdown_flag: Arc<AtomicBool>,
 ) -> anyhow::Result<(Vec<std::path::PathBuf>, Vec<String>)>
 where
     C: NFTChainProcessor + Sync + Send + 'static,
@@ -56,6 +59,12 @@ where
     let mut all_files = Vec::new();
     let mut errors = Vec::new();
     for contract in contracts {
+        // Check for shutdown signal at the beginning of each contract processing
+        if shutdown_flag.load(Ordering::Relaxed) {
+            warn!("Received shutdown signal, stopping NFT processing");
+            return Err(anyhow!("NFT processing interrupted by shutdown signal"));
+        }
+
         debug!(
             "Processing {} contract {} (token ID {})",
             chain_name,
@@ -108,6 +117,12 @@ where
 
         let mut downloaded = HashSet::new();
         for (url, opts) in urls_to_download {
+            // Check for shutdown signal before each download
+            if shutdown_flag.load(Ordering::Relaxed) {
+                warn!("Received shutdown signal, stopping NFT processing");
+                return Err(anyhow!("NFT processing interrupted by shutdown signal"));
+            }
+
             if !downloaded.insert(url.clone()) {
                 debug!(
                     "Skipping duplicate {:?} from {}",

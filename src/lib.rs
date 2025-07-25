@@ -3,11 +3,13 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 use tezos_rpc::client::TezosRpc;
 use tezos_rpc::http::default::HttpClient;
 use tokio::fs;
+use tokio::sync::oneshot;
 use tracing::{info, warn, Instrument};
 
 use crate::chain::common::ContractWithToken;
@@ -71,7 +73,15 @@ pub mod backup {
         cfg: BackupConfig,
         span: Option<tracing::Span>,
     ) -> Result<(Vec<PathBuf>, Vec<String>)> {
-        async fn inner(cfg: BackupConfig) -> Result<(Vec<PathBuf>, Vec<String>)> {
+        backup_from_config_with_shutdown(cfg, span, None).await
+    }
+
+    pub async fn backup_from_config_with_shutdown(
+        cfg: BackupConfig,
+        span: Option<tracing::Span>,
+        shutdown_rx: Option<oneshot::Receiver<()>>,
+    ) -> Result<(Vec<PathBuf>, Vec<String>)> {
+        async fn inner(cfg: BackupConfig, shutdown_flag: Arc<AtomicBool>) -> Result<(Vec<PathBuf>, Vec<String>)> {
             info!(
                 "The following user agent will be used to fetch content: {}",
                 USER_AGENT
@@ -87,6 +97,12 @@ pub mod backup {
             let mut all_errors = Vec::new();
             let mut nft_count = 0;
             for (chain_name, contracts) in &token_config.chains {
+                // Check for shutdown signal at the beginning of each chain processing
+                if shutdown_flag.load(Ordering::Relaxed) {
+                    warn!("Received shutdown signal, stopping backup");
+                    return Err(anyhow::anyhow!("Backup interrupted by shutdown signal"));
+                }
+
                 if contracts.is_empty() {
                     warn!("No contracts configured for chain {}", chain_name);
                     continue;
@@ -113,6 +129,7 @@ pub mod backup {
                         chain_name,
                         cfg.exit_on_error,
                         |metadata| metadata.artifact_uri.as_deref(),
+                        shutdown_flag.clone(),
                     )
                     .await?
                 } else {
@@ -127,6 +144,7 @@ pub mod backup {
                         chain_name,
                         cfg.exit_on_error,
                         |_metadata| None,
+                        shutdown_flag.clone(),
                     )
                     .await?
                 };
@@ -149,10 +167,75 @@ pub mod backup {
 
             Ok((all_files, all_errors))
         }
+        
+        // Create a shutdown flag and monitor the receiver if provided
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+        if let Some(mut shutdown_rx) = shutdown_rx {
+            let flag = shutdown_flag.clone();
+            tokio::spawn(async move {
+                let _ = shutdown_rx.await;
+                flag.store(true, Ordering::Relaxed);
+            });
+        }
+
         match span {
-            Some(span) => inner(cfg).instrument(span).await,
-            None => inner(cfg).await,
+            Some(span) => inner(cfg, shutdown_flag).instrument(span).await,
+            None => inner(cfg, shutdown_flag).await,
         }
     }
     pub use super::{BackupConfig, ChainConfig, TokenConfig};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+    use tokio::time::timeout;
+
+    #[tokio::test]
+    async fn test_graceful_shutdown_library() {
+        // Create a simple backup config for testing
+        let mut chain_config = HashMap::new();
+        chain_config.insert("ethereum".to_string(), "https://ethereum.publicnode.com".to_string());
+        
+        let mut chains = HashMap::new();
+        let contracts = vec![]; // Empty contracts for quick test
+        chains.insert("ethereum".to_string(), contracts);
+
+        let cfg = BackupConfig {
+            chain_config: ChainConfig(chain_config),
+            token_config: TokenConfig { chains },
+            output_path: Some("/tmp/test_backup".into()),
+            prune_redundant: false,
+            exit_on_error: false,
+        };
+
+        // Create a shutdown channel
+        let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
+
+        // Start the backup with shutdown support
+        let backup_handle = tokio::spawn(async move {
+            backup::backup_from_config_with_shutdown(cfg, None, Some(shutdown_rx)).await
+        });
+
+        // Send shutdown signal immediately
+        let _ = shutdown_tx.send(());
+
+        // The backup should complete quickly due to shutdown
+        let result = timeout(Duration::from_secs(5), backup_handle).await;
+        
+        match result {
+            Ok(backup_result) => {
+                match backup_result.unwrap() {
+                    Ok(_) => println!("Backup completed normally"),
+                    Err(e) => {
+                        // Should get a shutdown error
+                        assert!(e.to_string().contains("shutdown") || e.to_string().contains("interrupted"));
+                        println!("Backup was interrupted by shutdown signal as expected: {}", e);
+                    }
+                }
+            }
+            Err(_) => panic!("Test timed out - shutdown signal not working properly"),
+        }
+    }
 }

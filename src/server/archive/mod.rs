@@ -5,6 +5,9 @@ use std::fs;
 use std::io::{self, Seek, Write};
 use std::path::Path as StdPath;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tracing::warn;
 use zip::write::FileOptions;
 
 /// A writer that writes to two destinations: the archive file and a hasher
@@ -36,19 +39,34 @@ pub fn zip_backup(
     zip_path: &StdPath,
     archive_format: String,
 ) -> Result<String, String> {
+    zip_backup_with_shutdown(out_path, zip_path, archive_format, None)
+}
+
+pub fn zip_backup_with_shutdown(
+    out_path: &StdPath,
+    zip_path: &StdPath,
+    archive_format: String,
+    shutdown_flag: Option<Arc<AtomicBool>>,
+) -> Result<String, String> {
     match archive_format.as_str() {
-        "zip" => zip_backup_zip(out_path, zip_path),
-        _ => zip_backup_tar_gz(out_path, zip_path),
+        "zip" => zip_backup_zip_with_shutdown(out_path, zip_path, shutdown_flag),
+        _ => zip_backup_tar_gz_with_shutdown(out_path, zip_path, shutdown_flag),
     }
 }
 
-fn zip_backup_zip(out_path: &StdPath, zip_path: &StdPath) -> Result<String, String> {
+
+
+fn zip_backup_zip_with_shutdown(
+    out_path: &StdPath,
+    zip_path: &StdPath,
+    shutdown_flag: Option<Arc<AtomicBool>>,
+) -> Result<String, String> {
     let zip_path_str = zip_path.to_str().unwrap();
     let zip_file =
         fs::File::create(zip_path_str).map_err(|e| format!("Failed to create zip: {}", e))?;
     let mut zip = zip::ZipWriter::new(zip_file);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
-    if let Err(e) = add_dir_to_zip(&mut zip, out_path, out_path, options) {
+    if let Err(e) = add_dir_to_zip(&mut zip, out_path, out_path, options, shutdown_flag.as_ref()) {
         return Err(format!("Failed to zip dir: {}", e));
     }
     zip.finish()
@@ -77,8 +95,20 @@ fn add_dir_to_zip<W: Write + Seek>(
     src_dir: &StdPath,
     base: &StdPath,
     options: FileOptions,
+    shutdown_flag: Option<&Arc<AtomicBool>>,
 ) -> io::Result<()> {
     for entry in fs::read_dir(src_dir)? {
+        // Check for shutdown signal before processing each entry
+        if let Some(shutdown_flag) = shutdown_flag {
+            if shutdown_flag.load(Ordering::Relaxed) {
+                warn!("Received shutdown signal, stopping zip backup");
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Zip backup interrupted by shutdown signal",
+                ));
+            }
+        }
+
         let entry = entry?;
         let path = entry.path();
         let rel_path = path.strip_prefix(base).unwrap();
@@ -87,7 +117,7 @@ fn add_dir_to_zip<W: Write + Seek>(
             .replace(std::path::MAIN_SEPARATOR, "/");
         if path.is_dir() {
             zip.add_directory(format!("{}/", rel_path_str), options)?;
-            add_dir_to_zip(zip, &path, base, options)?;
+            add_dir_to_zip(zip, &path, base, options, shutdown_flag)?;
         } else if path.is_file() {
             zip.start_file(rel_path_str, options)?;
             let mut f = fs::File::open(&path)?;
@@ -97,7 +127,13 @@ fn add_dir_to_zip<W: Write + Seek>(
     Ok(())
 }
 
-fn zip_backup_tar_gz(out_path: &StdPath, zip_path: &StdPath) -> Result<String, String> {
+
+
+fn zip_backup_tar_gz_with_shutdown(
+    out_path: &StdPath,
+    zip_path: &StdPath,
+    shutdown_flag: Option<Arc<AtomicBool>>,
+) -> Result<String, String> {
     let zip_path_str = zip_path.to_str().unwrap();
     let tar_gz =
         fs::File::create(zip_path_str).map_err(|e| format!("Failed to create zip: {}", e))?;
@@ -105,7 +141,7 @@ fn zip_backup_tar_gz(out_path: &StdPath, zip_path: &StdPath) -> Result<String, S
     let tee_writer = TeeWriter::new(tar_gz, &mut hasher);
     let enc = GzEncoder::new(tee_writer, Compression::default());
     let mut tar = tar::Builder::new(enc);
-    if let Err(e) = add_dir_recursively(&mut tar, out_path, out_path) {
+    if let Err(e) = add_dir_recursively(&mut tar, out_path, out_path, shutdown_flag.as_ref()) {
         return Err(format!("Failed to tar dir: {}", e));
     }
     let enc = tar
@@ -121,14 +157,26 @@ pub fn add_dir_recursively<T: Write>(
     tar: &mut tar::Builder<T>,
     src_dir: &StdPath,
     base: &StdPath,
+    shutdown_flag: Option<&Arc<AtomicBool>>,
 ) -> std::io::Result<()> {
     for entry in fs::read_dir(src_dir)? {
+        // Check for shutdown signal before processing each entry
+        if let Some(shutdown_flag) = shutdown_flag {
+            if shutdown_flag.load(Ordering::Relaxed) {
+                warn!("Received shutdown signal, stopping tar backup");
+                return Err(io::Error::new(
+                    io::ErrorKind::Interrupted,
+                    "Tar backup interrupted by shutdown signal",
+                ));
+            }
+        }
+
         let entry = entry?;
         let path = entry.path();
         let rel_path = path.strip_prefix(base).unwrap();
         if path.is_dir() {
             tar.append_dir(rel_path, &path)?;
-            add_dir_recursively(tar, &path, base)?;
+            add_dir_recursively(tar, &path, base, shutdown_flag)?;
         } else if path.is_file() {
             tar.append_path_with_name(&path, rel_path)?;
         }
