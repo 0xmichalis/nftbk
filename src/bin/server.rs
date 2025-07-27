@@ -292,11 +292,18 @@ async fn main() {
 
     // Add graceful shutdown
     let shutdown_signal = async move {
-        signal::ctrl_c()
-            .await
-            .expect("failed to install Ctrl+C handler");
+        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+
+        tokio::select! {
+            _ = signal::ctrl_c() => {
+                info!("Received SIGINT (Ctrl+C), shutting down server...");
+            }
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM, shutting down server...");
+            }
+        }
         shutdown_flag.store(true, Ordering::SeqCst);
-        info!("Received shutdown signal, shutting down server...");
         let _ = std::io::stdout().flush();
         std::thread::sleep(std::time::Duration::from_millis(100));
     };
