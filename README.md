@@ -1,5 +1,7 @@
 # nftbk
 
+[![CI](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml/badge.svg)](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml)
+
 A library, server, and CLI tool for backing up NFT metadata and content from EVM and Tezos NFT contracts.
 
 ## Requirements
