@@ -144,6 +144,25 @@ impl Db {
         Ok(())
     }
 
+    pub async fn retry_backup(
+        &self,
+        task_id: &str,
+        retention_days: u64,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            UPDATE backup_metadata
+            SET status = 'in_progress', updated_at = NOW(), expires_at = NOW() + ($2 || ' days')::interval
+            WHERE task_id = $1
+            "#,
+            task_id,
+            retention_days as i64
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     /// Batch update: set status for multiple task_ids at once
     pub async fn batch_update_backup_status(
         &self,

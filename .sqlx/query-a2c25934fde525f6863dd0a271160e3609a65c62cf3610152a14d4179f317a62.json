@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE backup_metadata\n            SET status = 'in_progress', updated_at = NOW(), expires_at = NOW() + ($2 || ' days')::interval\n            WHERE task_id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a2c25934fde525f6863dd0a271160e3609a65c62cf3610152a14d4179f317a62"
+}

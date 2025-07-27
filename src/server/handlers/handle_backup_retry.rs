@@ -59,7 +59,7 @@ pub async fn handle_backup_retry(
 
     let _ = state
         .db
-        .update_backup_metadata_status(&task_id, "in_progress")
+        .retry_backup(&task_id, state.pruner_retention_days)
         .await;
 
     // Re-run backup job
