@@ -291,7 +291,9 @@ impl Db {
         Ok(recs)
     }
 
-    pub async fn list_expired_backups(&self) -> Result<Vec<ExpiredBackup>, sqlx::Error> {
+    pub async fn list_unprocessed_expired_backups(
+        &self,
+    ) -> Result<Vec<ExpiredBackup>, sqlx::Error> {
         let recs = sqlx::query_as!(
             ExpiredBackup,
             r#"

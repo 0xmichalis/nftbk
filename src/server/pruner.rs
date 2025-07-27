@@ -41,7 +41,7 @@ pub async fn run_pruner(
 ) {
     while !shutdown_flag.load(Ordering::SeqCst) {
         info!("Running pruning process...");
-        match db.list_expired_backups().await {
+        match db.list_unprocessed_expired_backups().await {
             Ok(expired) => {
                 prune_backups(&db, &base_dir, &expired).await;
             }
