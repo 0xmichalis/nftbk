@@ -10,20 +10,6 @@ use std::sync::Arc;
 use tracing::warn;
 use zip::write::FileOptions;
 
-/// Check for shutdown signal and return error if shutdown is requested
-fn check_shutdown_signal(shutdown_flag: Option<&Arc<AtomicBool>>) -> io::Result<()> {
-    if let Some(flag) = shutdown_flag {
-        if flag.load(Ordering::Relaxed) {
-            warn!("Received shutdown signal, stopping archive operation");
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                "Archive operation interrupted by shutdown signal",
-            ));
-        }
-    }
-    Ok(())
-}
-
 /// A writer that writes to two destinations: the archive file and a hasher
 struct TeeWriter<W: Write, H: Write> {
     writer: W,
@@ -134,7 +120,7 @@ fn zip_backup_tar_gz(
     let tee_writer = TeeWriter::new(tar_gz, &mut hasher);
     let enc = GzEncoder::new(tee_writer, Compression::default());
     let mut tar = tar::Builder::new(enc);
-    if let Err(e) = add_dir_recursively(&mut tar, out_path, out_path, shutdown_flag) {
+    if let Err(e) = add_dir_to_tar_gz(&mut tar, out_path, out_path, shutdown_flag) {
         return Err(format!("Failed to tar dir: {}", e));
     }
     let enc = tar
@@ -146,7 +132,7 @@ fn zip_backup_tar_gz(
     Ok(checksum)
 }
 
-pub fn add_dir_recursively<T: Write>(
+fn add_dir_to_tar_gz<T: Write>(
     tar: &mut tar::Builder<T>,
     src_dir: &StdPath,
     base: &StdPath,
@@ -160,9 +146,22 @@ pub fn add_dir_recursively<T: Write>(
         let rel_path = path.strip_prefix(base).unwrap();
         if path.is_dir() {
             tar.append_dir(rel_path, &path)?;
-            add_dir_recursively(tar, &path, base, shutdown_flag.clone())?;
+            add_dir_to_tar_gz(tar, &path, base, shutdown_flag.clone())?;
         } else if path.is_file() {
             tar.append_path_with_name(&path, rel_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn check_shutdown_signal(shutdown_flag: Option<&Arc<AtomicBool>>) -> io::Result<()> {
+    if let Some(flag) = shutdown_flag {
+        if flag.load(Ordering::Relaxed) {
+            warn!("Received shutdown signal, stopping archive operation");
+            return Err(io::Error::new(
+                io::ErrorKind::Interrupted,
+                "Archive operation interrupted by shutdown signal",
+            ));
         }
     }
     Ok(())
