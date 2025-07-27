@@ -295,7 +295,7 @@ impl Db {
         let recs = sqlx::query_as!(
             ExpiredBackup,
             r#"
-            SELECT task_id, archive_format FROM backup_metadata WHERE expires_at IS NOT NULL AND expires_at < NOW()
+            SELECT task_id, archive_format FROM backup_metadata WHERE expires_at IS NOT NULL AND expires_at < NOW() AND status != 'expired'
             "#
         )
         .fetch_all(&self.pool)
