@@ -304,8 +304,6 @@ async fn main() {
             }
         }
         shutdown_flag.store(true, Ordering::SeqCst);
-        let _ = std::io::stdout().flush();
-        std::thread::sleep(std::time::Duration::from_millis(100));
     };
 
     // Start the server
@@ -339,4 +337,8 @@ async fn main() {
         let _ = handle.await;
     }
     info!("Backup workers have exited");
+
+    // Give time for final logs to flush
+    let _ = std::io::stdout().flush();
+    std::thread::sleep(std::time::Duration::from_millis(200));
 }
