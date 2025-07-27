@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgPoolOptions, PgPool};
+use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BackupMetadataRow {
@@ -225,18 +225,50 @@ impl Db {
     pub async fn list_requestor_backups(
         &self,
         requestor: &str,
+        include_tokens: bool,
     ) -> Result<Vec<BackupMetadataRow>, sqlx::Error> {
-        let recs = sqlx::query_as!(
-            BackupMetadataRow,
+        let tokens_field = if include_tokens { "tokens," } else { "" };
+
+        let query = format!(
             r#"
-            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, status, expires_at, error_log, fatal_error
+            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, {} status, expires_at, error_log, fatal_error
             FROM backup_metadata WHERE requestor = $1
             ORDER BY created_at DESC
             "#,
-            requestor
-        )
-        .fetch_all(&self.pool)
-        .await?;
+            tokens_field
+        );
+
+        let rows = sqlx::query(&query)
+            .bind(requestor)
+            .fetch_all(&self.pool)
+            .await?;
+
+        let recs = rows
+            .into_iter()
+            .map(|row| {
+                let tokens = if include_tokens {
+                    row.try_get::<serde_json::Value, _>("tokens")
+                        .unwrap_or(serde_json::Value::Null)
+                } else {
+                    serde_json::Value::Null
+                };
+
+                BackupMetadataRow {
+                    task_id: row.get("task_id"),
+                    created_at: row.get("created_at"),
+                    updated_at: row.get("updated_at"),
+                    requestor: row.get("requestor"),
+                    archive_format: row.get("archive_format"),
+                    nft_count: row.get("nft_count"),
+                    tokens,
+                    status: row.get("status"),
+                    expires_at: row.get("expires_at"),
+                    error_log: row.get("error_log"),
+                    fatal_error: row.get("fatal_error"),
+                }
+            })
+            .collect();
+
         Ok(recs)
     }
 
