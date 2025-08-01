@@ -319,13 +319,26 @@ pub async fn run_backup_job(
         } else {
             "Unknown panic".to_string()
         };
+
+        // Try to get location information from the panic payload
+        let detailed_error = if let Some(location) = panic.downcast_ref::<std::panic::Location>() {
+            format!(
+                "Panic at {}:{}: {}",
+                location.file(),
+                location.line(),
+                panic_msg
+            )
+        } else {
+            format!("Panic: {}", panic_msg)
+        };
+
         error!(
             "Backup job for task {} panicked: {}",
-            task_id_clone, panic_msg
+            task_id_clone, detailed_error
         );
         let _ = state_clone
             .db
-            .set_backup_error(&task_id_clone, &format!("Panic: {}", panic_msg))
+            .set_backup_error(&task_id_clone, &detailed_error)
             .await;
     }
 }
