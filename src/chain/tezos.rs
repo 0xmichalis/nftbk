@@ -133,7 +133,7 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
             .storage()
             .big_maps()
             .get_by_name("token_metadata")
-            .unwrap();
+            .ok_or_else(|| anyhow::anyhow!("Contract does not have token_metadata big map"))?;
         let token_id = Int::from(&contract.token_id)?;
         let token_id_michelson = data::int(token_id);
         let value = token_metadata
