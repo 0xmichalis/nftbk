@@ -31,12 +31,12 @@ services:
       - "443:443"
     volumes:
       - ./Caddyfile.template:/etc/caddy/Caddyfile.template
-      - ./scripts/start-caddy.sh:/start-caddy.sh
+      - ./scripts/start_caddy.sh:/start_caddy.sh
       - caddy_data:/data
       - caddy_config:/config
     env_file:
       - .env.caddy
-    entrypoint: ["/bin/sh", "/start-caddy.sh"]
+    entrypoint: ["/bin/sh", "/start_caddy.sh"]
     depends_on:
       - nftbk-server
     restart: unless-stopped
