@@ -40,6 +40,12 @@ pub enum AnimationDetails {
     Object { format: Option<String> },
 }
 
+// Helper struct for attributes with only value field (used by Primera)
+#[derive(Deserialize)]
+struct ValueOnlyAttribute {
+    value: serde_json::Value,
+}
+
 // Helper enum to deserialize both formats
 #[derive(Deserialize)]
 #[serde(untagged)]
@@ -47,6 +53,8 @@ enum AttributesFormat {
     Array(Vec<NFTAttribute>),
     // Used by KnownOrigin
     Map(std::collections::HashMap<String, serde_json::Value>),
+    // Used by Primera - attributes with only value field
+    ValueOnlyArray(Vec<ValueOnlyAttribute>),
 }
 
 fn deserialize_attributes<'de, D>(deserializer: D) -> Result<Option<Vec<NFTAttribute>>, D::Error>
@@ -63,6 +71,18 @@ where
             ))
         }
         Some(AttributesFormat::Array(attrs)) => Ok(Some(attrs)),
+        Some(AttributesFormat::ValueOnlyArray(attrs)) => {
+            // Convert ValueOnlyAttribute to NFTAttribute with empty trait_type
+            Ok(Some(
+                attrs
+                    .into_iter()
+                    .map(|attr| NFTAttribute {
+                        trait_type: String::new(),
+                        value: attr.value,
+                    })
+                    .collect(),
+            ))
+        }
         None => Ok(None),
     }
 }
@@ -391,5 +411,94 @@ mod tests {
         let expected_dec_uri = "https://api.example.com/metadata/123456";
         let replaced_dec = replace_id_pattern(dec_uri, &token_id);
         assert_eq!(replaced_dec.as_deref(), Some(expected_dec_uri));
+    }
+
+    #[test]
+    fn test_deserialize_primera_metadata() {
+        let json = r#"{
+            "image": "https://earxvqhz3yy7be5zmpqjadsdumy5rkudotdvbqf6gjzs3lgvlkfa.arweave.net/ICN6wPneMfCTuWPgkA5DozHYqoN0x1DAvjJzLazVWoo/primera-223.gif",
+            "script_type": "p5js",
+            "aspect_ratio": "1",
+            "date": "2021/11/14",
+            "animation_url": "https://lqucewrfvyqn6r4pslvx3sa5vvqhvxd2rkg6cuf7rq56nehzrm.arweave.net/XCgiWiWuIN9Hj5Lr_fcgdrWB63HqKjeFQv4w75pD5iw?hash=0xf146009532e35f67117b6e1c1303819ae44ec049a266a99b262bbad7a7d65538&number=223",
+            "name": "Primera #223",
+            "number": "223",
+            "hash": "0xf146009532e35f67117b6e1c1303819ae44ec049a266a99b262bbad7a7d65538",
+            "external_url": "https://lqucewrfvyqn6r4pslvx3sa5vvqhvxd2rkg6cuf7rq56nehzrm.arweave.net/XCgiWiWuIN9Hj5Lr_fcgdrWB63HqKjeFQv4w75pD5iw?hash=0xf146009532e35f67117b6e1c1303819ae44ec049a266a99b262bbad7a7d65538&number=223",
+            "description": "Primera is the genesis project from Andrew Mitchell and Grant Yun written completely in p5.js. Primera, capped at 400 individual pieces generated upon mint, has been a project with years in the making. It is a study and interpretation on the fundamentals of early 20th century art utilizing 21st century blockchain technology",
+            "attributes": [
+                {
+                    "value": "Tan Background"
+                },
+                {
+                    "value": "Black"
+                },
+                {
+                    "value": "Blue"
+                },
+                {
+                    "value": "Yellow"
+                },
+                {
+                    "value": "Green"
+                }
+            ]
+        }"#;
+        let meta: NFTMetadata = serde_json::from_str(json).expect("Deserialization failed");
+        assert_eq!(meta.name.as_deref(), Some("Primera #223"));
+        assert!(meta.attributes.is_some());
+        let attrs = meta.attributes.unwrap();
+        assert_eq!(attrs.len(), 5);
+        assert_eq!(attrs[0].value, serde_json::json!("Tan Background"));
+        assert_eq!(attrs[1].value, serde_json::json!("Black"));
+        assert_eq!(attrs[2].value, serde_json::json!("Blue"));
+        assert_eq!(attrs[3].value, serde_json::json!("Yellow"));
+        assert_eq!(attrs[4].value, serde_json::json!("Green"));
+    }
+
+    #[test]
+    fn test_deserialize_knownorigin_metadata() {
+        let json = r#"{
+            "name": "Test NFT",
+            "description": "Test description",
+            "image": "https://example.com/image.jpg",
+            "attributes": {
+                "Background": "Blue",
+                "Eyes": "Green",
+                "Mouth": "Smile"
+            }
+        }"#;
+        let meta: NFTMetadata = serde_json::from_str(json).expect("Deserialization failed");
+        assert_eq!(meta.name.as_deref(), Some("Test NFT"));
+        assert!(meta.attributes.is_some());
+        let attrs = meta.attributes.unwrap();
+        assert_eq!(attrs.len(), 3);
+
+        // Check that all expected attributes are present (order doesn't matter for HashMap)
+        let mut found_background = false;
+        let mut found_eyes = false;
+        let mut found_mouth = false;
+
+        for attr in &attrs {
+            match attr.trait_type.as_str() {
+                "Background" => {
+                    assert_eq!(attr.value, serde_json::json!("Blue"));
+                    found_background = true;
+                }
+                "Eyes" => {
+                    assert_eq!(attr.value, serde_json::json!("Green"));
+                    found_eyes = true;
+                }
+                "Mouth" => {
+                    assert_eq!(attr.value, serde_json::json!("Smile"));
+                    found_mouth = true;
+                }
+                _ => panic!("Unexpected trait_type: {}", attr.trait_type),
+            }
+        }
+
+        assert!(found_background, "Background attribute not found");
+        assert!(found_eyes, "Eyes attribute not found");
+        assert!(found_mouth, "Mouth attribute not found");
     }
 }
