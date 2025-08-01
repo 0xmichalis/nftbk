@@ -145,20 +145,32 @@ pub async fn fetch_and_save_extra_content(
     output_path: &Path,
     artifact_url: Option<&str>,
 ) -> Result<Vec<PathBuf>> {
-    match (chain, contract, token_id) {
-        (
-            "ethereum",
-            "0x2a86c5466f088caebf94e071a77669bae371cd87",
-            "25811853076941608055270457512038717433705462539422789705262203111341130500780",
-        ) => fetch_croquet_challenge_content(output_path, contract, token_id).await,
-        ("tezos", "KT1UcASzQxiWprSmsvpStsxtAZzaRJWR78gz", "4") if artifact_url.is_some() => {
-            fetch_the_fisherman_content(
-                output_path,
-                contract,
-                token_id,
-                &get_url(artifact_url.unwrap()),
-            )
-            .await
+    match (chain, contract) {
+        ("ethereum", "0x2a86c5466f088caebf94e071a77669bae371cd87") => {
+            // Check if token_id is in the specified range using string comparison
+            let start_id =
+                "25811853076941608055270457512038717433705462539422789705262203111341130500763";
+            let end_id =
+                "25811853076941608055270457512038717433705462539422789705262203111341130501225";
+
+            if token_id >= start_id && token_id <= end_id {
+                fetch_croquet_challenge_content(output_path, contract, token_id).await
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        ("tezos", "KT1UcASzQxiWprSmsvpStsxtAZzaRJWR78gz") if artifact_url.is_some() => {
+            if token_id == "4" {
+                fetch_the_fisherman_content(
+                    output_path,
+                    contract,
+                    token_id,
+                    &get_url(artifact_url.unwrap()),
+                )
+                .await
+            } else {
+                Ok(Vec::new())
+            }
         }
         // Default case - no extension needed
         _ => Ok(Vec::new()),
