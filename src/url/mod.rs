@@ -104,6 +104,12 @@ pub fn all_ipfs_gateway_urls(url: &str) -> Option<Vec<String>> {
     }
 }
 
+/// Checks if a URL is an IPFS gateway URL by looking for /ipfs/ path
+pub fn is_ipfs_gateway_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.contains("/ipfs/")
+}
+
 pub fn get_last_path_segment(url: &str, fallback: &str) -> String {
     Url::parse(url)
         .ok()
@@ -359,5 +365,62 @@ mod tests {
         let svg = "<svg xmlns='http://www.w3.org/2000/svg'></svg>";
         let content = get_data_url(svg).unwrap();
         assert_eq!(String::from_utf8_lossy(&content), svg);
+    }
+
+    #[test]
+    fn test_is_ipfs_gateway_url() {
+        // Test IPFS gateway URLs (any URL with /ipfs/ path)
+        assert!(is_ipfs_gateway_url("https://ipfs.io/ipfs/QmHash"));
+        assert!(is_ipfs_gateway_url(
+            "https://cloudflare-ipfs.com/ipfs/QmHash"
+        ));
+        assert!(is_ipfs_gateway_url(
+            "https://gateway.pinata.cloud/ipfs/QmHash"
+        ));
+        assert!(is_ipfs_gateway_url("https://nftstorage.link/ipfs/QmHash"));
+        assert!(is_ipfs_gateway_url("https://cf-ipfs.com/ipfs/QmHash"));
+
+        // Test case insensitivity
+        assert!(is_ipfs_gateway_url("https://IPFS.IO/ipfs/QmHash"));
+        assert!(is_ipfs_gateway_url(
+            "https://Cloudflare-IPFS.com/ipfs/QmHash"
+        ));
+
+        // Test other IPFS gateways (not in our predefined list)
+        assert!(is_ipfs_gateway_url(
+            "https://custom-gateway.com/ipfs/QmHash"
+        ));
+        assert!(is_ipfs_gateway_url("https://example.com/ipfs/QmHash"));
+        assert!(is_ipfs_gateway_url(
+            "https://ipfs.io.example.com/ipfs/QmHash"
+        ));
+
+        // Test non-IPFS URLs
+        assert!(!is_ipfs_gateway_url("https://example.com/image.png"));
+        assert!(!is_ipfs_gateway_url("https://ipfs.io/image.png")); // no /ipfs/ path
+        assert!(!is_ipfs_gateway_url("https://example.com/ipfs")); // no trailing slash
+    }
+
+    #[test]
+    fn test_ipfs_gateway_rotation() {
+        // Test that IPFS gateway URLs can be detected and rotated
+        let ipfs_url = "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+
+        // Verify that all_ipfs_gateway_urls returns the expected gateways
+        if let Some(gateway_urls) = all_ipfs_gateway_urls(ipfs_url) {
+            assert!(!gateway_urls.is_empty());
+
+            // Check that our predefined gateways are included
+            let gateway_strings: Vec<&str> = gateway_urls.iter().map(|s| s.as_str()).collect();
+            assert!(gateway_strings.iter().any(|url| url.contains("ipfs.io")));
+            assert!(gateway_strings
+                .iter()
+                .any(|url| url.contains("cloudflare-ipfs.com")));
+            assert!(gateway_strings
+                .iter()
+                .any(|url| url.contains("gateway.pinata.cloud")));
+        } else {
+            panic!("all_ipfs_gateway_urls should return Some for IPFS URLs");
+        }
     }
 }
