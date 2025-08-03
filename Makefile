@@ -1,9 +1,7 @@
 # Development-related targets
 
 .PHONY: all
-all: fmt sort
-	@SQLX_OFFLINE=true cargo clippy -- -D warnings
-	@SQLX_OFFLINE=true cargo test
+all: fmt sort clippy test
 
 .PHONY: fmt
 fmt:
@@ -11,7 +9,7 @@ fmt:
 
 .PHONY: clippy
 clippy:
-	cargo clippy -- -D warnings
+	@SQLX_OFFLINE=true cargo clippy -- -D warnings
 
 .PHONY: sort
 sort:
@@ -29,30 +27,30 @@ sqlxprepare:
 
 .PHONY: test
 test:
-	cargo test
+	@SQLX_OFFLINE=true cargo test
 
 .PHONY: check
 check:
-	cargo check -- $(filter-out $@,$(MAKECMDGOALS))
+	@SQLX_OFFLINE=true cargo check -- $(filter-out $@,$(MAKECMDGOALS))
 
 .PHONY: build
 build:
-	cargo build -- $(filter-out $@,$(MAKECMDGOALS))
+	@SQLX_OFFLINE=true cargo build -- $(filter-out $@,$(MAKECMDGOALS))
 
 
 # Local run-related targets
 
 .PHONY: run-cli
 run-cli:
-	cargo run --bin nftbk-cli -- $(filter-out $@,$(MAKECMDGOALS))
+	@SQLX_OFFLINE=true cargo run --bin nftbk-cli -- $(filter-out $@,$(MAKECMDGOALS))
 
 .PHONY: run-cli-test
 run-cli-test:
-	cargo run --bin nftbk-cli -- --tokens-config-path config_tokens_test.toml --output-path nft_backup_test $(filter-out $@,$(MAKECMDGOALS))
+	@SQLX_OFFLINE=true cargo run --bin nftbk-cli -- --tokens-config-path config_tokens_test.toml --output-path nft_backup_test $(filter-out $@,$(MAKECMDGOALS))
 
 .PHONY: run-cli-server-test
 run-cli-server-test:
-	cargo run --bin nftbk-cli -- --tokens-config-path config_tokens_test.toml --output-path nft_backup_test --server-mode true $(filter-out $@,$(MAKECMDGOALS))
+	@SQLX_OFFLINE=true cargo run --bin nftbk-cli -- --tokens-config-path config_tokens_test.toml --output-path nft_backup_test --server-mode true $(filter-out $@,$(MAKECMDGOALS))
 
 .PHONY: run
 run: start-db run-server
