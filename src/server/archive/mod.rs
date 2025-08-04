@@ -53,24 +53,24 @@ fn zip_backup_zip(
 ) -> Result<String, String> {
     let zip_path_str = zip_path.to_str().unwrap();
     let zip_file =
-        fs::File::create(zip_path_str).map_err(|e| format!("Failed to create zip: {}", e))?;
+        fs::File::create(zip_path_str).map_err(|e| format!("Failed to create zip: {e}"))?;
     let mut zip = zip::ZipWriter::new(zip_file);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     if let Err(e) = add_dir_to_zip(&mut zip, out_path, out_path, options, shutdown_flag) {
-        return Err(format!("Failed to zip dir: {}", e));
+        return Err(format!("Failed to zip dir: {e}"));
     }
     zip.finish()
-        .map_err(|e| format!("Failed to finish zip: {}", e))?;
+        .map_err(|e| format!("Failed to finish zip: {e}"))?;
     // Compute SHA256 after writing
-    let mut file = fs::File::open(zip_path_str)
-        .map_err(|e| format!("Failed to open zip for hashing: {}", e))?;
+    let mut file =
+        fs::File::open(zip_path_str).map_err(|e| format!("Failed to open zip for hashing: {e}"))?;
     use std::io::Read;
     let mut hasher = Sha256::new();
     let mut buf = [0u8; 8192];
     loop {
         let n = file
             .read(&mut buf)
-            .map_err(|e| format!("Failed to read zip for hashing: {}", e))?;
+            .map_err(|e| format!("Failed to read zip for hashing: {e}"))?;
         if n == 0 {
             break;
         }
@@ -97,7 +97,7 @@ fn add_dir_to_zip<W: Write + Seek>(
             .to_string_lossy()
             .replace(std::path::MAIN_SEPARATOR, "/");
         if path.is_dir() {
-            zip.add_directory(format!("{}/", rel_path_str), options)?;
+            zip.add_directory(format!("{rel_path_str}/"), options)?;
             add_dir_to_zip(zip, &path, base, options, shutdown_flag.clone())?;
         } else if path.is_file() {
             zip.start_file(rel_path_str, options)?;
@@ -115,19 +115,19 @@ fn zip_backup_tar_gz(
 ) -> Result<String, String> {
     let zip_path_str = zip_path.to_str().unwrap();
     let tar_gz =
-        fs::File::create(zip_path_str).map_err(|e| format!("Failed to create zip: {}", e))?;
+        fs::File::create(zip_path_str).map_err(|e| format!("Failed to create zip: {e}"))?;
     let mut hasher = Sha256::new();
     let tee_writer = TeeWriter::new(tar_gz, &mut hasher);
     let enc = GzEncoder::new(tee_writer, Compression::default());
     let mut tar = tar::Builder::new(enc);
     if let Err(e) = add_dir_to_tar_gz(&mut tar, out_path, out_path, shutdown_flag) {
-        return Err(format!("Failed to tar dir: {}", e));
+        return Err(format!("Failed to tar dir: {e}"));
     }
     let enc = tar
         .into_inner()
-        .map_err(|e| format!("Failed to finish tar: {}", e))?;
+        .map_err(|e| format!("Failed to finish tar: {e}"))?;
     enc.finish()
-        .map_err(|e| format!("Failed to encode tar: {}", e))?;
+        .map_err(|e| format!("Failed to encode tar: {e}"))?;
     let checksum = format!("{:x}", hasher.finalize());
     Ok(checksum)
 }
@@ -172,7 +172,7 @@ pub fn get_zipped_backup_paths(
     task_id: &str,
     archive_format: &str,
 ) -> (PathBuf, PathBuf) {
-    let zip_path = PathBuf::from(format!("{}/nftbk-{}.{}", base_dir, task_id, archive_format));
+    let zip_path = PathBuf::from(format!("{base_dir}/nftbk-{task_id}.{archive_format}"));
     let checksum_path = PathBuf::from(format!("{}.sha256", zip_path.display()));
     (zip_path, checksum_path)
 }

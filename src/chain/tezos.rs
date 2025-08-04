@@ -215,7 +215,7 @@ fn get_uri_from_token_metadata(json_value: &serde_json::Value) -> Option<String>
             }
             let json = serde_json::to_string(&map).ok()?;
             let base64 = base64::engine::general_purpose::STANDARD.encode(json);
-            Some(format!("data:application/json;base64,{}", base64))
+            Some(format!("data:application/json;base64,{base64}"))
         }
         std::cmp::Ordering::Less => None,
     }

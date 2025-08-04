@@ -121,7 +121,7 @@ async fn serve_zip_file(zip_path: &PathBuf, task_id: &str, archive_format: &str)
     headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
     headers.insert(
         header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"nftbk-{}.{}\"", task_id, ext)
+        format!("attachment; filename=\"nftbk-{task_id}.{ext}\"")
             .parse()
             .unwrap(),
     );

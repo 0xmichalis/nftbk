@@ -309,7 +309,7 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
 
         // Handle OpenSea's URI pattern
         if uri.contains("/api.opensea.io/") && uri.contains("{id}") {
-            let hex_token_id = format!("{:x}", token_id);
+            let hex_token_id = format!("{token_id:x}");
             return Ok(uri.replace("{id}", &hex_token_id));
         }
 
@@ -325,7 +325,7 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
 fn replace_id_pattern(uri: &str, token_id: &U256) -> Option<String> {
     if let Some(idx) = uri.rfind("/0x{id}") {
         if idx + 7 == uri.len() {
-            let hex_token_id = format!("0x{:x}", token_id);
+            let hex_token_id = format!("0x{token_id:x}");
             let new_uri = format!("{}{}", &uri[..idx + 1], hex_token_id);
             return Some(new_uri);
         }

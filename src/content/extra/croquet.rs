@@ -73,7 +73,7 @@ async fn fetch_croquet_challenge_content_with_base_url(
     let client = reqwest::Client::new();
     let mut files_created = Vec::new();
     for (source_file, target_file) in files {
-        let url = format!("{}/bb0101/Build/{}", base_url, source_file);
+        let url = format!("{base_url}/bb0101/Build/{source_file}");
         let file_path = build_dir.join(target_file);
 
         // Skip if file already exists

@@ -39,7 +39,7 @@ pub async fn handle_backups(
         Err(e) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to query backups: {}", e),
+                format!("Failed to query backups: {e}"),
             )
                 .into_response();
         }

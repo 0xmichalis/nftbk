@@ -128,11 +128,8 @@ async fn request_backup(
     }
 
     let server = server_address.trim_end_matches('/');
-    println!(
-        "Submitting backup request to server at {}/backup ...",
-        server
-    );
-    let mut req = client.post(format!("{}/backup", server)).json(&backup_req);
+    println!("Submitting backup request to server at {server}/backup ...",);
+    let mut req = client.post(format!("{server}/backup")).json(&backup_req);
     req = req.header("User-Agent", user_agent);
     if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
         req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
@@ -203,7 +200,7 @@ async fn wait_for_done_backup(
                 }
             }
             Err(e) => {
-                println!("Error polling status: {}", e);
+                println!("Error polling status: {e}");
             }
         }
         tokio::time::sleep(std::time::Duration::from_secs(10)).await;

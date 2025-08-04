@@ -29,7 +29,7 @@ pub async fn verify_privy_jwt(
     // Check audience
     if payload
         .audience()
-        .map(|aud| !aud.iter().any(|a| *a == app_id))
+        .map(|aud| !aud.contains(&app_id))
         .unwrap_or(true)
     {
         return Err("Invalid audience".to_string());

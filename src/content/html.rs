@@ -27,7 +27,7 @@ fn add_resource(
         return;
     }
     let mut absolute_url = if resource_url.starts_with("//") {
-        format!("https:{}", resource_url)
+        format!("https:{resource_url}")
     } else {
         let base = Url::parse(base_url).ok();
         match base.and_then(|b| b.join(resource_url).ok()) {

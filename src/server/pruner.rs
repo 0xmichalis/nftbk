@@ -16,7 +16,7 @@ async fn prune_backups(db: &Db, base_dir: &str, expired: &[ExpiredBackup]) {
     {
         let (archive_path, archive_checksum_path) =
             get_zipped_backup_paths(base_dir, task_id, archive_format);
-        let backup_dir = format!("{}/nftbk-{}", base_dir, task_id);
+        let backup_dir = format!("{base_dir}/nftbk-{task_id}");
         let _ = remove_file(&archive_path);
         let _ = remove_file(&archive_checksum_path);
         let _ = remove_dir_all(&backup_dir);

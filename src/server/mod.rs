@@ -188,7 +188,7 @@ pub async fn recover_incomplete_jobs(
                     .db
                     .set_backup_error(
                         &job_meta.task_id,
-                        &format!("Failed to parse tokens during recovery: {}", e),
+                        &format!("Failed to parse tokens during recovery: {e}"),
                     )
                     .await;
                 continue;
@@ -218,7 +218,7 @@ pub async fn recover_incomplete_jobs(
                 .db
                 .set_backup_error(
                     &job_meta.task_id,
-                    &format!("Failed to enqueue during recovery: {}", e),
+                    &format!("Failed to enqueue during recovery: {e}"),
                 )
                 .await;
         } else {

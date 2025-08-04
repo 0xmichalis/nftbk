@@ -141,7 +141,7 @@ async fn auth_middleware(
             .headers()
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
-        let expected = format!("Bearer {}", token);
+        let expected = format!("Bearer {token}");
         if let Some(auth_header) = auth_header {
             if auth_header
                 .as_bytes()

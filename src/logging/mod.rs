@@ -66,20 +66,7 @@ where
 
         // Print log level
         let level = *event.metadata().level();
-        if writer.has_ansi_escapes() {
-            fn color_level(level: &tracing::Level) -> &'static str {
-                match *level {
-                    tracing::Level::ERROR => "\x1b[31mERROR\x1b[0m", // Red
-                    tracing::Level::WARN => "\x1b[33mWARN\x1b[0m",   // Yellow
-                    tracing::Level::INFO => "\x1b[32mINFO\x1b[0m",   // Green
-                    tracing::Level::DEBUG => "\x1b[34mDEBUG\x1b[0m", // Blue
-                    tracing::Level::TRACE => "\x1b[35mTRACE\x1b[0m", // Magenta
-                }
-            }
-            write!(writer, "{:>5} ", color_level(&level))?;
-        } else {
-            write!(writer, "{:>5} ", level)?;
-        }
+        write!(writer, "{level:>5} ")?;
 
         // Print the log message
         _ctx.format_fields(writer.by_ref(), event)?;
@@ -97,7 +84,7 @@ where
                     continue;
                 }
                 if !writer.has_ansi_escapes() {
-                    write!(writer, " {}", fields)?;
+                    write!(writer, " {fields}")?;
                 } else {
                     let colored: String = fields
                         .split_whitespace()
@@ -106,17 +93,14 @@ where
                             if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
                                 let clean_key = ansi_regex.replace_all(key, "");
                                 let clean_value = ansi_regex.replace_all(value, "");
-                                format!(
-                                    "\x1b[36m{}\x1b[0m=\x1b[93m{}\x1b[0m",
-                                    clean_key, clean_value
-                                )
+                                format!("\x1b[36m{clean_key}\x1b[0m=\x1b[93m{clean_value}\x1b[0m",)
                             } else {
                                 pair.to_string()
                             }
                         })
                         .collect::<Vec<_>>()
                         .join(" ");
-                    write!(writer, " {}", colored)?;
+                    write!(writer, " {colored}")?;
                 }
             }
         }

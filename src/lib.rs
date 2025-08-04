@@ -40,11 +40,10 @@ impl ChainConfig {
                 let var_name = &caps[1];
                 let env_val = std::env::var(var_name).with_context(|| {
                     format!(
-                        "Environment variable '{}' referenced in '{}' for chain '{}' is not set",
-                        var_name, value, key
+                        "Environment variable '{var_name}' referenced in '{value}' for chain '{key}' is not set",
                     )
                 })?;
-                resolved = resolved.replace(&format!("${{{}}}", var_name), &env_val);
+                resolved = resolved.replace(&format!("${{{var_name}}}"), &env_val);
             }
             *value = resolved;
         }
@@ -106,7 +105,7 @@ pub mod backup {
                 );
                 let rpc_url = chain_config
                     .get(chain_name)
-                    .context(format!("No RPC URL configured for chain {}", chain_name))?;
+                    .context(format!("No RPC URL configured for chain {chain_name}"))?;
                 let contracts = ContractWithToken::parse_contracts(contracts);
                 nft_count += contracts.len();
 

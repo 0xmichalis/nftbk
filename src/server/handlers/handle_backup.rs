@@ -210,7 +210,7 @@ async fn run_backup_job_inner(
             error!("Backup {task_id} failed: {}", e);
             let _ = state
                 .db
-                .set_backup_error(&task_id, &format!("Backup failed: {}", e))
+                .set_backup_error(&task_id, &format!("Backup failed: {e}"))
                 .await;
             return;
         }
@@ -271,7 +271,7 @@ async fn run_backup_job_inner(
                 error!("Failed to write checksum file: {}", e);
                 let _ = state
                     .db
-                    .set_backup_error(&task_id, &format!("Failed to write checksum file: {}", e))
+                    .set_backup_error(&task_id, &format!("Failed to write checksum file: {e}"))
                     .await;
                 return;
             }
@@ -283,7 +283,7 @@ async fn run_backup_job_inner(
         Err(e) => {
             let _ = state
                 .db
-                .set_backup_error(&task_id, &format!("Failed to zip backup: {}", e))
+                .set_backup_error(&task_id, &format!("Failed to zip backup: {e}"))
                 .await;
             return;
         }
@@ -325,7 +325,7 @@ pub async fn run_backup_job(
         );
         let _ = state_clone
             .db
-            .set_backup_error(&task_id_clone, &format!("Panic: {}", panic_msg))
+            .set_backup_error(&task_id_clone, &format!("Panic: {panic_msg}"))
             .await;
     }
 }

@@ -132,9 +132,7 @@ pub async fn stream_http_to_file(
     response: reqwest::Response,
     file_path: &Path,
 ) -> anyhow::Result<PathBuf> {
-    let stream = response
-        .bytes_stream()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+    let stream = response.bytes_stream().map_err(std::io::Error::other);
     let mut reader = StreamReader::new(stream);
 
     // Detect extension and append to file path if needed
@@ -144,7 +142,7 @@ pub async fn stream_http_to_file(
         if let Some(detected_ext) = detected_ext {
             let current_path_str = file_path.to_string_lossy();
             debug!("Appending detected media extension: {}", detected_ext);
-            file_path = PathBuf::from(format!("{}.{}", current_path_str, detected_ext));
+            file_path = PathBuf::from(format!("{current_path_str}.{detected_ext}"));
         }
     }
 
@@ -162,9 +160,7 @@ pub async fn stream_gzip_http_to_file(
     file_path: &Path,
 ) -> anyhow::Result<PathBuf> {
     let mut file = tokio::fs::File::create(file_path).await?;
-    let stream = response
-        .bytes_stream()
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e));
+    let stream = response.bytes_stream().map_err(std::io::Error::other);
     let reader = StreamReader::new(stream);
     let mut decoder = GzipDecoder::new(BufReader::new(reader));
     stream_reader_to_file(&mut decoder, &mut file, file_path).await
@@ -212,7 +208,7 @@ fn should_retry(result: &Result<reqwest::Response, reqwest::Error>) -> bool {
     match result {
         Ok(resp) => resp.status().is_server_error() || resp.status().as_u16() == 429,
         Err(err) => {
-            let err_str = format!("{}", err);
+            let err_str = format!("{err}");
             RETRIABLE_ERRORS
                 .iter()
                 .any(|substr| err_str.contains(substr))
@@ -422,7 +418,7 @@ pub async fn fetch_and_save_content(
             if let Some(detected_ext) = extensions::detect_media_extension(&content) {
                 let current_path_str = file_path.to_string_lossy();
                 debug!("Appending detected media extension: {}", detected_ext);
-                file_path = PathBuf::from(format!("{}.{}", current_path_str, detected_ext));
+                file_path = PathBuf::from(format!("{current_path_str}.{detected_ext}"));
             }
         }
 

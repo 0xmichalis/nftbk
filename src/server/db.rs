@@ -63,7 +63,7 @@ impl Db {
             INSERT INTO backup_metadata (
                 task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, expires_at
             ) VALUES (
-                $1, NOW(), NOW(), $2, $3, $4, $5, {}
+                $1, NOW(), NOW(), $2, $3, $4, $5, {expires_at_sql}
             )
             ON CONFLICT (task_id) DO UPDATE SET
                 updated_at = NOW(),
@@ -71,10 +71,9 @@ impl Db {
                 archive_format = EXCLUDED.archive_format,
                 nft_count = EXCLUDED.nft_count,
                 tokens = EXCLUDED.tokens,
-                expires_at = {},
+                expires_at = {expires_at_sql},
                 error_log = EXCLUDED.error_log
             "#,
-            expires_at_sql, expires_at_sql
         );
         if let Some(days) = expires_at_arg {
             sqlx::query(&query)
@@ -250,11 +249,10 @@ impl Db {
 
         let query = format!(
             r#"
-            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, {} status, expires_at, error_log, fatal_error
+            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, {tokens_field} status, expires_at, error_log, fatal_error
             FROM backup_metadata WHERE requestor = $1
             ORDER BY created_at DESC
             "#,
-            tokens_field
         );
 
         let rows = sqlx::query(&query)

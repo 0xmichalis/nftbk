@@ -89,14 +89,14 @@ pub async fn handle_backup_delete(
                 // not found is fine
             } else {
                 warn!("Failed to delete backup dir {}: {}", backup_dir, e);
-                errors.push(format!("Failed to delete backup dir {}: {}", backup_dir, e));
+                errors.push(format!("Failed to delete backup dir {backup_dir}: {e}"));
             }
         }
     }
 
     // Delete metadata from DB
     if let Err(e) = state.db.delete_backup_metadata(&task_id).await {
-        errors.push(format!("Failed to delete metadata from DB: {}", e));
+        errors.push(format!("Failed to delete metadata from DB: {e}"));
     } else {
         deleted_anything = true;
     }

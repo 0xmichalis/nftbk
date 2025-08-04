@@ -26,7 +26,7 @@ pub fn compute_array_sha256(tokens: &[Tokens]) -> String {
 pub async fn compute_file_sha256(path: &Path) -> anyhow::Result<String> {
     let contents = read(path).await?;
     let hash = Sha256::digest(&contents);
-    Ok(format!("{:x}", hash))
+    Ok(format!("{hash:x}"))
 }
 
 #[cfg(test)]
