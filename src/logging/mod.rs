@@ -66,7 +66,18 @@ where
 
         // Print log level
         let level = *event.metadata().level();
-        write!(writer, "{level:>5} ")?;
+        if writer.has_ansi_escapes() {
+            let color = match level {
+                Level::ERROR => "\x1b[31m", // Red
+                Level::WARN => "\x1b[33m",  // Yellow
+                Level::INFO => "\x1b[32m",  // Green
+                Level::DEBUG => "\x1b[36m", // Cyan
+                _ => "\x1b[0m",             // Default
+            };
+            write!(writer, "{color}{level:>5}\x1b[0m ")?;
+        } else {
+            write!(writer, "{level:>5} ")?;
+        }
 
         // Print the log message
         _ctx.format_fields(writer.by_ref(), event)?;
