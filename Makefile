@@ -13,14 +13,14 @@ clippy:
 
 .PHONY: sort
 sort:
-	@if ! command -v cargo-sort >/dev/null 2>&1; then \
+	@if ! cargo-sort --version >/dev/null 2>&1; then \
 		cargo install cargo-sort; \
 	fi
 	cargo sort
 
 .PHONY: sqlxprepare
 sqlxprepare:
-	@if ! command -v cargo sqlx >/dev/null 2>&1; then \
+	@if ! cargo sqlx --version >/dev/null 2>&1; then \
 		cargo install sqlx-cli; \
 	fi
 	cargo sqlx prepare
@@ -73,7 +73,7 @@ nuke-db: stop-db
 
 .PHONY: migrate-db
 migrate-db:
-	@if ! command -v cargo sqlx >/dev/null 2>&1; then \
+	@if ! cargo sqlx --version >/dev/null 2>&1; then \
 		cargo install sqlx-cli; \
 	fi
 	sqlx migrate run
