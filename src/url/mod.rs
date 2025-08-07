@@ -122,13 +122,10 @@ pub fn get_last_path_segment(url: &str, fallback: &str) -> String {
         .unwrap_or_else(|| fallback.to_string())
 }
 
-/// List of fallback IPFS gateways to try, in order.
 pub const IPFS_GATEWAYS: &[&str] = &[
     "https://ipfs.io",
-    "https://cloudflare-ipfs.com",
     "https://gateway.pinata.cloud",
     "https://nftstorage.link",
-    "https://cf-ipfs.com",
 ];
 
 #[cfg(test)]
@@ -372,19 +369,12 @@ mod tests {
         // Test IPFS gateway URLs (any URL with /ipfs/ path)
         assert!(is_ipfs_gateway_url("https://ipfs.io/ipfs/QmHash"));
         assert!(is_ipfs_gateway_url(
-            "https://cloudflare-ipfs.com/ipfs/QmHash"
-        ));
-        assert!(is_ipfs_gateway_url(
             "https://gateway.pinata.cloud/ipfs/QmHash"
         ));
         assert!(is_ipfs_gateway_url("https://nftstorage.link/ipfs/QmHash"));
-        assert!(is_ipfs_gateway_url("https://cf-ipfs.com/ipfs/QmHash"));
 
         // Test case insensitivity
         assert!(is_ipfs_gateway_url("https://IPFS.IO/ipfs/QmHash"));
-        assert!(is_ipfs_gateway_url(
-            "https://Cloudflare-IPFS.com/ipfs/QmHash"
-        ));
 
         // Test other IPFS gateways (not in our predefined list)
         assert!(is_ipfs_gateway_url(
@@ -413,9 +403,6 @@ mod tests {
             // Check that our predefined gateways are included
             let gateway_strings: Vec<&str> = gateway_urls.iter().map(|s| s.as_str()).collect();
             assert!(gateway_strings.iter().any(|url| url.contains("ipfs.io")));
-            assert!(gateway_strings
-                .iter()
-                .any(|url| url.contains("cloudflare-ipfs.com")));
             assert!(gateway_strings
                 .iter()
                 .any(|url| url.contains("gateway.pinata.cloud")));

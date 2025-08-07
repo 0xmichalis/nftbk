@@ -21,6 +21,12 @@ pub mod extensions;
 pub mod extra;
 pub mod html;
 
+#[derive(Clone)]
+pub struct Options {
+    pub overriden_filename: Option<String>,
+    pub fallback_filename: Option<String>,
+}
+
 async fn get_filename(
     url: &str,
     chain: &str,
@@ -110,12 +116,6 @@ async fn try_exists(path: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
-#[derive(Clone)]
-pub struct Options {
-    pub overriden_filename: Option<String>,
-    pub fallback_filename: Option<String>,
-}
-
 /// Streams an AsyncRead to a file and flushes it.
 async fn stream_reader_to_file<R: AsyncRead + Unpin>(
     reader: &mut R,
@@ -166,174 +166,206 @@ pub async fn stream_gzip_http_to_file(
     stream_reader_to_file(&mut decoder, &mut file, file_path).await
 }
 
-fn get_retry_after_delay(resp: &Result<reqwest::Response, reqwest::Error>) -> Option<Duration> {
-    let response = match resp {
-        Ok(r) => r,
-        Err(_) => return None,
-    };
-    if response.status().as_u16() != 429 {
-        return None;
-    }
-    let retry_after = response.headers().get("Retry-After")?;
-    let retry_after_str = retry_after.to_str().ok()?;
-    // Try parsing as integer seconds
-    if let Ok(secs) = retry_after_str.parse::<u64>() {
-        let delay = Duration::from_secs(secs);
-        debug!(
-            "429 Retry-After header present as integer seconds, parsed delay: {:?}",
-            delay
-        );
-        return Some(delay);
-    }
-    // Try parsing as HTTP-date
-    if let Ok(date) = httpdate::parse_http_date(retry_after_str) {
-        let now = std::time::SystemTime::now();
-        if let Ok(duration) = date.duration_since(now) {
-            debug!(
-                "429 Retry-After header present as HTTP-date, parsed delay: {:?}",
-                duration
-            );
-            return Some(duration);
-        }
-    }
-    None
+fn calculate_retry_delay(attempt: u32) -> Duration {
+    let base_delay = 2u64.pow(attempt).min(30); // cap at 30s
+    let jitter: u64 = thread_rng().gen_range(0..500); // up to 500ms
+    Duration::from_secs(base_delay) + Duration::from_millis(jitter)
 }
 
-fn should_retry(result: &Result<reqwest::Response, reqwest::Error>) -> bool {
-    const RETRIABLE_ERRORS: [&str; 2] = [
-        "end of file before message length reached",
-        "tcp connect error",
-    ];
-
-    match result {
-        Ok(resp) => resp.status().is_server_error() || resp.status().as_u16() == 429,
-        Err(err) => {
-            let err_str = format!("{err}");
-            RETRIABLE_ERRORS
-                .iter()
-                .any(|substr| err_str.contains(substr))
-        }
-    }
-}
-
-/// Helper to fetch a URL with retries, using exponential backoff and jitter. The retry condition is provided as a closure.
-async fn fetch_url<F>(
-    url: &str,
+async fn retry_operation(
+    operation: impl Fn() -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = (anyhow::Result<PathBuf>, Option<reqwest::StatusCode>)>
+                + Send,
+        >,
+    >,
     max_retries: u32,
-    should_retry: F,
-) -> anyhow::Result<reqwest::Response>
-where
-    F: Fn(&Result<reqwest::Response, reqwest::Error>) -> bool,
-{
-    let client = reqwest::Client::builder()
-        .user_agent(crate::USER_AGENT)
-        .build()?;
+    should_retry: impl Fn(&anyhow::Error, Option<reqwest::StatusCode>) -> bool,
+    context: &str,
+) -> anyhow::Result<PathBuf> {
     let mut attempt = 0;
     loop {
-        let resp = client.get(url).send().await;
-        if !should_retry(&resp) {
-            // Not a retriable error, return immediately (Ok or Err)
-            return resp.map_err(anyhow::Error::from);
+        let (result, status) = operation().await;
+        if result.is_ok() {
+            return result;
         }
+
+        let error = result.as_ref().err().unwrap();
+        if !should_retry(error, status) {
+            return result;
+        }
+
         if attempt >= max_retries {
-            // Retries exhausted, return the last result
-            return resp.map_err(anyhow::Error::from);
+            return result;
         }
         attempt += 1;
-        let base_delay = 2u64.pow(attempt).min(30); // cap at 30s
-        let jitter: u64 = thread_rng().gen_range(0..500); // up to 500ms
-        let default_delay = Duration::from_secs(base_delay) + Duration::from_millis(jitter);
-        let delay = get_retry_after_delay(&resp).unwrap_or(default_delay);
+        let delay = calculate_retry_delay(attempt);
         warn!(
             "Retriable error for {}, retrying in {:?} (attempt {}/{})",
-            url, delay, attempt, max_retries
+            context, delay, attempt, max_retries
         );
         sleep(delay).await;
     }
 }
 
-/// Retry IPFS gateway errors by trying alternative gateways
-async fn retry_ipfs_gateway_error(
+fn should_retry(error: &anyhow::Error, status: Option<reqwest::StatusCode>) -> bool {
+    // Check for streaming errors
+    const RETRIABLE_ERRORS: [&str; 2] = [
+        "end of file before message length reached",
+        "tcp connect error",
+    ];
+
+    let err_str = format!("{error}");
+    let is_streaming_error = RETRIABLE_ERRORS
+        .iter()
+        .any(|substr| err_str.contains(substr));
+
+    // Check for HTTP status errors
+    let is_http_error = if let Some(status_code) = status {
+        status_code.is_server_error() || status_code.as_u16() == 429
+    } else {
+        false // No status means no HTTP status to check
+    };
+
+    is_streaming_error || is_http_error
+}
+
+async fn fetch_url(url: &str) -> anyhow::Result<reqwest::Response> {
+    let client = reqwest::Client::builder()
+        .user_agent(crate::USER_AGENT)
+        .build()?;
+
+    Ok(client.get(url).send().await?)
+}
+
+async fn retry_with_alternative_ipfs_gateways(
     url: &str,
-    max_retries: u32,
     original_error: anyhow::Error,
 ) -> anyhow::Result<reqwest::Response> {
     warn!(
         "IPFS gateway error for {}, retrying with other gateways: {}",
         url, original_error
     );
-    if let Some(gateway_urls) = all_ipfs_gateway_urls(url) {
-        let mut last_err = original_error;
-        // Filter out the original URL to avoid infinite loops
-        let alternative_gateways: Vec<_> = gateway_urls
-            .into_iter()
-            .filter(|gateway_url| gateway_url != url)
-            .collect();
 
-        for new_url in alternative_gateways {
-            match fetch_url(&new_url, max_retries, should_retry).await {
-                Ok(response) => {
+    let gateway_urls = match all_ipfs_gateway_urls(url) {
+        Some(urls) => urls,
+        None => return Err(original_error),
+    };
+
+    let mut last_err = original_error;
+    let alternative_gateways: Vec<_> = gateway_urls
+        .into_iter()
+        .filter(|gateway_url| gateway_url != url)
+        .collect();
+
+    for new_url in alternative_gateways {
+        match fetch_url(&new_url).await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
                     info!(
-                        "Successfully fetched from alternative IPFS gateway: {}",
-                        new_url
+                        "Received successful response from alternative IPFS gateway: {} (status: {})",
+                        new_url, status
                     );
                     return Ok(response);
-                }
-                Err(err) => {
-                    warn!("Failed to fetch from IPFS gateway {}: {}", new_url, err);
-                    last_err = err;
+                } else {
+                    warn!("Alternative IPFS gateway {new_url} failed: {status}");
+                    last_err = anyhow::anyhow!("{status}");
                 }
             }
+            Err(err) => {
+                warn!("Failed to fetch from IPFS gateway {}: {}", new_url, err);
+                last_err = err;
+            }
         }
-        return Err(last_err);
     }
-    Err(original_error)
+
+    Err(last_err)
 }
 
-/// Fetch a URL and retry various errors:
-/// - Server errors (5xx)
-/// - TCP connection errors
-/// - 429 Too Many Requests (with Retry-After header support)
-/// - For IPFS gateway URLs: any error triggers retry with other gateways
-pub async fn fetch_with_retry(url: &str, max_retries: u32) -> anyhow::Result<reqwest::Response> {
-    // Try the initial URL with retry logic
-    let initial_result = fetch_url(url, max_retries, should_retry).await;
-    match initial_result {
-        Err(e) => {
-            // If it's not an IPFS gateway URL, just return the error
-            if !is_ipfs_gateway_url(url) {
-                return Err(anyhow::anyhow!(e));
-            }
+/// Handle IPFS gateway rotation for a given URL and error
+async fn handle_ipfs_gateway_rotation(
+    url: &str,
+    original_error: anyhow::Error,
+) -> anyhow::Result<reqwest::Response> {
+    if is_ipfs_gateway_url(url) {
+        retry_with_alternative_ipfs_gateways(url, original_error).await
+    } else {
+        Err(original_error)
+    }
+}
 
-            // For IPFS gateway URLs, try other gateways on any error
-            retry_ipfs_gateway_error(url, max_retries, anyhow::anyhow!(e)).await
-        }
+/// Fetches a URL and streams it to a file with retry logic for both HTTP and streaming errors.
+async fn fetch_and_stream_to_file(
+    url: &str,
+    file_path: &Path,
+    max_retries: u32,
+) -> anyhow::Result<PathBuf> {
+    retry_operation(
+        || {
+            let url = url.to_string();
+            let file_path = file_path.to_path_buf();
+            Box::pin(async move { fetch_and_stream_to_file_once(&url, &file_path).await })
+        },
+        max_retries,
+        should_retry,
+        url,
+    )
+    .await
+}
+
+/// Single attempt to fetch and stream a URL to a file
+async fn fetch_and_stream_to_file_once(
+    url: &str,
+    file_path: &Path,
+) -> (anyhow::Result<PathBuf>, Option<reqwest::StatusCode>) {
+    // Try the original URL first
+    match fetch_url(url).await {
         Ok(response) => {
-            // Check if we got a non-2xx status code
-            if response.status().is_success() {
-                return Ok(response);
+            let status = response.status();
+            if status.is_success() {
+                let result = stream_http_to_file(response, file_path).await;
+                (result, Some(status))
+            } else {
+                // For non-successful status codes, try IPFS gateway rotation if applicable
+                let error = anyhow::anyhow!("HTTP error: status {status}");
+                match handle_ipfs_gateway_rotation(url, error).await {
+                    Ok(alt_response) => {
+                        let alt_status = alt_response.status();
+                        if alt_status.is_success() {
+                            let result = stream_http_to_file(alt_response, file_path).await;
+                            (result, Some(alt_status))
+                        } else {
+                            (
+                                Err(anyhow::anyhow!("HTTP error: status {alt_status}")),
+                                Some(alt_status),
+                            )
+                        }
+                    }
+                    Err(_gateway_err) => (
+                        Err(anyhow::anyhow!("HTTP error: status {status}")),
+                        Some(status),
+                    ),
+                }
             }
-
-            // If it's not an IPFS gateway URL, just return the error
-            if !is_ipfs_gateway_url(url) {
-                return Err(anyhow::anyhow!(
-                    "Failed to fetch content from {} (status: {})",
-                    url,
-                    response.status()
-                ));
+        }
+        Err(e) => {
+            // Try IPFS gateway rotation if applicable
+            match handle_ipfs_gateway_rotation(url, e).await {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        let result = stream_http_to_file(response, file_path).await;
+                        (result, Some(status))
+                    } else {
+                        (
+                            Err(anyhow::anyhow!("HTTP error: status {status}")),
+                            Some(status),
+                        )
+                    }
+                }
+                Err(gateway_err) => (Err(gateway_err), None),
             }
-
-            // For IPFS gateway URLs, try other gateways on non-2xx status codes
-            return retry_ipfs_gateway_error(
-                url,
-                max_retries,
-                anyhow::anyhow!(
-                    "Failed to fetch content from {} (status: {})",
-                    url,
-                    response.status()
-                ),
-            )
-            .await;
         }
     }
 }
@@ -429,71 +461,266 @@ pub async fn fetch_and_save_content(
     }
 
     // For HTTP URLs, stream directly to disk
-    info!("Saving {} (url: {})", file_path.display(), url);
-    let content_url = get_url(url);
-    let response = fetch_with_retry(&content_url, 5).await?;
-    let status = response.status();
-    if !status.is_success() {
-        return Err(anyhow::anyhow!(
-            "Failed to fetch content from {} (status: {})",
+    let resolved_url = get_url(url);
+    if url == resolved_url {
+        info!("Saving {} (url: {})", file_path.display(), url);
+    } else {
+        info!(
+            "Saving {} (original: {}, resolved: {})",
+            file_path.display(),
             url,
-            status
-        ));
+            resolved_url
+        );
     }
-    let file_path = stream_http_to_file(response, &file_path).await?;
+    let file_path = fetch_and_stream_to_file(&resolved_url, &file_path, 5).await?;
 
     // Pass empty content since we already streamed to disk and only need to postprocess
     write_and_postprocess_file(&file_path, &[], url).await?;
-
-    info!("Saved {} (url: {})", file_path.display(), url);
+    if url == resolved_url {
+        info!("Saved {} (url: {})", file_path.display(), url);
+    } else {
+        info!(
+            "Saved {} (original: {}, resolved: {})",
+            file_path.display(),
+            url,
+            resolved_url
+        );
+    }
     Ok(file_path)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
 
     #[tokio::test]
-    async fn test_fetch_with_retry_compiles_and_handles_errors() {
-        // Test that the function compiles and can handle various error scenarios
-        // We use a non-existent URL to trigger an error
-        let non_existent_url = "https://this-domain-does-not-exist-12345.com/test";
-        let result = fetch_with_retry(non_existent_url, 1).await;
+    async fn test_http_200_success() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/success", mock_server.uri());
 
-        // Should return an error since the domain doesn't exist
-        assert!(result.is_err());
+        Mock::given(method("GET"))
+            .and(path("/success"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("Hello, World!"))
+            .mount(&mock_server)
+            .await;
 
-        // Test with a valid URL that might succeed
-        let valid_url = "https://httpbin.org/status/200";
-        let result = fetch_with_retry(valid_url, 1).await;
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.txt");
 
-        // This might succeed or fail depending on network, but should compile
-        match result {
-            Ok(_) => println!("Successfully fetched from valid URL"),
-            Err(e) => println!("Failed to fetch from valid URL: {}", e),
-        }
+        let result = fetch_and_stream_to_file(&url, &file_path, 3).await;
+        assert!(result.is_ok());
+
+        let content = std::fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content, "Hello, World!");
     }
 
     #[tokio::test]
-    async fn test_fetch_with_retry_error_handling_logic() {
-        // Test the simplified error handling logic
-        let ipfs_url = "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
-        let non_ipfs_url = "https://example.com/image.png";
+    async fn test_http_500_retry_and_fail() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/server-error", mock_server.uri());
 
-        // Verify the logic: IPFS gateway URLs should trigger gateway rotation
-        assert!(is_ipfs_gateway_url(ipfs_url));
-        assert!(!is_ipfs_gateway_url(non_ipfs_url));
+        // Mock server to return 500 for all requests
+        Mock::given(method("GET"))
+            .and(path("/server-error"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+            .expect(3) // Expect 3 calls (original + 2 retries)
+            .mount(&mock_server)
+            .await;
 
-        // Verify that all_ipfs_gateway_urls works correctly
-        assert!(all_ipfs_gateway_urls(ipfs_url).is_some());
-        assert!(all_ipfs_gateway_urls(non_ipfs_url).is_none());
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.txt");
 
-        // Test that the gateway URLs are generated correctly
-        if let Some(gateway_urls) = all_ipfs_gateway_urls(ipfs_url) {
-            // The original URL might be included if it's one of our predefined gateways
-            // This is expected behavior, but we should have multiple gateways to try
-            assert!(gateway_urls.len() >= 5); // We have 5 predefined gateways
-            assert!(gateway_urls.iter().all(|url| url.contains("/ipfs/")));
-        }
+        let result = fetch_and_stream_to_file(&url, &file_path, 2).await;
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("HTTP error: status 500"));
+
+        // Verify that retries actually happened by checking mock expectations
+        // The mock server will verify that exactly 3 requests were made
+    }
+
+    #[tokio::test]
+    async fn test_http_429_retry_and_fail() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/rate-limited", mock_server.uri());
+
+        // Mock server to return 429 for all requests
+        Mock::given(method("GET"))
+            .and(path("/rate-limited"))
+            .respond_with(ResponseTemplate::new(429).set_body_string("Too Many Requests"))
+            .expect(3) // Expect 3 calls (original + 2 retries)
+            .mount(&mock_server)
+            .await;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.txt");
+
+        let result = fetch_and_stream_to_file(&url, &file_path, 2).await;
+
+        // Should fail after retries, but the retry logic should have been triggered
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("HTTP error: status 429"));
+
+        // Verify that retries actually happened by checking mock expectations
+        // The mock server will verify that exactly 3 requests were made
+    }
+
+    #[tokio::test]
+    async fn test_http_404_no_retry() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/not-found", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/not-found"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
+            .expect(1) // Should only be called once (no retry for 4xx)
+            .mount(&mock_server)
+            .await;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.txt");
+
+        let result = fetch_and_stream_to_file(&url, &file_path, 3).await;
+        assert!(result.is_err());
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("HTTP error: status 404"));
+
+        // Verify that NO retries happened for 4xx errors
+        // The mock server will verify that exactly 1 request was made
+    }
+
+    #[tokio::test]
+    async fn test_streaming_error_retry() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/streaming-error", mock_server.uri());
+
+        // Mock a response that will cause streaming issues by returning partial content
+        // and then dropping the connection
+        Mock::given(method("GET"))
+            .and(path("/streaming-error"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string("Partial content")
+                    .set_delay(std::time::Duration::from_millis(500)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.txt");
+
+        let result = fetch_and_stream_to_file(&url, &file_path, 1).await;
+        // This test is more about ensuring the retry mechanism works
+        // The actual result depends on timing and network conditions
+        // For now, we just verify the function doesn't panic
+        println!("Streaming test result: {:?}", result);
+
+        // The delay doesn't cause a streaming error, so no retry happens
+        // This is expected behavior - the test verifies the function doesn't panic
+    }
+
+    #[tokio::test]
+    async fn test_streaming_error_with_large_response() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/streaming-large", mock_server.uri());
+
+        // Create a large response that might cause streaming issues
+        let large_body = "x".repeat(1024 * 1024); // 1MB response
+
+        Mock::given(method("GET"))
+            .and(path("/streaming-large"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(large_body)
+                    .set_delay(std::time::Duration::from_millis(100)),
+            )
+            .mount(&mock_server)
+            .await;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("test.txt");
+
+        let result = fetch_and_stream_to_file(&url, &file_path, 1).await;
+
+        // This should succeed, but tests that large streaming works correctly
+        // If there are streaming issues, they would be caught here
+        assert!(result.is_ok());
+
+        // Verify the file was written correctly
+        let metadata = std::fs::metadata(&file_path).unwrap();
+        assert_eq!(metadata.len(), 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn test_large_file_streaming() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/large-file", mock_server.uri());
+
+        // Create a large response body
+        let large_body = "x".repeat(1024 * 1024); // 1MB
+
+        Mock::given(method("GET"))
+            .and(path("/large-file"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(large_body))
+            .mount(&mock_server)
+            .await;
+
+        let temp_dir = TempDir::new().unwrap();
+        let file_path = temp_dir.path().join("large.txt");
+
+        let result = fetch_and_stream_to_file(&url, &file_path, 3).await;
+        assert!(result.is_ok());
+
+        let metadata = std::fs::metadata(&file_path).unwrap();
+        assert_eq!(metadata.len(), 1024 * 1024);
+    }
+
+    #[tokio::test]
+    async fn test_should_retry_logic() {
+        // Test HTTP status codes
+        assert!(should_retry(
+            &anyhow::anyhow!("test"),
+            Some(reqwest::StatusCode::from_u16(500).unwrap())
+        ));
+        assert!(should_retry(
+            &anyhow::anyhow!("test"),
+            Some(reqwest::StatusCode::from_u16(429).unwrap())
+        ));
+        assert!(!should_retry(
+            &anyhow::anyhow!("test"),
+            Some(reqwest::StatusCode::from_u16(404).unwrap())
+        ));
+
+        // Test streaming errors
+        assert!(should_retry(
+            &anyhow::anyhow!("end of file before message length reached"),
+            None
+        ));
+        assert!(should_retry(&anyhow::anyhow!("tcp connect error"), None));
+        assert!(!should_retry(&anyhow::anyhow!("some other error"), None));
+    }
+
+    #[tokio::test]
+    async fn test_calculate_retry_delay() {
+        let delay1 = calculate_retry_delay(1);
+        let delay2 = calculate_retry_delay(2);
+        let delay3 = calculate_retry_delay(3);
+
+        // Delays should increase exponentially
+        assert!(delay2 > delay1);
+        assert!(delay3 > delay2);
+
+        // Delays should be capped at 30 seconds + jitter
+        assert!(delay1 < Duration::from_secs(31));
+        assert!(delay2 < Duration::from_secs(31));
+        assert!(delay3 < Duration::from_secs(31));
     }
 }

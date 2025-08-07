@@ -19,6 +19,7 @@ The best way to ensure that is to run `make all`.
 - Do not rename variables or refactor unnecessarily unless explicitly instructed.
 - Do not make formatting changes unless specifically asked.
 - When removing code, delete it entirely — do not just comment it out.
+- Never allow dead code
 
 ### Structure
 
