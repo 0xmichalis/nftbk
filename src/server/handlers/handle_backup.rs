@@ -60,10 +60,28 @@ pub async fn handle_backup(
                 );
                 return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
             }
-            "error" => {
-                info!("Rerunning task {} because previous backup failed", task_id);
+            "error" | "expired" => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": format!("Backup in status {status} cannot be (re)started from /backup. Use the provided retry URL to re-run this task."),
+                        "retry_url":  format!("/backup/{task_id}/retry"),
+                        "task_id": task_id
+                    })),
+                )
+                    .into_response();
             }
-            _ => {}
+            other => {
+                error!(
+                    "Unknown backup status '{}' for task {} when handling /backup",
+                    other, task_id
+                );
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": "Unknown backup status"})),
+                )
+                    .into_response();
+            }
         }
     }
 

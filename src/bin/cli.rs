@@ -69,6 +69,15 @@ struct Args {
     user_agent: String,
 }
 
+enum BackupStart {
+    Created(BackupResponse),
+    Conflict {
+        task_id: String,
+        retry_url: String,
+        message: String,
+    },
+}
+
 async fn backup_from_server(
     token_config: TokenConfig,
     server_address: String,
@@ -80,7 +89,7 @@ async fn backup_from_server(
     let client = Client::new();
 
     // First, try to create the backup
-    let backup_resp = request_backup(
+    let start = request_backup(
         &token_config,
         &server_address,
         &client,
@@ -89,20 +98,41 @@ async fn backup_from_server(
     )
     .await?;
 
-    let task_id = backup_resp.task_id.clone();
-    println!("Task ID: {task_id}");
-
-    // If force is requested, check if backup is in progress and retry it
-    if force {
-        let status =
-            check_backup_status(&client, &server_address, &task_id, auth_token.as_deref()).await?;
-        if status == "in_progress" {
-            println!("Backup is already in progress, skipping retry...");
-        } else {
-            println!("Backup is not in progress, retrying...");
-            retry_backup(&client, &server_address, &task_id, auth_token.as_deref()).await?;
+    let task_id = match start {
+        BackupStart::Created(resp) => {
+            let task_id = resp.task_id.clone();
+            println!("Task ID: {task_id}");
+            task_id
         }
-    }
+        BackupStart::Conflict {
+            task_id,
+            retry_url,
+            message,
+        } => {
+            println!("Task ID: {task_id}");
+            if force {
+                println!("Server response: {message}");
+                let server = server_address.trim_end_matches('/');
+                println!("Retrying via {server}{retry_url} ...");
+                retry_backup(
+                    &client,
+                    &server_address,
+                    &retry_url,
+                    &task_id,
+                    auth_token.as_deref(),
+                )
+                .await?;
+                task_id
+            } else {
+                anyhow::bail!(
+                    "{}\nRun the CLI with --force true, or POST to {}{}",
+                    message,
+                    server_address.trim_end_matches('/'),
+                    retry_url
+                );
+            }
+        }
+    };
 
     wait_for_done_backup(&client, &server_address, &task_id, auth_token.as_deref()).await?;
 
@@ -123,7 +153,7 @@ async fn request_backup(
     client: &Client,
     auth_token: Option<&str>,
     user_agent: &str,
-) -> Result<BackupResponse> {
+) -> Result<BackupStart> {
     let mut backup_req = BackupRequest { tokens: Vec::new() };
     for (chain, tokens) in &token_config.chains {
         backup_req.tokens.push(Tokens {
@@ -143,45 +173,52 @@ async fn request_backup(
         .send()
         .await
         .context("Failed to send backup request to server")?;
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Server error: {}", text);
+    let status = resp.status();
+    if status.is_success() {
+        let backup_resp: BackupResponse = resp.json().await.context("Invalid server response")?;
+        return Ok(BackupStart::Created(backup_resp));
     }
-    let backup_resp: BackupResponse = resp.json().await.context("Invalid server response")?;
-    Ok(backup_resp)
-}
-
-async fn check_backup_status(
-    client: &Client,
-    server_address: &str,
-    task_id: &str,
-    auth_token: Option<&str>,
-) -> Result<String> {
-    let server = server_address.trim_end_matches('/');
-    let status_url = format!("{server}/backup/{task_id}/status");
-    let mut req = client.get(status_url);
-    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
-        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
+    if status.as_u16() == 409 {
+        let body: serde_json::Value = resp
+            .json()
+            .await
+            .context("Invalid conflict response from server")?;
+        let task_id = body
+            .get("task_id")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .to_string();
+        let retry_url = body
+            .get("retry_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let message = body
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or("Server returned conflict for /backup")
+            .to_string();
+        return Ok(BackupStart::Conflict {
+            task_id,
+            retry_url,
+            message,
+        });
     }
-    let resp = req.send().await.context("Failed to get backup status")?;
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Server error getting status: {}", text);
-    }
-    let status_resp: StatusResponse = resp.json().await.context("Invalid status response")?;
-    Ok(status_resp.status)
+    let text = resp.text().await.unwrap_or_default();
+    anyhow::bail!("Server error: {}", text);
 }
 
 async fn retry_backup(
     client: &Client,
     server_address: &str,
+    retry_url: &str,
     task_id: &str,
     auth_token: Option<&str>,
 ) -> Result<BackupResponse> {
     let server = server_address.trim_end_matches('/');
-    let retry_url = format!("{server}/backup/{task_id}/retry");
-    println!("Retrying backup task {task_id} at {server}/backup/{task_id}/retry ...");
-    let mut req = client.post(retry_url);
+    let full_url = format!("{server}{retry_url}");
+    println!("Retrying backup task {task_id} at {full_url} ...");
+    let mut req = client.post(full_url);
     if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
         req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
     }
@@ -346,7 +383,7 @@ async fn download_backup(
                 }
             }
         }
-        _ => anyhow::bail!("Unknown archive format: {}", archive_format),
+        _ => anyhow::bail!("Unknown archive format: {archive_format}"),
     }
     println!("Backup extracted to {}", output_path.display());
     Ok(())

@@ -244,25 +244,8 @@ async fn run_backup_job_inner(
     info!("Running backup job for task {}", task_id);
 
     // If force is set, clean up the error log if it exists
-    // Otherwise, check if backup already exists on disk
     if force {
         let _ = state.db.clear_backup_errors(&task_id).await;
-    // TODO: we can probably remove this check - it is not expected at this point to have the backup on disk
-    } else if check_backup_on_disk(
-        &state.base_dir,
-        &task_id,
-        state.unsafe_skip_checksum_check,
-        &archive_format,
-    )
-    .await
-    .is_some()
-    {
-        let _ = state
-            .db
-            .update_backup_metadata_status(&task_id, "done")
-            .await;
-        info!("Found existing backup for task {}", task_id);
-        return;
     }
 
     // Prepare backup config
