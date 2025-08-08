@@ -7,8 +7,13 @@ WORKDIR /usr/src/app
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     pkg-config \
-    libssl-dev && \
+    libssl-dev \
+    git && \
     rm -rf /var/lib/apt/lists/*
+
+# Accept git commit as build argument
+ARG GIT_COMMIT
+ENV GIT_COMMIT=${GIT_COMMIT}
 
 # Copy the entire project
 COPY . .
