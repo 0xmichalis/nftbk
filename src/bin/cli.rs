@@ -78,29 +78,31 @@ async fn backup_from_server(
 ) -> Result<()> {
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
     let client = Client::new();
+
+    // First, try to create the backup
     let backup_resp = request_backup(
         &token_config,
         &server_address,
         &client,
-        force,
         auth_token.as_deref(),
         &user_agent,
     )
     .await?;
-    println!("Task ID: {}", backup_resp.task_id);
 
-    wait_for_done_backup(
-        &client,
-        &server_address,
-        &backup_resp.task_id,
-        auth_token.as_deref(),
-    )
-    .await?;
+    let task_id = backup_resp.task_id.clone();
+    println!("Task ID: {task_id}");
+
+    // If force is requested and we got an existing task_id, retry the backup
+    if force {
+        retry_backup(&client, &server_address, &task_id, auth_token.as_deref()).await?;
+    }
+
+    wait_for_done_backup(&client, &server_address, &task_id, auth_token.as_deref()).await?;
 
     return download_backup(
         &client,
         &server_address,
-        &backup_resp.task_id,
+        &task_id,
         output_path.as_ref(),
         auth_token.as_deref(),
         &archive_format_from_user_agent(&user_agent),
@@ -112,14 +114,10 @@ async fn request_backup(
     token_config: &TokenConfig,
     server_address: &str,
     client: &Client,
-    force: bool,
     auth_token: Option<&str>,
     user_agent: &str,
 ) -> Result<BackupResponse> {
-    let mut backup_req = BackupRequest {
-        tokens: Vec::new(),
-        force: Some(force),
-    };
+    let mut backup_req = BackupRequest { tokens: Vec::new() };
     for (chain, tokens) in &token_config.chains {
         backup_req.tokens.push(Tokens {
             chain: chain.clone(),
@@ -143,6 +141,34 @@ async fn request_backup(
         anyhow::bail!("Server error: {}", text);
     }
     let backup_resp: BackupResponse = resp.json().await.context("Invalid server response")?;
+    Ok(backup_resp)
+}
+
+async fn retry_backup(
+    client: &Client,
+    server_address: &str,
+    task_id: &str,
+    auth_token: Option<&str>,
+) -> Result<BackupResponse> {
+    let server = server_address.trim_end_matches('/');
+    let retry_url = format!("{server}/backup/{task_id}/retry");
+    println!("Retrying backup task {task_id} at {server}/backup/{task_id}/retry ...");
+    let mut req = client.post(retry_url);
+    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
+        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
+    }
+    let resp = req
+        .send()
+        .await
+        .context("Failed to send retry request to server")?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Server error during retry: {}", text);
+    }
+    let backup_resp: BackupResponse = resp
+        .json()
+        .await
+        .context("Invalid server response during retry")?;
     Ok(backup_resp)
 }
 

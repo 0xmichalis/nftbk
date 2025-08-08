@@ -198,7 +198,7 @@ pub async fn recover_incomplete_jobs(
         let backup_job = BackupJob {
             task_id: job_meta.task_id.clone(),
             tokens,
-            force: false, // Don't force on recovery, just resume
+            force: true, // Force recovery to ensure backup actually runs
             archive_format: job_meta.archive_format,
             requestor: Some(job_meta.requestor),
         };

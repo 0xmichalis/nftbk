@@ -31,7 +31,6 @@ pub async fn handle_backup(
     }
 
     let task_id = compute_array_sha256(&req.tokens);
-    let force = req.force.unwrap_or(false);
 
     if let Ok(Some(status)) = state.db.get_backup_status(&task_id).await {
         match status.as_str() {
@@ -43,25 +42,17 @@ pub async fn handle_backup(
                 return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
             }
             "done" => {
-                if force {
-                    info!("Force rerunning backup task {}", task_id);
-                } else {
-                    debug!(
-                        "Backup already completed, returning existing task_id {}",
-                        task_id
-                    );
-                    return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
-                }
+                debug!(
+                    "Backup already completed, returning existing task_id {}",
+                    task_id
+                );
+                return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
             }
             "error" => {
                 info!("Rerunning task {} because previous backup failed", task_id);
             }
             _ => {}
         }
-    }
-
-    if force {
-        let _ = state.db.clear_backup_errors(&task_id).await;
     }
 
     // Select archive format based on user-agent
@@ -96,7 +87,7 @@ pub async fn handle_backup(
     let backup_job = BackupJob {
         task_id: task_id.clone(),
         tokens: req.tokens.clone(),
-        force,
+        force: false,
         archive_format: archive_format.clone(),
         requestor: requestor.clone(),
     };
@@ -152,6 +143,7 @@ async fn run_backup_job_inner(
     // Otherwise, check if backup already exists on disk
     if force {
         let _ = state.db.clear_backup_errors(&task_id).await;
+    // TODO: we can probably remove this check - it is not expected at this point to have the backup on disk
     } else if check_backup_on_disk(
         &state.base_dir,
         &task_id,
@@ -169,10 +161,8 @@ async fn run_backup_job_inner(
         return;
     }
 
-    // Use the global shutdown flag from AppState
-    let shutdown_flag = Some(state.shutdown_flag.clone());
-
     // Prepare backup config
+    let shutdown_flag = Some(state.shutdown_flag.clone());
     let mut token_map = std::collections::HashMap::new();
     for entry in tokens.clone() {
         token_map.insert(entry.chain, entry.tokens);
@@ -193,9 +183,9 @@ async fn run_backup_job_inner(
         },
     };
     let span = tracing::info_span!("backup", task_id = %task_id);
-
     let backup_result = backup_from_config(backup_cfg, Some(span)).await;
 
+    // Check backup result
     let (files_written, error_log) = match backup_result {
         Ok((files, errors)) => (files, errors),
         Err(e) => {
@@ -225,8 +215,8 @@ async fn run_backup_job_inner(
             .await;
     }
 
-    // Sync all files and directories to disk before zipping
-    info!("Syncing {} to disk before zipping", out_path.display());
+    // Sync all files and directories to disk before archiving
+    info!("Syncing {} to disk before archiving", out_path.display());
     let files_written_clone = files_written.clone();
     tokio::task::spawn_blocking(move || {
         sync_files(&files_written_clone);
@@ -234,20 +224,19 @@ async fn run_backup_job_inner(
     .await
     .unwrap();
     info!(
-        "Synced {} to disk before zipping ({} files)",
+        "Synced {} to disk before archiving ({} files)",
         out_path.display(),
         files_written.len()
     );
 
-    // Zip the output dir
+    // Archive the output dir
     let (zip_pathbuf, checksum_path) =
         get_zipped_backup_paths(&state.base_dir, &task_id, &archive_format);
-    info!("Zipping backup to {}", zip_pathbuf.display());
+    info!("Archiving backup to {}", zip_pathbuf.display());
     let start_time = Instant::now();
     let out_path_clone = out_path.clone();
     let zip_pathbuf_clone = zip_pathbuf.clone();
     let archive_format_clone = archive_format.clone();
-
     let shutdown_flag_clone = shutdown_flag.clone();
     let zip_result = tokio::task::spawn_blocking(move || {
         zip_backup(
@@ -260,19 +249,18 @@ async fn run_backup_job_inner(
     .await
     .unwrap();
 
+    // Check archive result
     match zip_result {
         Ok(checksum) => {
             info!(
-                "Zipped backup at {} in {:?}s",
+                "Archived backup at {} in {:?}s",
                 zip_pathbuf.display(),
                 start_time.elapsed().as_secs()
             );
             if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
-                error!("Failed to write checksum file: {}", e);
-                let _ = state
-                    .db
-                    .set_backup_error(&task_id, &format!("Failed to write checksum file: {e}"))
-                    .await;
+                let error_msg = format!("Failed to write archive checksum file: {e}");
+                error!("{error_msg}");
+                let _ = state.db.set_backup_error(&task_id, &error_msg).await;
                 return;
             }
             let _ = state
@@ -281,13 +269,13 @@ async fn run_backup_job_inner(
                 .await;
         }
         Err(e) => {
-            let _ = state
-                .db
-                .set_backup_error(&task_id, &format!("Failed to zip backup: {e}"))
-                .await;
+            let error_msg = format!("Failed to archive backup: {e}");
+            error!("{error_msg}");
+            let _ = state.db.set_backup_error(&task_id, &error_msg).await;
             return;
         }
     }
+
     info!("Backup {} ready", task_id);
 }
 
@@ -319,13 +307,11 @@ pub async fn run_backup_job(
         } else {
             "Unknown panic".to_string()
         };
-        error!(
-            "Backup job for task {} panicked: {}",
-            task_id_clone, panic_msg
-        );
+        let error_msg = format!("Backup job for task {task_id_clone} panicked: {panic_msg}");
+        error!("{error_msg}");
         let _ = state_clone
             .db
-            .set_backup_error(&task_id_clone, &format!("Panic: {panic_msg}"))
+            .set_backup_error(&task_id_clone, &error_msg)
             .await;
     }
 }

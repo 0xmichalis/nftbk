@@ -9,7 +9,6 @@ pub struct Tokens {
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BackupRequest {
     pub tokens: Vec<Tokens>,
-    pub force: Option<bool>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

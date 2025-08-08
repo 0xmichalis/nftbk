@@ -151,7 +151,7 @@ impl Db {
         sqlx::query!(
             r#"
             UPDATE backup_metadata
-            SET status = 'in_progress', updated_at = NOW(), expires_at = NOW() + ($2 || ' days')::interval
+            SET status = 'in_progress', updated_at = NOW(), expires_at = NOW() + ($2 || ' days')::interval, error_log = NULL, fatal_error = NULL
             WHERE task_id = $1
             "#,
             task_id,
