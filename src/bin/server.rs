@@ -23,7 +23,7 @@ use tracing::{error, info};
 use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
-use nftbk::server::handlers::handle_backup::{handle_backup, run_backup_job};
+use nftbk::server::handlers::handle_backup::handle_backup;
 use nftbk::server::handlers::handle_backup_delete::handle_backup_delete;
 use nftbk::server::handlers::handle_backup_retry::handle_backup_retry;
 use nftbk::server::handlers::handle_backups::handle_backups;
@@ -31,7 +31,7 @@ use nftbk::server::handlers::handle_download::{handle_download, handle_download_
 use nftbk::server::handlers::handle_status::handle_status;
 use nftbk::server::privy::verify_privy_jwt;
 use nftbk::server::pruner::run_pruner;
-use nftbk::server::{recover_incomplete_jobs, AppState, BackupJobOrShutdown};
+use nftbk::server::{recover_incomplete_jobs, run_backup_job, AppState, BackupJobOrShutdown};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

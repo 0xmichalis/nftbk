@@ -1,16 +1,21 @@
-use std::collections::HashMap;
+use futures_util::FutureExt;
+use std::collections::{HashMap, HashSet};
+use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::fs;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::backup::ChainConfig;
 use crate::server::api::Tokens;
+use crate::server::archive::{get_zipped_backup_paths, zip_backup};
 use crate::server::db::Db;
 use crate::server::hashing::compute_file_sha256;
+use crate::{backup::backup_from_config, BackupConfig, TokenConfig};
 
 pub mod api;
 pub mod archive;
@@ -227,4 +232,208 @@ pub async fn recover_incomplete_jobs(
     }
 
     Ok(job_count)
+}
+
+async fn run_backup_job_inner(
+    state: AppState,
+    task_id: String,
+    tokens: Vec<Tokens>,
+    force: bool,
+    archive_format: String,
+) {
+    info!("Running backup job for task {}", task_id);
+
+    // If force is set, clean up the error log if it exists
+    // Otherwise, check if backup already exists on disk
+    if force {
+        let _ = state.db.clear_backup_errors(&task_id).await;
+    // TODO: we can probably remove this check - it is not expected at this point to have the backup on disk
+    } else if check_backup_on_disk(
+        &state.base_dir,
+        &task_id,
+        state.unsafe_skip_checksum_check,
+        &archive_format,
+    )
+    .await
+    .is_some()
+    {
+        let _ = state
+            .db
+            .update_backup_metadata_status(&task_id, "done")
+            .await;
+        info!("Found existing backup for task {}", task_id);
+        return;
+    }
+
+    // Prepare backup config
+    let shutdown_flag = Some(state.shutdown_flag.clone());
+    let mut token_map = std::collections::HashMap::new();
+    for entry in tokens.clone() {
+        token_map.insert(entry.chain, entry.tokens);
+    }
+    let token_config = TokenConfig { chains: token_map };
+    let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
+    let out_path = std::path::PathBuf::from(&out_dir);
+
+    // Run backup
+    let backup_cfg = BackupConfig {
+        chain_config: (*state.chain_config).clone(),
+        token_config,
+        output_path: Some(out_path.clone()),
+        prune_redundant: false,
+        process_config: crate::ProcessManagementConfig {
+            exit_on_error: false,
+            shutdown_flag: shutdown_flag.clone(),
+        },
+    };
+    let span = tracing::info_span!("backup", task_id = %task_id);
+    let backup_result = backup_from_config(backup_cfg, Some(span)).await;
+
+    // Check backup result
+    let (files_written, error_log) = match backup_result {
+        Ok((files, errors)) => (files, errors),
+        Err(e) => {
+            let error_msg = e.to_string();
+            if error_msg.contains("interrupted by shutdown signal") {
+                info!(
+                    "Backup {} was gracefully interrupted by shutdown signal",
+                    task_id
+                );
+                return;
+            }
+            error!("Backup {task_id} failed: {}", e);
+            let _ = state
+                .db
+                .set_backup_error(&task_id, &format!("Backup failed: {e}"))
+                .await;
+            return;
+        }
+    };
+
+    // Store non-fatal error log in DB if present
+    if !error_log.is_empty() {
+        let log_str = error_log.join("\n");
+        let _ = state
+            .db
+            .update_backup_metadata_error_log(&task_id, &log_str)
+            .await;
+    }
+
+    // Sync all files and directories to disk before archiving
+    info!("Syncing {} to disk before archiving", out_path.display());
+    let files_written_clone = files_written.clone();
+    tokio::task::spawn_blocking(move || {
+        sync_files(&files_written_clone);
+    })
+    .await
+    .unwrap();
+    info!(
+        "Synced {} to disk before archiving ({} files)",
+        out_path.display(),
+        files_written.len()
+    );
+
+    // Archive the output dir
+    let (zip_pathbuf, checksum_path) =
+        get_zipped_backup_paths(&state.base_dir, &task_id, &archive_format);
+    info!("Archiving backup to {}", zip_pathbuf.display());
+    let start_time = Instant::now();
+    let out_path_clone = out_path.clone();
+    let zip_pathbuf_clone = zip_pathbuf.clone();
+    let archive_format_clone = archive_format.clone();
+    let shutdown_flag_clone = shutdown_flag.clone();
+    let zip_result = tokio::task::spawn_blocking(move || {
+        zip_backup(
+            &out_path_clone,
+            &zip_pathbuf_clone,
+            archive_format_clone,
+            shutdown_flag_clone,
+        )
+    })
+    .await
+    .unwrap();
+
+    // Check archive result
+    match zip_result {
+        Ok(checksum) => {
+            info!(
+                "Archived backup at {} in {:?}s",
+                zip_pathbuf.display(),
+                start_time.elapsed().as_secs()
+            );
+            if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
+                let error_msg = format!("Failed to write archive checksum file: {e}");
+                error!("{error_msg}");
+                let _ = state.db.set_backup_error(&task_id, &error_msg).await;
+                return;
+            }
+            let _ = state
+                .db
+                .update_backup_metadata_status(&task_id, "done")
+                .await;
+        }
+        Err(e) => {
+            let error_msg = format!("Failed to archive backup: {e}");
+            error!("{error_msg}");
+            let _ = state.db.set_backup_error(&task_id, &error_msg).await;
+            return;
+        }
+    }
+
+    info!("Backup {} ready", task_id);
+}
+
+pub async fn run_backup_job(
+    state: AppState,
+    task_id: String,
+    tokens: Vec<Tokens>,
+    force: bool,
+    archive_format: String,
+) {
+    let state_clone = state.clone();
+    let task_id_clone = task_id.clone();
+
+    let fut = AssertUnwindSafe(run_backup_job_inner(
+        state,
+        task_id,
+        tokens,
+        force,
+        archive_format,
+    ))
+    .catch_unwind();
+
+    let result = fut.await;
+    if let Err(panic) = result {
+        let panic_msg = if let Some(s) = panic.downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic".to_string()
+        };
+        let error_msg = format!("Backup job for task {task_id_clone} panicked: {panic_msg}");
+        error!("{error_msg}");
+        let _ = state_clone
+            .db
+            .set_backup_error(&task_id_clone, &error_msg)
+            .await;
+    }
+}
+
+fn sync_files(files_written: &[std::path::PathBuf]) {
+    let mut synced_dirs = HashSet::new();
+    for file in files_written {
+        if file.is_file() {
+            if let Ok(f) = std::fs::File::open(file) {
+                let _ = f.sync_all();
+            }
+        }
+        if let Some(parent) = file.parent() {
+            if synced_dirs.insert(parent.to_path_buf()) {
+                if let Ok(dir) = std::fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+            }
+        }
+    }
 }
