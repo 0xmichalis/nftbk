@@ -1,0 +1,124 @@
+use axum::http::{header, StatusCode};
+use axum::middleware;
+use axum::middleware::Next;
+use axum::{
+    extract::Request,
+    response::IntoResponse,
+    routing::{delete, get, post},
+    Router,
+};
+use subtle::ConstantTimeEq;
+
+use crate::envvar::is_defined;
+use crate::server::handlers::handle_backup::handle_backup;
+use crate::server::handlers::handle_backup_delete::handle_backup_delete;
+use crate::server::handlers::handle_backup_retry::handle_backup_retry;
+use crate::server::handlers::handle_backups::handle_backups;
+use crate::server::handlers::handle_download::{handle_download, handle_download_token};
+use crate::server::handlers::handle_status::handle_status;
+use crate::server::privy::verify_privy_jwt;
+use crate::server::AppState;
+
+#[derive(Clone)]
+pub struct AuthState {
+    pub app_state: AppState,
+    pub privy_verification_key: Option<String>,
+    pub privy_app_id: Option<String>,
+}
+
+async fn auth_middleware(
+    axum::extract::State(auth_state): axum::extract::State<AuthState>,
+    mut req: Request,
+    next: Next,
+) -> impl IntoResponse {
+    let state = &auth_state.app_state;
+    let privy_app_id = &auth_state.privy_app_id;
+    let privy_verification_key = &auth_state.privy_verification_key;
+
+    // 1. Try symmetric token auth
+    if let Some(ref token) = state.auth_token {
+        let auth_header = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+        let expected = format!("Bearer {token}");
+        if let Some(auth_header) = auth_header {
+            if auth_header
+                .as_bytes()
+                .ct_eq(expected.as_bytes())
+                .unwrap_u8()
+                == 1
+            {
+                req.extensions_mut().insert(Some("admin".to_string()));
+                return next.run(req).await;
+            }
+        }
+    }
+
+    // 2. Try Privy JWT auth
+    if let (Some(app_id), Some(verification_key)) =
+        (privy_app_id.as_ref(), privy_verification_key.as_ref())
+    {
+        let auth_header = req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok());
+        if let Some(header_value) = auth_header {
+            if let Some(jwt) = header_value.strip_prefix("Bearer ") {
+                match verify_privy_jwt(jwt, verification_key, app_id).await {
+                    Ok(claims) => {
+                        req.extensions_mut().insert(Some(claims.sub.clone()));
+                        return next.run(req).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Privy JWT verification failed: {}", e);
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. If both fail, return 401
+    (
+        StatusCode::UNAUTHORIZED,
+        [(header::WWW_AUTHENTICATE, "Bearer")],
+        "Unauthorized",
+    )
+        .into_response()
+}
+
+pub fn build_router(
+    state: AppState,
+    privy_app_id: Option<String>,
+    privy_verification_key: Option<String>,
+) -> Router {
+    // Public router (no auth middleware)
+    let public_router = Router::new()
+        .route("/backup/:task_id/download", get(handle_download))
+        .with_state(state.clone());
+
+    // Authenticated router
+    let mut authed_router = Router::new()
+        .route("/backup", post(handle_backup))
+        .route("/backup/:task_id/status", get(handle_status))
+        .route(
+            "/backup/:task_id/download_token",
+            get(handle_download_token),
+        )
+        .route("/backup/:task_id/retry", post(handle_backup_retry))
+        .route("/backup/:task_id", delete(handle_backup_delete))
+        .route("/backups", get(handle_backups))
+        .with_state(state.clone());
+
+    let auth_state = AuthState {
+        app_state: state.clone(),
+        privy_verification_key,
+        privy_app_id,
+    };
+    if is_defined(&state.auth_token) || is_defined(&auth_state.privy_verification_key) {
+        authed_router =
+            authed_router.layer(middleware::from_fn_with_state(auth_state, auth_middleware));
+    }
+
+    public_router.merge(authed_router)
+}

@@ -24,6 +24,7 @@ pub mod handlers;
 pub mod hashing;
 pub mod privy;
 pub mod pruner;
+pub mod router;
 pub use handlers::handle_backup::handle_backup;
 pub use handlers::handle_backup_delete::handle_backup_delete;
 pub use handlers::handle_backup_retry::handle_backup_retry;

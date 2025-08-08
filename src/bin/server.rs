@@ -1,12 +1,3 @@
-use axum::http::{header, StatusCode};
-use axum::middleware;
-use axum::middleware::Next;
-use axum::{
-    extract::{Request, State},
-    response::IntoResponse,
-    routing::{delete, get, post},
-    Router,
-};
 use clap::Parser;
 use dotenv::dotenv;
 use std::env;
@@ -14,7 +5,6 @@ use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use subtle::ConstantTimeEq;
 use tokio::signal;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -23,14 +13,9 @@ use tracing::{error, info};
 use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
-use nftbk::server::handlers::handle_backup::handle_backup;
-use nftbk::server::handlers::handle_backup_delete::handle_backup_delete;
-use nftbk::server::handlers::handle_backup_retry::handle_backup_retry;
-use nftbk::server::handlers::handle_backups::handle_backups;
-use nftbk::server::handlers::handle_download::{handle_download, handle_download_token};
-use nftbk::server::handlers::handle_status::handle_status;
-use nftbk::server::privy::verify_privy_jwt;
+
 use nftbk::server::pruner::run_pruner;
+use nftbk::server::router::build_router;
 use nftbk::server::{recover_incomplete_jobs, run_backup_job, AppState, BackupJobOrShutdown};
 
 #[derive(Parser, Debug)]
@@ -81,13 +66,6 @@ struct Args {
     backup_queue_size: usize,
 }
 
-#[derive(Clone)]
-struct AuthState {
-    app_state: AppState,
-    privy_verification_key: Option<String>,
-    privy_app_id: Option<String>,
-}
-
 fn spawn_backup_workers(
     parallelism: usize,
     backup_job_receiver: mpsc::Receiver<BackupJobOrShutdown>,
@@ -124,67 +102,6 @@ fn spawn_backup_workers(
         worker_handles.push(handle);
     }
     worker_handles
-}
-
-async fn auth_middleware(
-    State(auth_state): State<AuthState>,
-    mut req: Request,
-    next: Next,
-) -> impl IntoResponse {
-    let state = &auth_state.app_state;
-    let privy_app_id = &auth_state.privy_app_id;
-    let privy_verification_key = &auth_state.privy_verification_key;
-
-    // 1. Try symmetric token auth
-    if let Some(ref token) = state.auth_token {
-        let auth_header = req
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok());
-        let expected = format!("Bearer {token}");
-        if let Some(auth_header) = auth_header {
-            if auth_header
-                .as_bytes()
-                .ct_eq(expected.as_bytes())
-                .unwrap_u8()
-                == 1
-            {
-                req.extensions_mut().insert(Some("admin".to_string()));
-                return next.run(req).await;
-            }
-        }
-    }
-
-    // 2. Try Privy JWT auth
-    if let (Some(app_id), Some(verification_key)) =
-        (privy_app_id.as_ref(), privy_verification_key.as_ref())
-    {
-        let auth_header = req
-            .headers()
-            .get(header::AUTHORIZATION)
-            .and_then(|v| v.to_str().ok());
-        if let Some(header_value) = auth_header {
-            if let Some(jwt) = header_value.strip_prefix("Bearer ") {
-                match verify_privy_jwt(jwt, verification_key, app_id).await {
-                    Ok(claims) => {
-                        req.extensions_mut().insert(Some(claims.sub.clone()));
-                        return next.run(req).await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Privy JWT verification failed: {}", e);
-                    }
-                }
-            }
-        }
-    }
-
-    // 3. If both fail, return 401
-    (
-        StatusCode::UNAUTHORIZED,
-        [(header::WWW_AUTHENTICATE, "Bearer")],
-        "Unauthorized",
-    )
-        .into_response()
 }
 
 #[tokio::main]
@@ -245,37 +162,7 @@ async fn main() {
         }
     }
 
-    // Create the public router (no auth middleware)
-    let public_router = Router::new()
-        .route("/backup/:task_id/download", get(handle_download))
-        .with_state(state.clone());
-
-    // Create the authenticated router (all other routes)
-    let mut authed_router = Router::new()
-        .route("/backup", post(handle_backup))
-        .route("/backup/:task_id/status", get(handle_status))
-        .route(
-            "/backup/:task_id/download_token",
-            get(handle_download_token),
-        )
-        .route("/backup/:task_id/retry", post(handle_backup_retry))
-        .route("/backup/:task_id", delete(handle_backup_delete))
-        .route("/backups", get(handle_backups))
-        .with_state(state.clone());
-
-    // Add auth middleware to authenticated router
-    let auth_state = AuthState {
-        app_state: state.clone(),
-        privy_verification_key,
-        privy_app_id,
-    };
-    if is_defined(&auth_token) || is_defined(&auth_state.privy_verification_key) {
-        authed_router =
-            authed_router.layer(middleware::from_fn_with_state(auth_state, auth_middleware));
-    }
-
-    // Merge routers
-    let app = public_router.merge(authed_router);
+    let app = build_router(state.clone(), privy_app_id, privy_verification_key);
 
     // Start the pruner thread
     let pruner_handle = if args.enable_pruner {
