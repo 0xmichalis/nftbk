@@ -122,8 +122,16 @@ async fn stream_reader_to_file<R: AsyncRead + Unpin>(
     file: &mut tokio::fs::File,
     file_path: &Path,
 ) -> anyhow::Result<PathBuf> {
-    tokio::io::copy(reader, file).await?;
-    file.flush().await?;
+    tokio::io::copy(reader, file).await.map_err(|e| {
+        anyhow::anyhow!(
+            "Failed to stream content to file {}: {}",
+            file_path.display(),
+            e
+        )
+    })?;
+    file.flush()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to flush file {}: {}", file_path.display(), e))?;
     Ok(file_path.to_path_buf())
 }
 
@@ -147,9 +155,17 @@ pub async fn stream_http_to_file(
     }
 
     // Create file, write the prefix buffer and the rest of the stream
-    let mut file = tokio::fs::File::create(&file_path).await?;
+    let mut file = tokio::fs::File::create(&file_path)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create file {}: {}", file_path.display(), e))?;
     if !prefix_buf.is_empty() {
-        file.write_all(&prefix_buf).await?;
+        file.write_all(&prefix_buf).await.map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to write prefix to file {}: {}",
+                file_path.display(),
+                e
+            )
+        })?;
     }
     stream_reader_to_file(&mut reader, &mut file, &file_path).await
 }
@@ -380,25 +396,61 @@ async fn write_and_postprocess_file(
     match ext_str {
         "json" => {
             let data = if content.is_empty() {
-                tokio::fs::read(file_path).await?
+                // Verify file exists before attempting to read it
+                if !fs::try_exists(file_path).await.unwrap_or(false) {
+                    return Err(anyhow::anyhow!(
+                        "Cannot postprocess JSON file - file does not exist: {}",
+                        file_path.display()
+                    ));
+                }
+                tokio::fs::read(file_path).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to read JSON file {}: {}", file_path.display(), e)
+                })?
             } else {
                 content.to_vec()
             };
             if let Ok(json_value) = serde_json::from_slice::<Value>(&data) {
                 let pretty = serde_json::to_string_pretty(&json_value)?;
-                fs::write(file_path, pretty).await?;
+                fs::write(file_path, pretty).await.map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to write pretty JSON to {}: {}",
+                        file_path.display(),
+                        e
+                    )
+                })?;
             } else {
-                fs::write(file_path, &data).await?;
+                fs::write(file_path, &data).await.map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to write JSON data to {}: {}",
+                        file_path.display(),
+                        e
+                    )
+                })?;
             }
         }
         "html" => {
             let content_str = if content.is_empty() {
-                tokio::fs::read_to_string(file_path).await?
+                // Verify file exists before attempting to read it
+                if !fs::try_exists(file_path).await.unwrap_or(false) {
+                    return Err(anyhow::anyhow!(
+                        "Cannot postprocess HTML file - file does not exist: {}",
+                        file_path.display()
+                    ));
+                }
+                tokio::fs::read_to_string(file_path).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to read HTML file {}: {}", file_path.display(), e)
+                })?
             } else {
                 String::from_utf8_lossy(content).to_string()
             };
             if !content.is_empty() {
-                fs::write(file_path, content).await?;
+                fs::write(file_path, content).await.map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to write HTML content to {}: {}",
+                        file_path.display(),
+                        e
+                    )
+                })?;
             }
             let parent = file_path.parent().ok_or_else(|| {
                 anyhow::anyhow!("File path has no parent directory: {}", file_path.display())
@@ -407,7 +459,9 @@ async fn write_and_postprocess_file(
         }
         _ => {
             if !content.is_empty() {
-                fs::write(file_path, content).await?;
+                fs::write(file_path, content).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to write content to {}: {}", file_path.display(), e)
+                })?;
             }
             // Otherwise, do nothing (file already written by streaming)
         }
@@ -439,7 +493,9 @@ pub async fn fetch_and_save_content(
     let parent = file_path.parent().ok_or_else(|| {
         anyhow::anyhow!("File path has no parent directory: {}", file_path.display())
     })?;
-    fs::create_dir_all(parent).await?;
+    fs::create_dir_all(parent)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create directory {}: {}", parent.display(), e))?;
 
     // Handle data URLs (still buffer, as they're usually small)
     if is_data_url(url) {
