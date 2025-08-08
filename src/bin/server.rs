@@ -110,6 +110,12 @@ async fn main() {
     dotenv().ok();
     let args = Args::parse();
     logging::init(args.log_level.clone());
+    info!(
+        "Starting {} {} (commit {})",
+        env!("CARGO_PKG_NAME"),
+        env!("CARGO_PKG_VERSION"),
+        env!("GIT_COMMIT")
+    );
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
     let privy_app_id = env::var("PRIVY_APP_ID").ok();
     let privy_verification_key = env::var("PRIVY_VERIFICATION_KEY")

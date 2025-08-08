@@ -3,6 +3,7 @@ name = "nftbk"
 version = "0.1.0"
 edition = "2021"
 description = "A library, server, and CLI tool for backing up NFT metadata and content from EVM and Tezos NFT contracts."
+build = "build.rs"
 
 [lib]
 name = "nftbk"
