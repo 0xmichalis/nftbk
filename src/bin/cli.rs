@@ -92,9 +92,16 @@ async fn backup_from_server(
     let task_id = backup_resp.task_id.clone();
     println!("Task ID: {task_id}");
 
-    // If force is requested and we got an existing task_id, retry the backup
+    // If force is requested, check if backup is in progress and retry it
     if force {
-        retry_backup(&client, &server_address, &task_id, auth_token.as_deref()).await?;
+        let status =
+            check_backup_status(&client, &server_address, &task_id, auth_token.as_deref()).await?;
+        if status == "in_progress" {
+            println!("Backup is already in progress, skipping retry...");
+        } else {
+            println!("Backup is not in progress, retrying...");
+            retry_backup(&client, &server_address, &task_id, auth_token.as_deref()).await?;
+        }
     }
 
     wait_for_done_backup(&client, &server_address, &task_id, auth_token.as_deref()).await?;
@@ -142,6 +149,27 @@ async fn request_backup(
     }
     let backup_resp: BackupResponse = resp.json().await.context("Invalid server response")?;
     Ok(backup_resp)
+}
+
+async fn check_backup_status(
+    client: &Client,
+    server_address: &str,
+    task_id: &str,
+    auth_token: Option<&str>,
+) -> Result<String> {
+    let server = server_address.trim_end_matches('/');
+    let status_url = format!("{server}/backup/{task_id}/status");
+    let mut req = client.get(status_url);
+    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
+        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
+    }
+    let resp = req.send().await.context("Failed to get backup status")?;
+    if !resp.status().is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Server error getting status: {}", text);
+    }
+    let status_resp: StatusResponse = resp.json().await.context("Invalid status response")?;
+    Ok(status_resp.status)
 }
 
 async fn retry_backup(
