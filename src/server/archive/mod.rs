@@ -10,6 +10,10 @@ use std::sync::Arc;
 use tracing::warn;
 use zip::write::FileOptions;
 
+/// Error message used when archiving is interrupted by shutdown signal
+pub const ARCHIVE_INTERRUPTED_BY_SHUTDOWN: &str =
+    "Archive operation interrupted by shutdown signal";
+
 /// A writer that writes to two destinations: the archive file and a hasher
 struct TeeWriter<W: Write, H: Write> {
     writer: W,
@@ -160,7 +164,7 @@ fn check_shutdown_signal(shutdown_flag: Option<&Arc<AtomicBool>>) -> io::Result<
             warn!("Received shutdown signal, stopping archive operation");
             return Err(io::Error::new(
                 io::ErrorKind::Interrupted,
-                "Archive operation interrupted by shutdown signal",
+                ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
             ));
         }
     }

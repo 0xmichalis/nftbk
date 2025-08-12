@@ -12,7 +12,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::backup::ChainConfig;
 use crate::server::api::Tokens;
-use crate::server::archive::{get_zipped_backup_paths, zip_backup};
+use crate::server::archive::{
+    get_zipped_backup_paths, zip_backup, ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
+};
 use crate::server::db::Db;
 use crate::server::hashing::compute_file_sha256;
 use crate::{backup::backup_from_config, BackupConfig, TokenConfig};
@@ -359,6 +361,15 @@ async fn run_backup_job_inner(
                 .await;
         }
         Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains(ARCHIVE_INTERRUPTED_BY_SHUTDOWN) {
+                info!(
+                    "Archiving for backup {} was gracefully interrupted by shutdown signal",
+                    task_id
+                );
+                let _ = std::fs::remove_file(&zip_pathbuf);
+                return;
+            }
             let error_msg = format!("Failed to archive backup: {e}");
             error!("{error_msg}");
             let _ = state.db.set_backup_error(&task_id, &error_msg).await;
