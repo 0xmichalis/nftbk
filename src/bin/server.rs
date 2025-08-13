@@ -7,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::signal;
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tracing::{error, info};
 
 use nftbk::envvar::is_defined;
@@ -16,7 +15,7 @@ use nftbk::logging::LogLevel;
 
 use nftbk::server::pruner::run_pruner;
 use nftbk::server::router::build_router;
-use nftbk::server::{recover_incomplete_jobs, run_backup_job, AppState, BackupJobOrShutdown};
+use nftbk::server::{recover_incomplete_jobs, spawn_backup_workers, AppState, BackupJobOrShutdown};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -64,44 +63,6 @@ struct Args {
     /// Maximum number of backup jobs to queue before blocking
     #[arg(long, default_value_t = 10000)]
     backup_queue_size: usize,
-}
-
-fn spawn_backup_workers(
-    parallelism: usize,
-    backup_job_receiver: mpsc::Receiver<BackupJobOrShutdown>,
-    state: AppState,
-) -> Vec<JoinHandle<()>> {
-    let mut worker_handles = Vec::with_capacity(parallelism);
-    let backup_job_receiver = Arc::new(tokio::sync::Mutex::new(backup_job_receiver));
-    for i in 0..parallelism {
-        let backup_job_receiver = backup_job_receiver.clone();
-        let state_clone = state.clone();
-        let handle = tokio::spawn(async move {
-            info!("Worker {} started", i);
-            loop {
-                let job = {
-                    let mut rx = backup_job_receiver.lock().await;
-                    rx.recv().await
-                };
-                match job {
-                    Some(BackupJobOrShutdown::Job(job)) => {
-                        run_backup_job(
-                            state_clone.clone(),
-                            job.task_id,
-                            job.tokens,
-                            job.force,
-                            job.archive_format,
-                        )
-                        .await;
-                    }
-                    Some(BackupJobOrShutdown::Shutdown) | None => break,
-                }
-            }
-            info!("Worker {} stopped", i);
-        });
-        worker_handles.push(handle);
-    }
-    worker_handles
 }
 
 #[tokio::main]
@@ -168,8 +129,6 @@ async fn main() {
         }
     }
 
-    let app = build_router(state.clone(), privy_app_id, privy_verification_key);
-
     // Start the pruner thread
     let pruner_handle = if args.enable_pruner {
         let db = state.db.clone();
@@ -202,6 +161,7 @@ async fn main() {
     // Start the server
     let addr: SocketAddr = args.listen_address.parse().expect("Invalid listen address");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let app = build_router(state.clone(), privy_app_id, privy_verification_key);
     info!("Listening on {}", addr);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal)

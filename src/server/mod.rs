@@ -25,6 +25,7 @@ pub mod hashing;
 pub mod privy;
 pub mod pruner;
 pub mod router;
+pub mod workers;
 pub use handlers::handle_backup::handle_backup;
 pub use handlers::handle_backup_delete::handle_backup_delete;
 pub use handlers::handle_backup_retry::handle_backup_retry;
@@ -32,6 +33,7 @@ pub use handlers::handle_backups::handle_backups;
 pub use handlers::handle_download::handle_download;
 pub use handlers::handle_download::handle_download_token;
 pub use handlers::handle_status::handle_status;
+pub use workers::spawn_backup_workers;
 
 #[derive(Clone)]
 pub struct AppState {
