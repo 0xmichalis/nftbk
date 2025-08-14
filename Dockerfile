@@ -8,7 +8,8 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
-    git && \
+    git \
+    curl && \
     rm -rf /var/lib/apt/lists/*
 
 # Accept git commit as build argument
