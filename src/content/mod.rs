@@ -376,6 +376,11 @@ async fn fetch_and_stream_to_file(
     .await
 }
 
+/// Creates an HTTP error with the given status code and URL for context
+fn create_http_error(status: reqwest::StatusCode, url: &str) -> anyhow::Error {
+    anyhow::anyhow!("HTTP error: status {status} for URL: {url}")
+}
+
 /// Single attempt to fetch and stream a URL to a file
 async fn fetch_and_stream_to_file_once(
     url: &str,
@@ -390,24 +395,23 @@ async fn fetch_and_stream_to_file_once(
                 (result, Some(status))
             } else {
                 // For non-successful status codes, try IPFS gateway rotation if applicable
-                let error = anyhow::anyhow!("HTTP error: status {status}");
+                let error = create_http_error(status, url);
                 match handle_ipfs_gateway_rotation(url, error).await {
                     Ok(alt_response) => {
+                        let alt_url = alt_response.url().as_str();
                         let alt_status = alt_response.status();
                         if alt_status.is_success() {
                             let result = stream_http_to_file(alt_response, file_path).await;
                             (result, Some(alt_status))
                         } else {
                             (
-                                Err(anyhow::anyhow!("HTTP error: status {alt_status}")),
+                                Err(create_http_error(alt_status, alt_url)),
                                 Some(alt_status),
                             )
                         }
                     }
-                    Err(_gateway_err) => (
-                        Err(anyhow::anyhow!("HTTP error: status {status}")),
-                        Some(status),
-                    ),
+                    // In case of IPFS gateway rotation error, return the original error
+                    Err(_gateway_err) => (Err(create_http_error(status, url)), Some(status)),
                 }
             }
         }
@@ -420,10 +424,7 @@ async fn fetch_and_stream_to_file_once(
                         let result = stream_http_to_file(response, file_path).await;
                         (result, Some(status))
                     } else {
-                        (
-                            Err(anyhow::anyhow!("HTTP error: status {status}")),
-                            Some(status),
-                        )
+                        (Err(create_http_error(status, url)), Some(status))
                     }
                 }
                 Err(gateway_err) => (Err(gateway_err), None),
