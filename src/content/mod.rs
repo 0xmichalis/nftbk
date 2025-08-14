@@ -17,6 +17,45 @@ use crate::content::html::download_html_resources;
 use crate::url::all_ipfs_gateway_urls;
 use crate::url::{get_data_url, get_last_path_segment, get_url, is_data_url, is_ipfs_gateway_url};
 
+/// Robustly checks if a file exists with retry logic to handle filesystem race conditions
+async fn robust_file_exists_check(file_path: &Path, max_retries: u32) -> anyhow::Result<bool> {
+    const INITIAL_DELAY_MS: u64 = 10;
+    const MAX_DELAY_MS: u64 = 500;
+
+    for attempt in 0..=max_retries {
+        match fs::try_exists(file_path).await {
+            Ok(exists) => return Ok(exists),
+            Err(e) => {
+                if attempt == max_retries {
+                    return Err(anyhow::anyhow!(
+                        "Failed to check file existence after {} attempts for {}: {}",
+                        max_retries + 1,
+                        file_path.display(),
+                        e
+                    ));
+                }
+
+                // Exponential backoff with jitter
+                let delay_ms = std::cmp::min(INITIAL_DELAY_MS * 2_u64.pow(attempt), MAX_DELAY_MS);
+                let jitter = thread_rng().gen_range(0..delay_ms / 4 + 1);
+                let total_delay = Duration::from_millis(delay_ms + jitter);
+
+                debug!(
+                    "File existence check failed for {} (attempt {}/{}), retrying in {:?}: {}",
+                    file_path.display(),
+                    attempt + 1,
+                    max_retries + 1,
+                    total_delay,
+                    e
+                );
+                sleep(total_delay).await;
+            }
+        }
+    }
+
+    unreachable!("Loop should have returned or failed by now")
+}
+
 pub mod extensions;
 pub mod extra;
 pub mod html;
@@ -167,7 +206,14 @@ pub async fn stream_http_to_file(
             )
         })?;
     }
-    stream_reader_to_file(&mut reader, &mut file, &file_path).await
+    let result = stream_reader_to_file(&mut reader, &mut file, &file_path).await?;
+
+    // Ensure file is properly synchronized to disk before returning
+    file.sync_all().await.map_err(|e| {
+        anyhow::anyhow!("Failed to sync file {} to disk: {}", file_path.display(), e)
+    })?;
+
+    Ok(result)
 }
 
 /// Streams a gzipped HTTP response to a file, decompressing on the fly.
@@ -387,6 +433,7 @@ async fn fetch_and_stream_to_file_once(
 }
 
 // Helper to write file and postprocess (pretty-print JSON, download HTML resources)
+// We avoid logging any URLs in this function since some URLs may be data URLs and can clutter the logs.
 async fn write_and_postprocess_file(
     file_path: &Path,
     content: &[u8],
@@ -397,7 +444,13 @@ async fn write_and_postprocess_file(
         "json" => {
             let data = if content.is_empty() {
                 // Verify file exists before attempting to read it
-                if !fs::try_exists(file_path).await.unwrap_or(false) {
+                if !robust_file_exists_check(file_path, 3).await.map_err(|e| {
+                    anyhow::anyhow!(
+                        "Cannot verify JSON file existence during postprocessing for {}: {}",
+                        file_path.display(),
+                        e
+                    )
+                })? {
                     return Err(anyhow::anyhow!(
                         "Cannot postprocess JSON file - file does not exist: {}",
                         file_path.display()
@@ -431,7 +484,13 @@ async fn write_and_postprocess_file(
         "html" => {
             let content_str = if content.is_empty() {
                 // Verify file exists before attempting to read it
-                if !fs::try_exists(file_path).await.unwrap_or(false) {
+                if !robust_file_exists_check(file_path, 3).await.map_err(|e| {
+                    anyhow::anyhow!(
+                        "Cannot verify HTML file existence during postprocessing for {}: {}",
+                        file_path.display(),
+                        e
+                    )
+                })? {
                     return Err(anyhow::anyhow!(
                         "Cannot postprocess HTML file - file does not exist: {}",
                         file_path.display()
@@ -455,7 +514,15 @@ async fn write_and_postprocess_file(
             let parent = file_path.parent().ok_or_else(|| {
                 anyhow::anyhow!("File path has no parent directory: {}", file_path.display())
             })?;
-            download_html_resources(&content_str, url, parent).await?;
+            download_html_resources(&content_str, url, parent)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to download HTML resources for {}: {}",
+                        file_path.display(),
+                        e
+                    )
+                })?;
         }
         _ => {
             if !content.is_empty() {
