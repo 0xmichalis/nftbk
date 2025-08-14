@@ -5,5 +5,5 @@
 config_*.toml
 !config_chains.toml
 /nft_backup*
-*.json
+/*.json
 !.sqlx/*

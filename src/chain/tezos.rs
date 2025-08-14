@@ -125,6 +125,7 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         &self,
         rpc: &Self::RpcClient,
         contract: &Self::ContractWithToken,
+        _chain_name: &str,
     ) -> anyhow::Result<String> {
         let nft_contract = rpc
             .contract_at(contract.address.clone().try_into()?, None)

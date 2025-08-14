@@ -50,6 +50,7 @@ pub trait NFTChainProcessor {
         &self,
         rpc: &Self::RpcClient,
         contract: &Self::ContractWithToken,
+        chain_name: &str,
     ) -> anyhow::Result<String>;
 }
 
@@ -78,7 +79,7 @@ where
             contract.address(),
             contract.token_id()
         );
-        let token_uri = match processor.get_uri(&provider, &contract).await {
+        let token_uri = match processor.get_uri(&provider, &contract, chain_name).await {
             Ok(uri) => uri,
             Err(e) => {
                 let msg = format!(

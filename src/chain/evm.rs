@@ -6,6 +6,7 @@ use alloy::{
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::future::Future;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -98,6 +99,17 @@ pub enum Media {
 pub struct Assets {
     pub glb: Option<String>,
 }
+
+// CryptoPunks specific structures
+#[derive(Debug, Serialize, Deserialize)]
+struct CryptoPunkData {
+    #[serde(rename = "type")]
+    punk_type: String,
+    image: String,
+    accessories: Vec<String>,
+}
+
+type CryptoPunksDatabase = HashMap<String, CryptoPunkData>;
 
 // ERC721/ERC1155 minimal ABI to get the token URI
 sol! {
@@ -284,9 +296,18 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         &self,
         rpc: &Self::RpcClient,
         contract: &Self::ContractWithToken,
+        chain_name: &str,
     ) -> anyhow::Result<String> {
         let contract_addr = contract.address().parse::<Address>()?;
         let token_id = U256::from_str_radix(contract.token_id(), 10)?;
+
+        // Check for special contract handling first
+        if let Some(special_uri) =
+            handle_special_contract_uri(chain_name, contract.address(), &token_id).await?
+        {
+            return Ok(special_uri);
+        }
+
         let nft = INFT::new(contract_addr, rpc);
 
         let uri = match try_call_contract(|| {
@@ -340,6 +361,75 @@ fn replace_id_pattern(uri: &str, token_id: &U256) -> Option<String> {
         }
     }
     None
+}
+
+/// Handle special contract URI generation for contracts that don't follow ERC-721/ERC-1155 standards
+async fn handle_special_contract_uri(
+    chain_name: &str,
+    contract_address: &str,
+    token_id: &U256,
+) -> anyhow::Result<Option<String>> {
+    // Handle CryptoPunks on Ethereum mainnet
+    if chain_name == "ethereum"
+        && contract_address.to_lowercase() == "0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb"
+    {
+        return generate_cryptopunks_data_uri(token_id).await.map(Some);
+    }
+
+    // Future special contracts can be added here
+    // Example:
+    // if chain_name == "ethereum" && contract_address.to_lowercase() == "0x..." {
+    //     return handle_other_special_contract(token_id).await.map(Some);
+    // }
+
+    Ok(None)
+}
+
+/// Generate a data URI for CryptoPunks metadata
+async fn generate_cryptopunks_data_uri(token_id: &U256) -> anyhow::Result<String> {
+    // Load the CryptoPunks database
+    let cryptopunks_json = include_str!("./cryptopunks.json");
+    let database: CryptoPunksDatabase = serde_json::from_str(cryptopunks_json)?;
+
+    // Format token ID as a zero-padded string (CryptoPunks uses "000", "001", etc.)
+    let token_id_str = format!("{token_id:03}");
+
+    let punk_data = database
+        .get(&token_id_str)
+        .ok_or_else(|| anyhow::anyhow!("CryptoPunk {} not found in database", token_id))?;
+
+    // Create attributes from type and accessories
+    let mut attributes = vec![NFTAttribute {
+        trait_type: "Type".to_string(),
+        value: serde_json::Value::String(punk_data.punk_type.clone()),
+    }];
+
+    // Add accessories as individual attributes
+    for accessory in &punk_data.accessories {
+        attributes.push(NFTAttribute {
+            trait_type: "Accessory".to_string(),
+            value: serde_json::Value::String(accessory.clone()),
+        });
+    }
+
+    // Create the metadata
+    let metadata = NFTMetadata {
+        name: Some(format!("CryptoPunk #{token_id}")),
+        description: Some("CryptoPunks launched as a fixed set of 10,000 items in mid-2017 and became one of the inspirations for the ERC-721 standard. They have been featured in places like The New York Times, Christie's of London, Art|Basel Miami, and The PBS NewsHour.".to_string()),
+        image: None,
+        image_url: Some(punk_data.image.clone()),
+        animation_url: None,
+        animation_details: None,
+        external_url: None,
+        attributes: Some(attributes),
+        media: None,
+        content: None,
+        assets: None,
+    };
+
+    // Serialize to JSON and create data URI
+    let metadata_json = serde_json::to_string(&metadata)?;
+    Ok(format!("data:application/json;utf8,{metadata_json}"))
 }
 
 #[cfg(test)]
@@ -500,5 +590,69 @@ mod tests {
         assert!(found_background, "Background attribute not found");
         assert!(found_eyes, "Eyes attribute not found");
         assert!(found_mouth, "Mouth attribute not found");
+    }
+
+    #[tokio::test]
+    async fn test_cryptopunks_special_handling() {
+        use alloy::primitives::U256;
+
+        // Test CryptoPunks contract detection
+        let chain_name = "ethereum";
+        let cryptopunks_address = "0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb";
+        let token_id = U256::from(0u64);
+
+        let result = handle_special_contract_uri(chain_name, cryptopunks_address, &token_id).await;
+        assert!(
+            result.is_ok(),
+            "Special handling should work for CryptoPunks"
+        );
+        assert!(
+            result.unwrap().is_some(),
+            "Should return Some URI for CryptoPunks"
+        );
+
+        // Test non-special contract
+        let normal_address = "0x1234567890123456789012345678901234567890";
+        let result = handle_special_contract_uri(chain_name, normal_address, &token_id).await;
+        assert!(result.is_ok());
+        assert!(
+            result.unwrap().is_none(),
+            "Should return None for normal contracts"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_generate_cryptopunks_data_uri() {
+        use alloy::primitives::U256;
+
+        // Test generating data URI for CryptoPunk #0
+        let token_id = U256::from(0u64);
+        let result = generate_cryptopunks_data_uri(&token_id).await;
+
+        assert!(result.is_ok(), "Should generate data URI successfully");
+        let data_uri = result.unwrap();
+
+        // Verify it's a data URI
+        assert!(
+            data_uri.starts_with("data:application/json;utf8,"),
+            "Should be a JSON data URI"
+        );
+
+        // Decode and verify the metadata structure
+        let json_content = &data_uri["data:application/json;utf8,".len()..];
+        let metadata: NFTMetadata = serde_json::from_str(json_content).unwrap();
+
+        assert_eq!(metadata.name.as_deref(), Some("CryptoPunk #0"));
+        assert!(metadata.description.is_some());
+        assert!(metadata.image_url.is_some());
+        assert!(metadata.attributes.is_some());
+
+        let attributes = metadata.attributes.unwrap();
+        // Should have at least one attribute for the type
+        assert!(!attributes.is_empty());
+
+        // Check that we have a Type attribute
+        let type_attr = attributes.iter().find(|attr| attr.trait_type == "Type");
+        assert!(type_attr.is_some(), "Should have a Type attribute");
     }
 }
