@@ -63,6 +63,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "time"] }
 url = "2.4"
 urlencoding = "2.1"
+utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-swagger-ui = { version = "8", features = ["axum"] }
 uuid = { version = "1.4", features = ["v4"] }
 zip = "0.6"
 

@@ -13,6 +13,22 @@ use crate::server::BackupJobOrShutdown;
 use crate::server::Tokens;
 use tracing::{error, info};
 
+#[utoipa::path(
+    post,
+    path = "/backup/{task_id}/retry",
+    params(
+        ("task_id" = String, Path, description = "Unique identifier for the backup task")
+    ),
+    responses(
+        (status = 202, description = "Backup retry initiated successfully", body = BackupResponse),
+        (status = 400, description = "Task is already in progress"),
+        (status = 403, description = "Requestor does not match task owner"),
+        (status = 404, description = "Task not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "backup",
+    security(("bearer_auth" = []))
+)]
 pub async fn handle_backup_retry(
     State(state): State<AppState>,
     Path(task_id): Path<String>,

@@ -9,18 +9,39 @@ use axum::{
 use base64::Engine;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use serde_json::json;
 use std::path::PathBuf;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 
 use crate::server::{check_backup_on_disk, AppState};
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct DownloadQuery {
+    /// Download token for authenticated access
     pub token: Option<String>,
 }
 
+#[derive(serde::Serialize, utoipa::ToSchema)]
+pub struct DownloadTokenResponse {
+    /// Download token for authenticated access
+    pub token: String,
+    /// Token expiration timestamp (Unix timestamp)
+    pub expires_at: u64,
+}
+
+#[utoipa::path(
+    get,
+    path = "/backup/{task_id}/download_token",
+    params(
+        ("task_id" = String, Path, description = "Unique identifier for the backup task")
+    ),
+    responses(
+        (status = 200, description = "Download token generated successfully", body = DownloadTokenResponse),
+        (status = 401, description = "Unauthorized"),
+    ),
+    tag = "backup",
+    security(("bearer_auth" = []))
+)]
 pub async fn handle_download_token(
     State(state): axum::extract::State<AppState>,
     axum::extract::Path(task_id): axum::extract::Path<String>,
@@ -33,9 +54,25 @@ pub async fn handle_download_token(
         let mut tokens = state.download_tokens.lock().await;
         tokens.insert(token.clone(), (task_id.clone(), expires_at));
     }
-    Json(json!({ "token": token, "expires_at": expires_at }))
+    Json(DownloadTokenResponse { token, expires_at })
 }
 
+#[utoipa::path(
+    get,
+    path = "/backup/{task_id}/download",
+    params(
+        ("task_id" = String, Path, description = "Unique identifier for the backup task"),
+        ("token" = Option<String>, Query, description = "Download token for authenticated access")
+    ),
+    responses(
+        (status = 200, description = "Backup file download", content_type = "application/zip"),
+        (status = 202, description = "Task not completed yet"),
+        (status = 401, description = "Invalid or expired token"),
+        (status = 404, description = "Task not found"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "backup"
+)]
 pub async fn handle_download(
     State(state): State<AppState>,
     AxumPath(task_id): AxumPath<String>,

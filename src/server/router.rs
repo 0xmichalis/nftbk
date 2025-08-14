@@ -8,16 +8,79 @@ use axum::{
     Router,
 };
 use subtle::ConstantTimeEq;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 use crate::envvar::is_defined;
-use crate::server::handlers::handle_backup::handle_backup;
-use crate::server::handlers::handle_backup_delete::handle_backup_delete;
-use crate::server::handlers::handle_backup_retry::handle_backup_retry;
-use crate::server::handlers::handle_backups::handle_backups;
-use crate::server::handlers::handle_download::{handle_download, handle_download_token};
-use crate::server::handlers::handle_status::handle_status;
+use crate::server::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
+use crate::server::handlers::handle_backup::{__path_handle_backup, handle_backup};
+use crate::server::handlers::handle_backup_delete::{
+    __path_handle_backup_delete, handle_backup_delete,
+};
+use crate::server::handlers::handle_backup_retry::{
+    __path_handle_backup_retry, handle_backup_retry,
+};
+use crate::server::handlers::handle_backups::BackupsQuery;
+use crate::server::handlers::handle_backups::{__path_handle_backups, handle_backups};
+use crate::server::handlers::handle_download::{DownloadQuery, DownloadTokenResponse};
+use crate::server::handlers::handle_download::{
+    __path_handle_download, __path_handle_download_token, handle_download, handle_download_token,
+};
+use crate::server::handlers::handle_status::{__path_handle_status, handle_status};
 use crate::server::privy::verify_privy_jwt;
 use crate::server::AppState;
+
+#[derive(OpenApi)]
+#[openapi(
+    paths(
+        handle_backup,
+        handle_status,
+        handle_download_token,
+        handle_download,
+        handle_backup_retry,
+        handle_backup_delete,
+        handle_backups,
+    ),
+    components(
+        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery)
+    ),
+    tags(
+        (name = "backup", description = "NFT Backup API endpoints")
+    ),
+    info(
+        title = "NFT Backup API",
+        version = "0.1.0",
+        description = "API for backing up NFT metadata and content from EVM and Tezos NFT contracts",
+        contact(
+            name = "nftbk",
+            url = "https://github.com/0xmichalis/nftbk"
+        )
+    ),
+    security(
+        ("bearer_auth" = [])
+    ),
+    modifiers(&SecurityAddon)
+)]
+struct ApiDoc;
+
+struct SecurityAddon;
+
+impl utoipa::Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        if let Some(components) = openapi.components.as_mut() {
+            components.add_security_scheme(
+                "bearer_auth",
+                utoipa::openapi::security::SecurityScheme::Http(
+                    utoipa::openapi::security::HttpBuilder::new()
+                        .scheme(utoipa::openapi::security::HttpAuthScheme::Bearer)
+                        .bearer_format("JWT")
+                        .description(Some("Bearer token authentication (JWT or symmetric token)"))
+                        .build(),
+                ),
+            );
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct AuthState {
@@ -95,6 +158,7 @@ pub fn build_router(
     // Public router (no auth middleware)
     let public_router = Router::new()
         .route("/backup/:task_id/download", get(handle_download))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
         .with_state(state.clone());
 
     // Authenticated router

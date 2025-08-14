@@ -28,6 +28,20 @@ fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), 
     Ok(())
 }
 
+#[utoipa::path(
+    post,
+    path = "/backup",
+    request_body = BackupRequest,
+    responses(
+        (status = 201, description = "Backup task created successfully", body = BackupResponse),
+        (status = 200, description = "Backup already exists or in progress", body = BackupResponse),
+        (status = 400, description = "Invalid request", body = serde_json::Value),
+        (status = 409, description = "Backup exists in error/expired state", body = serde_json::Value),
+        (status = 500, description = "Internal server error", body = serde_json::Value),
+    ),
+    tag = "backup",
+    security(("bearer_auth" = []))
+)]
 pub async fn handle_backup(
     State(state): State<AppState>,
     Extension(requestor): Extension<Option<String>>,

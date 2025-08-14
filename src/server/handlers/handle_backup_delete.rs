@@ -10,6 +10,23 @@ use tracing::{error, info, warn};
 use crate::server::archive::get_zipped_backup_paths;
 use crate::server::AppState;
 
+#[utoipa::path(
+    delete,
+    path = "/backup/{task_id}",
+    params(
+        ("task_id" = String, Path, description = "Unique identifier for the backup task")
+    ),
+    responses(
+        (status = 204, description = "Backup deleted successfully"),
+        (status = 400, description = "Bad request"),
+        (status = 403, description = "Requestor does not match task owner"),
+        (status = 404, description = "Task not found"),
+        (status = 409, description = "Can only delete completed tasks"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "backup",
+    security(("bearer_auth" = []))
+)]
 pub async fn handle_backup_delete(
     State(state): State<AppState>,
     Path(task_id): Path<String>,

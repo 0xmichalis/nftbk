@@ -8,8 +8,9 @@ use serde::Deserialize;
 
 use crate::server::AppState;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, utoipa::ToSchema)]
 pub struct BackupsQuery {
+    /// Whether to include token details in the response
     #[serde(default = "default_include_tokens")]
     include_tokens: bool,
 }
@@ -18,6 +19,20 @@ fn default_include_tokens() -> bool {
     false
 }
 
+#[utoipa::path(
+    get,
+    path = "/backups",
+    params(
+        ("include_tokens" = Option<bool>, Query, description = "Whether to include token details in the response")
+    ),
+    responses(
+        (status = 200, description = "List of backups for the authenticated user", body = Vec<serde_json::Value>),
+        (status = 401, description = "Missing user DID"),
+        (status = 500, description = "Internal server error"),
+    ),
+    tag = "backup",
+    security(("bearer_auth" = []))
+)]
 pub async fn handle_backups(
     Extension(user_did): Extension<Option<String>>,
     State(state): State<AppState>,

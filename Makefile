@@ -57,7 +57,7 @@ run: start-db run-server
 
 .PHONY: run-server
 run-server:
-	cargo run --bin nftbk-server -- --unsafe-skip-checksum-check true --backup-parallelism 2 $(filter-out $@,$(MAKECMDGOALS))
+	cargo run --bin nftbk-server -- --unsafe-skip-checksum-check true --backup-parallelism 2
 
 .PHONY: start-db
 start-db:

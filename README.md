@@ -47,6 +47,19 @@ To run the server:
 cargo run --bin nftbk-server -- [args]
 ```
 
+### OpenAPI Documentation
+
+The server includes interactive OpenAPI documentation available at `/swagger-ui` when running. This provides a complete API reference with example requests and responses for all endpoints. The OpenAPI specification JSON is available at `/api-docs/openapi.json`.
+
+Example usage:
+```bash
+# Start the server
+cargo run --bin nftbk-server
+
+# View the interactive API documentation
+open http://localhost:8080/swagger-ui
+```
+
 ### Postgres
 
 Deploy Postgres and run migrations:
