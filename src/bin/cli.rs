@@ -67,6 +67,10 @@ struct Args {
     /// User-Agent to send to the server (affects archive format)
     #[arg(long, default_value = "Linux")]
     user_agent: String,
+
+    /// Disable colored log output
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    no_color: bool,
 }
 
 enum BackupStart {
@@ -433,7 +437,7 @@ async fn list_server_backups(server_address: &str) -> Result<()> {
 async fn main() -> Result<()> {
     dotenv().ok();
     let args = Args::parse();
-    logging::init(args.log_level);
+    logging::init(args.log_level, !args.no_color);
 
     if args.server_mode && args.list {
         return list_server_backups(&args.server_address).await;

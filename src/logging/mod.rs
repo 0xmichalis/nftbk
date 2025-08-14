@@ -27,10 +27,10 @@ impl From<LogLevel> for Level {
 static TIME_FORMAT: &[time::format_description::FormatItem<'_>] =
     format_description!("[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:2]Z");
 
-pub fn init(log_level: LogLevel) {
+pub fn init(log_level: LogLevel, enable_color: bool) {
     tracing_subscriber::fmt()
         .with_level(true)
-        .with_ansi(true)
+        .with_ansi(enable_color)
         .with_max_level(Level::from(log_level))
         .with_file(false)
         .with_line_number(false)

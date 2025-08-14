@@ -63,6 +63,10 @@ struct Args {
     /// Maximum number of backup jobs to queue before blocking
     #[arg(long, default_value_t = 10000)]
     backup_queue_size: usize,
+
+    /// Disable colored log output
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    no_color: bool,
 }
 
 #[tokio::main]
@@ -70,7 +74,7 @@ async fn main() {
     // We are consuming config both from the environment and from the command line
     dotenv().ok();
     let args = Args::parse();
-    logging::init(args.log_level.clone());
+    logging::init(args.log_level.clone(), !args.no_color);
     info!(
         "Starting {} {} (commit {})",
         env!("CARGO_PKG_NAME"),
