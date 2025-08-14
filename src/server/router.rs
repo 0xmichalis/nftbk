@@ -49,7 +49,7 @@ use crate::server::AppState;
     ),
     info(
         title = "NFT Backup API",
-        version = "0.1.0",
+        version = env!("CARGO_PKG_VERSION"),
         description = "API for backing up NFT metadata and content from EVM and Tezos NFT contracts",
         contact(
             name = "nftbk",

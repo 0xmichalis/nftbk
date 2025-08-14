@@ -10,7 +10,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use tar::Archive;
 use tokio::fs;
-use tracing::warn;
+use tracing::{debug, error, warn};
 use zip::ZipArchive;
 
 use nftbk::backup::{backup_from_config, BackupConfig, ChainConfig, TokenConfig};
@@ -438,6 +438,12 @@ async fn main() -> Result<()> {
     dotenv().ok();
     let args = Args::parse();
     logging::init(args.log_level, !args.no_color);
+    debug!(
+        "Starting {} {} (commit {})",
+        env!("CARGO_BIN_NAME"),
+        env!("CARGO_PKG_VERSION"),
+        env!("GIT_COMMIT")
+    );
 
     if args.server_mode && args.list {
         return list_server_backups(&args.server_address).await;
@@ -488,7 +494,7 @@ async fn main() -> Result<()> {
             use tokio::io::AsyncWriteExt;
             let mut file = tokio::fs::File::create(&log_path).await?;
             file.write_all(log_content.as_bytes()).await?;
-            println!("Error log written to {}", log_path.display());
+            error!("Error log written to {}", log_path.display());
         }
     }
     Ok(())

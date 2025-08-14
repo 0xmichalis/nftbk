@@ -77,7 +77,7 @@ async fn main() {
     logging::init(args.log_level.clone(), !args.no_color);
     info!(
         "Starting {} {} (commit {})",
-        env!("CARGO_PKG_NAME"),
+        env!("CARGO_BIN_NAME"),
         env!("CARGO_PKG_VERSION"),
         env!("GIT_COMMIT")
     );
