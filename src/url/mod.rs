@@ -34,6 +34,12 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
         return Some(svg_content.as_bytes().to_vec());
     }
 
+    // Handle SVG data URLs without encoding (default charset, plain text)
+    if url.starts_with("data:image/svg+xml,") {
+        let svg_content = url.trim_start_matches("data:image/svg+xml,");
+        return Some(svg_content.as_bytes().to_vec());
+    }
+
     // Handle SVG base64 data URLs
     if url.starts_with("data:image/svg+xml;base64,") {
         let b64 = url.trim_start_matches("data:image/svg+xml;base64,");
@@ -286,6 +292,13 @@ mod tests {
             String::from_utf8_lossy(&content),
             "<svg xmlns='http://www.w3.org/2000/svg'></svg>"
         );
+        // SVG plain (no encoding specified)
+        let svg_plain = "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>";
+        let content = get_data_url(svg_plain).unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&content),
+            "<svg xmlns='http://www.w3.org/2000/svg'></svg>"
+        );
     }
 
     #[test]
@@ -362,6 +375,17 @@ mod tests {
         let svg = "<svg xmlns='http://www.w3.org/2000/svg'></svg>";
         let content = get_data_url(svg).unwrap();
         assert_eq!(String::from_utf8_lossy(&content), svg);
+    }
+
+    #[test]
+    fn test_get_data_url_svg_problematic() {
+        // Test the specific SVG data URL that was failing
+        let problematic_svg = "data:image/svg+xml,<svg width='512' height='512' xmlns='http://www.w3.org/2000/svg'><style>rect{width:16px;height:16px;stroke-width:1px;stroke:#c4c4c4}.b{fill:#000}.w{fill:#fff}</style><rect x='0' y='0' class='w'/></svg>";
+        let content = get_data_url(problematic_svg).unwrap();
+        let content_str = String::from_utf8_lossy(&content);
+        assert!(content_str.starts_with("<svg width='512' height='512'"));
+        assert!(content_str.contains("xmlns='http://www.w3.org/2000/svg'"));
+        assert!(content_str.ends_with("</svg>"));
     }
 
     #[test]
