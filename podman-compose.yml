@@ -21,7 +21,13 @@ services:
     volumes:
       - ./data:/app/data
     user: "65532:65532"
-    command: ["/app/nftbk-server", "--listen-address", "0.0.0.0:8080", "--unsafe-skip-checksum-check", "true", "--base-dir", "/app/data"]
+    command: [
+      "/app/nftbk-server",
+      "--listen-address", "0.0.0.0:8080",
+      "--unsafe-skip-checksum-check", "true",
+      "--base-dir", "/app/data",
+      "--no-color", "true"
+    ]
     restart: unless-stopped
 
   caddy:
