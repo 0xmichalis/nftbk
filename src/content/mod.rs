@@ -378,7 +378,7 @@ async fn fetch_and_stream_to_file(
 
 /// Creates an HTTP error with the given status code and URL for context
 fn create_http_error(status: reqwest::StatusCode, url: &str) -> anyhow::Error {
-    anyhow::anyhow!("HTTP error: status {status} for URL: {url}")
+    anyhow::anyhow!("HTTP error: status {status} from {url}")
 }
 
 /// Single attempt to fetch and stream a URL to a file

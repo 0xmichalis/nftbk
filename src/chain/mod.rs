@@ -105,10 +105,11 @@ where
             Ok(pair) => pair,
             Err(e) => {
                 let msg = format!(
-                    "Failed to fetch metadata for {} contract {} (token ID {}): {}",
+                    "Failed to fetch metadata for {} contract {} (token ID {}) from {}: {}",
                     chain_name,
                     contract.address(),
                     contract.token_id(),
+                    token_uri,
                     e
                 );
                 if config.exit_on_error {
