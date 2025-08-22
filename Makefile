@@ -53,7 +53,7 @@ run-cli-server-test:
 	@SQLX_OFFLINE=true cargo run --bin nftbk-cli -- --tokens-config-path config_tokens_test.toml --output-path nft_backup_test --server-mode true $(filter-out $@,$(MAKECMDGOALS))
 
 .PHONY: run
-run: start-db run-server
+run: start-db migrate-db run-server
 
 .PHONY: run-server
 run-server:
@@ -76,7 +76,24 @@ migrate-db:
 	@if ! cargo sqlx --version >/dev/null 2>&1; then \
 		cargo install sqlx-cli; \
 	fi
-	sqlx migrate run
+	@echo "Attempting to run database migrations (with retry on startup errors)..."
+	@max_attempts=5; \
+	attempt=1; \
+	while [ $$attempt -le $$max_attempts ]; do \
+		echo "Migration attempt $$attempt/$$max_attempts..."; \
+		if sqlx migrate run; then \
+			echo "Database migration successful!"; \
+			break; \
+		else \
+			if [ $$attempt -eq $$max_attempts ]; then \
+				echo "Migration failed after $$max_attempts attempts"; \
+				exit 1; \
+			fi; \
+			echo "Migration failed, waiting 2 seconds before retry..."; \
+			sleep 2; \
+			attempt=$$((attempt + 1)); \
+		fi; \
+	done
 
 # Deployment-related targets
 
