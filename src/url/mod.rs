@@ -31,7 +31,7 @@ pub const IPFS_GATEWAYS: &[IpfsGatewayConfig] = &[
 ];
 
 pub fn is_data_url(url: &str) -> bool {
-    url.starts_with("data:") || is_inline_svg(url) || is_json_content(url)
+    url.starts_with("data:") || is_svg_content(url) || is_json_content(url)
 }
 
 /// Extract content from a data URL or inline SVG
@@ -41,7 +41,7 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
     }
 
     // Handle inline SVGs
-    if is_inline_svg(url) {
+    if is_svg_content(url) {
         return Some(url.as_bytes().to_vec());
     }
 
@@ -87,7 +87,7 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
     Some(data)
 }
 
-pub fn is_inline_svg(s: &str) -> bool {
+pub fn is_svg_content(s: &str) -> bool {
     s.trim_start().starts_with("<svg")
 }
 
