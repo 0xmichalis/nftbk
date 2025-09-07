@@ -471,8 +471,8 @@ async fn generate_cryptopunks_data_uri(
 /// The contract returns malformed URIs, so we construct the correct Nifty Gateway API URL
 fn generate_beeple_uri(token_id: &U256) -> String {
     // Convert token_id to string and construct the proper Nifty Gateway API URL
-    // Based on the example: https://api.niftygateway.com/beepletwoedition/100010189/
-    format!("https://api.niftygateway.com/beepletwoedition/{token_id}/")
+    // Based on the example: https://api.niftygateway.com/beeple/100010189/
+    format!("https://api.niftygateway.com/beeple/{token_id}/")
 }
 
 #[cfg(test)]
@@ -550,15 +550,13 @@ mod tests {
     fn test_generate_beeple_uri() {
         use alloy::primitives::U256;
 
-        // Test with the example token ID from the user's request
         let token_id = U256::from(100010189u64);
-        let expected_uri = "https://api.niftygateway.com/beepletwoedition/100010189/";
+        let expected_uri = "https://api.niftygateway.com/beeple/100010189/";
         let generated_uri = generate_beeple_uri(&token_id);
         assert_eq!(generated_uri, expected_uri);
 
-        // Test with a different token ID
         let token_id_2 = U256::from(12345u64);
-        let expected_uri_2 = "https://api.niftygateway.com/beepletwoedition/12345/";
+        let expected_uri_2 = "https://api.niftygateway.com/beeple/12345/";
         let generated_uri_2 = generate_beeple_uri(&token_id_2);
         assert_eq!(generated_uri_2, expected_uri_2);
     }
