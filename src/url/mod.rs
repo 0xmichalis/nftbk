@@ -74,13 +74,6 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
         return Some(svg_content.as_bytes().to_vec());
     }
 
-    // Handle SVG base64 data URLs
-    if url.starts_with("data:image/svg+xml;base64,") {
-        let b64 = url.trim_start_matches("data:image/svg+xml;base64,");
-        let data = base64::engine::general_purpose::STANDARD.decode(b64).ok()?;
-        return Some(data);
-    }
-
     // Handle base64 encoded data URLs (generic)
     let parts: Vec<&str> = url.splitn(2, "base64,").collect();
     if parts.len() != 2 {
