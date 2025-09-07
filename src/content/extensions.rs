@@ -115,3 +115,48 @@ pub async fn detect_extension_from_stream<R: tokio::io::AsyncRead + Unpin>(
     let ext = detect_media_extension(&buf[..n]);
     (ext, buf[..n].to_vec())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_detect_svg_extensions() {
+        // Test various SVG formats
+        assert_eq!(detect_media_extension(b"<svg></svg>"), Some("svg"));
+        assert_eq!(detect_media_extension(b"  <svg></svg>"), Some("svg"));
+        assert_eq!(
+            detect_media_extension(b"<?xml version=\"1.0\"?><svg></svg>"),
+            Some("svg")
+        );
+        assert_eq!(
+            detect_media_extension(b"<!DOCTYPE svg><svg></svg>"),
+            Some("svg")
+        );
+
+        // Test SVG with xmlns
+        assert_eq!(
+            detect_media_extension(b"<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"),
+            Some("svg")
+        );
+        assert_eq!(
+            detect_media_extension(b"<svg xmlns='http://www.w3.org/2000/svg'></svg>"),
+            Some("svg")
+        );
+
+        // Test SVG with viewBox
+        assert_eq!(
+            detect_media_extension(b"<svg viewBox=\"0 0 100 100\"></svg>"),
+            Some("svg")
+        );
+        assert_eq!(
+            detect_media_extension(b"<svg viewbox=\"0 0 100 100\"></svg>"),
+            Some("svg")
+        );
+
+        // Test non-SVG content
+        assert_eq!(detect_media_extension(b"<html></html>"), Some("html"));
+        assert_eq!(detect_media_extension(b"{\"test\": 123}"), Some("json"));
+        assert_eq!(detect_media_extension(b"not svg content"), None);
+    }
+}
