@@ -159,4 +159,21 @@ mod tests {
         assert_eq!(detect_media_extension(b"{\"test\": 123}"), Some("json"));
         assert_eq!(detect_media_extension(b"not svg content"), None);
     }
+
+    #[test]
+    fn test_detect_gif_extensions() {
+        // Test GIF89a format
+        assert_eq!(detect_media_extension(b"GIF89a"), Some("gif"));
+        // Test GIF87a format
+        assert_eq!(detect_media_extension(b"GIF87a"), Some("gif"));
+        // Test with additional data after header
+        assert_eq!(
+            detect_media_extension(b"GIF89a\x00\x00\x00\x00"),
+            Some("gif")
+        );
+        assert_eq!(
+            detect_media_extension(b"GIF87a\x00\x00\x00\x00"),
+            Some("gif")
+        );
+    }
 }

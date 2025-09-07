@@ -308,6 +308,21 @@ mod tests {
     }
 
     #[test]
+    fn test_get_data_url_gif() {
+        // Test GIF data URL with base64 encoding
+        let gif_data_url = "data:image/gif;base64,R0lGODlh"; // base64 encoded "GIF89a"
+        let content = get_data_url(gif_data_url).unwrap();
+        assert_eq!(content, b"GIF89a");
+
+        // Test that it's recognized as a data URL
+        assert!(is_data_url(gif_data_url));
+
+        // Test that the content can be detected as GIF by the extension detection
+        use crate::content::extensions::detect_media_extension;
+        assert_eq!(detect_media_extension(&content), Some("gif"));
+    }
+
+    #[test]
     fn test_get_last_path_segment() {
         // Standard URL with path
         assert_eq!(
