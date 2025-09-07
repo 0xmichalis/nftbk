@@ -375,6 +375,13 @@ async fn handle_special_contract_uri(
         return generate_cryptopunks_data_uri(rpc, token_id).await.map(Some);
     }
 
+    // Handle Beeple's contract on Ethereum mainnet
+    if chain_name == "ethereum"
+        && contract_address.to_lowercase() == "0xd92e44ac213b9ebda0178e1523cc0ce177b7fa96"
+    {
+        return Ok(Some(generate_beeple_uri(token_id)));
+    }
+
     // Future special contracts can be added here
     // Example:
     // if chain_name == "ethereum" && contract_address.to_lowercase() == "0x..." {
@@ -460,6 +467,14 @@ async fn generate_cryptopunks_data_uri(
     Ok(format!("data:application/json;utf8,{metadata_json}"))
 }
 
+/// Generate the proper token URI for Beeple's contract
+/// The contract returns malformed URIs, so we construct the correct Nifty Gateway API URL
+fn generate_beeple_uri(token_id: &U256) -> String {
+    // Convert token_id to string and construct the proper Nifty Gateway API URL
+    // Based on the example: https://api.niftygateway.com/beepletwoedition/100010189/
+    format!("https://api.niftygateway.com/beepletwoedition/{token_id}/")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -529,6 +544,23 @@ mod tests {
         let expected_dec_uri = "https://api.example.com/metadata/123456";
         let replaced_dec = replace_id_pattern(dec_uri, &token_id);
         assert_eq!(replaced_dec.as_deref(), Some(expected_dec_uri));
+    }
+
+    #[test]
+    fn test_generate_beeple_uri() {
+        use alloy::primitives::U256;
+
+        // Test with the example token ID from the user's request
+        let token_id = U256::from(100010189u64);
+        let expected_uri = "https://api.niftygateway.com/beepletwoedition/100010189/";
+        let generated_uri = generate_beeple_uri(&token_id);
+        assert_eq!(generated_uri, expected_uri);
+
+        // Test with a different token ID
+        let token_id_2 = U256::from(12345u64);
+        let expected_uri_2 = "https://api.niftygateway.com/beepletwoedition/12345/";
+        let generated_uri_2 = generate_beeple_uri(&token_id_2);
+        assert_eq!(generated_uri_2, expected_uri_2);
     }
 
     #[test]
