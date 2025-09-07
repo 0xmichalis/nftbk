@@ -31,7 +31,7 @@ pub const IPFS_GATEWAYS: &[IpfsGatewayConfig] = &[
 ];
 
 pub fn is_data_url(url: &str) -> bool {
-    url.starts_with("data:") || is_inline_svg(url)
+    url.starts_with("data:") || is_inline_svg(url) || is_json_content(url)
 }
 
 /// Extract content from a data URL or inline SVG
@@ -42,6 +42,11 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
 
     // Handle inline SVGs
     if is_inline_svg(url) {
+        return Some(url.as_bytes().to_vec());
+    }
+
+    // Handle JSON content
+    if is_json_content(url) {
         return Some(url.as_bytes().to_vec());
     }
 
@@ -91,6 +96,12 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
 
 pub fn is_inline_svg(s: &str) -> bool {
     s.trim_start().starts_with("<svg")
+}
+
+/// Check if the content is JSON (starts with { or [)
+pub fn is_json_content(s: &str) -> bool {
+    let trimmed = s.trim_start();
+    trimmed.starts_with('{') || trimmed.starts_with('[')
 }
 
 /// Constructs a gateway URL for the given IPFS content and gateway configuration
@@ -320,6 +331,30 @@ mod tests {
         // Test that the content can be detected as GIF by the extension detection
         use crate::content::extensions::detect_media_extension;
         assert_eq!(detect_media_extension(&content), Some("gif"));
+    }
+
+    #[test]
+    fn test_json_content_detection() {
+        // Test JSON object
+        let json_object = r#"{"name": "Test NFT", "description": "Test description"}"#;
+        assert!(is_json_content(json_object));
+        assert!(is_data_url(json_object));
+
+        let content = get_data_url(json_object).unwrap();
+        assert_eq!(content, json_object.as_bytes());
+
+        // Test JSON array
+        let json_array = r#"[{"trait_type": "artist", "value": "Test Artist"}]"#;
+        assert!(is_json_content(json_array));
+        assert!(is_data_url(json_array));
+
+        let content = get_data_url(json_array).unwrap();
+        assert_eq!(content, json_array.as_bytes());
+
+        // Test that regular URLs are not detected as JSON
+        let regular_url = "https://example.com/image.jpg";
+        assert!(!is_json_content(regular_url));
+        assert!(!is_data_url(regular_url));
     }
 
     #[test]
