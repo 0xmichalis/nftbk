@@ -94,3 +94,9 @@ cp .hooks/pre-commit .git/hooks/pre-commit
 # queries or updating existing queries in the server.
 make sqlxprepare
 ```
+
+## Donations
+
+If you find this project helpful and would like to support its development, you can make a donation in the following addresses:
+* Ethereum: `0xd2Be832911A252302bAc09e30Fc124A405E142DF` (michalis.eth)
+* Tezos: `tz1ioFzpKGdwtncBkGunkUD9Sk16NqB2vML6` (michalis.tez)
