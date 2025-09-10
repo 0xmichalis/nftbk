@@ -9,7 +9,7 @@ use tracing::{debug, error, info};
 
 use crate::server::api::{BackupRequest, BackupResponse};
 use crate::server::archive::archive_format_from_user_agent;
-use crate::server::hashing::compute_array_sha256;
+use crate::server::hashing::compute_task_id;
 use crate::server::{AppState, BackupJob, BackupJobOrShutdown};
 
 fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), String> {
@@ -56,7 +56,7 @@ pub async fn handle_backup(
             .into_response();
     }
 
-    let task_id = compute_array_sha256(&req.tokens);
+    let task_id = compute_task_id(&req.tokens, requestor.as_deref());
 
     if let Ok(Some(status)) = state.db.get_backup_status(&task_id).await {
         match status.as_str() {

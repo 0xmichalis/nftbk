@@ -4,7 +4,10 @@ use std::path::Path;
 use tokio::fs::File;
 use tokio::io::AsyncReadExt;
 
-pub fn compute_array_sha256(tokens: &[Tokens]) -> String {
+/// Compute a stable task id for a backup request, including the requestor (tenant)
+/// to avoid cross-tenant collisions. The hashing of tokens remains order-independent
+/// across chains and within each chain.
+pub fn compute_task_id(tokens: &[Tokens], requestor: Option<&str>) -> String {
     let mut chain_token_pairs = Vec::new();
     let mut sorted_tokens = tokens.to_vec();
     // Sort by chain name to ensure deterministic order
@@ -18,8 +21,13 @@ pub fn compute_array_sha256(tokens: &[Tokens]) -> String {
         }
     }
     let mut hasher = Sha256::new();
+    // Mix requestor first so same tokens under different tenants diverge
+    let req = requestor.unwrap_or("");
+    hasher.update(req.as_bytes());
+    hasher.update([0u8]); // separator
     for pair in &chain_token_pairs {
         hasher.update(pair.as_bytes());
+        hasher.update([0u8]); // separator between entries
     }
     format!("{:x}", hasher.finalize())
 }
@@ -57,8 +65,8 @@ mod tests {
         };
         let req1 = vec![t1.clone(), t2.clone()];
         let req2 = vec![t2, t1]; // different order
-        let hash1 = compute_array_sha256(&req1);
-        let hash2 = compute_array_sha256(&req2);
+        let hash1 = compute_task_id(&req1, Some("tenant"));
+        let hash2 = compute_task_id(&req2, Some("tenant"));
         assert_eq!(hash1, hash2, "Hash should be order-independent");
     }
 
@@ -72,8 +80,8 @@ mod tests {
             chain: "tezos".to_string(),
             tokens: vec!["a".to_string()],
         };
-        let hash1 = compute_array_sha256(&[t1.clone()]);
-        let hash2 = compute_array_sha256(&[t2.clone()]);
+        let hash1 = compute_task_id(&[t1.clone()], Some("tenant"));
+        let hash2 = compute_task_id(&[t2.clone()], Some("tenant"));
         assert_ne!(
             hash1, hash2,
             "Same token on different chains should have different hashes"
@@ -90,11 +98,34 @@ mod tests {
             chain: "eth".to_string(),
             tokens: vec!["a".to_string(), "b".to_string()],
         };
-        let hash1 = compute_array_sha256(&[t1]);
-        let hash2 = compute_array_sha256(&[t2]);
+        let hash1 = compute_task_id(&[t1], Some("tenant"));
+        let hash2 = compute_task_id(&[t2], Some("tenant"));
         assert_eq!(
             hash1, hash2,
             "Token order within chain should not affect hash"
         );
+    }
+
+    #[test]
+    fn test_requestor_affects_hash() {
+        let t = Tokens {
+            chain: "eth".to_string(),
+            tokens: vec!["a".to_string()],
+        };
+        let h1 = compute_task_id(&[t.clone()], Some("tenant-a"));
+        let h2 = compute_task_id(&[t], Some("tenant-b"));
+        assert_ne!(
+            h1, h2,
+            "Different requestors should yield different task ids"
+        );
+    }
+
+    #[test]
+    fn test_requestor_optional_doesnt_panic() {
+        let t = Tokens {
+            chain: "eth".to_string(),
+            tokens: vec!["a".to_string()],
+        };
+        let _ = compute_task_id(&[t], None);
     }
 }
