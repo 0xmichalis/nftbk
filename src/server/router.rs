@@ -85,8 +85,7 @@ impl utoipa::Modify for SecurityAddon {
 #[derive(Clone)]
 pub struct AuthState {
     pub app_state: AppState,
-    pub privy_verification_key: Option<String>,
-    pub privy_app_id: Option<String>,
+    pub privy_credentials: Vec<(String, String)>, // (app_id, verification_key)
 }
 
 async fn auth_middleware(
@@ -95,8 +94,7 @@ async fn auth_middleware(
     next: Next,
 ) -> impl IntoResponse {
     let state = &auth_state.app_state;
-    let privy_app_id = &auth_state.privy_app_id;
-    let privy_verification_key = &auth_state.privy_verification_key;
+    let privy_credentials = &auth_state.privy_credentials;
 
     // 1. Try symmetric token auth
     if let Some(ref token) = state.auth_token {
@@ -118,25 +116,30 @@ async fn auth_middleware(
         }
     }
 
-    // 2. Try Privy JWT auth
-    if let (Some(app_id), Some(verification_key)) =
-        (privy_app_id.as_ref(), privy_verification_key.as_ref())
-    {
+    // 2. Try Privy JWT auth (multiple credential sets)
+    if !privy_credentials.is_empty() {
         let auth_header = req
             .headers()
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
         if let Some(header_value) = auth_header {
             if let Some(jwt) = header_value.strip_prefix("Bearer ") {
-                match verify_privy_jwt(jwt, verification_key, app_id).await {
-                    Ok(claims) => {
-                        req.extensions_mut().insert(Some(claims.sub.clone()));
-                        return next.run(req).await;
-                    }
-                    Err(e) => {
-                        tracing::warn!("Privy JWT verification failed: {}", e);
+                for (app_id, verification_key) in privy_credentials.iter() {
+                    match verify_privy_jwt(jwt, verification_key, app_id).await {
+                        Ok(claims) => {
+                            req.extensions_mut().insert(Some(claims.sub.clone()));
+                            return next.run(req).await;
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                "Privy JWT verification failed for app_id {}: {}",
+                                app_id,
+                                e
+                            );
+                        }
                     }
                 }
+                tracing::warn!("Privy JWT verification failed for all configured credentials");
             }
         }
     }
@@ -150,11 +153,7 @@ async fn auth_middleware(
         .into_response()
 }
 
-pub fn build_router(
-    state: AppState,
-    privy_app_id: Option<String>,
-    privy_verification_key: Option<String>,
-) -> Router {
+pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -> Router {
     // Public router (no auth middleware)
     let public_router = Router::new()
         .route("/backup/:task_id/download", get(handle_download))
@@ -176,10 +175,9 @@ pub fn build_router(
 
     let auth_state = AuthState {
         app_state: state.clone(),
-        privy_verification_key,
-        privy_app_id,
+        privy_credentials,
     };
-    if is_defined(&state.auth_token) || is_defined(&auth_state.privy_verification_key) {
+    if is_defined(&state.auth_token) || !auth_state.privy_credentials.is_empty() {
         authed_router =
             authed_router.layer(middleware::from_fn_with_state(auth_state, auth_middleware));
     }

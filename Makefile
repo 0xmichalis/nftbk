@@ -57,7 +57,8 @@ run: start-db migrate-db run-server
 
 .PHONY: run-server
 run-server:
-	cargo run --bin nftbk-server -- --unsafe-skip-checksum-check true --backup-parallelism 2
+	@if [ -f config_privy.toml ]; then PRIVY_ARG="--privy-config config_privy.toml"; else PRIVY_ARG=""; fi; \
+		SQLX_OFFLINE=true cargo run --bin nftbk-server -- --unsafe-skip-checksum-check true --backup-parallelism 2 $$PRIVY_ARG
 
 .PHONY: start-db
 start-db:

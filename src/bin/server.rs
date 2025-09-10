@@ -67,6 +67,22 @@ struct Args {
     /// Disable colored log output
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     no_color: bool,
+
+    /// Path to a TOML file with one or more Privy credential sets
+    /// When provided, these are used in addition to any PRIVY_* env vars
+    #[arg(long)]
+    privy_config: Option<String>,
+}
+
+#[derive(serde::Deserialize, Clone, Debug)]
+struct PrivyCredential {
+    app_id: String,
+    verification_key: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PrivyFile {
+    privy: Vec<PrivyCredential>,
 }
 
 #[tokio::main]
@@ -82,10 +98,32 @@ async fn main() {
         env!("GIT_COMMIT")
     );
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
-    let privy_app_id = env::var("PRIVY_APP_ID").ok();
-    let privy_verification_key = env::var("PRIVY_VERIFICATION_KEY")
-        .ok()
-        .map(|s| s.replace("\\n", "\n"));
+
+    // Load Privy credentials from file if provided
+    let mut privy_credentials: Vec<PrivyCredential> = Vec::new();
+    if let Some(path) = &args.privy_config {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => match toml::from_str::<PrivyFile>(&contents) {
+                Ok(file) => {
+                    privy_credentials = file
+                        .privy
+                        .into_iter()
+                        .map(|mut c| {
+                            // Allow \n escaping in inline keys if users choose to
+                            c.verification_key = c.verification_key.replace("\\n", "\n");
+                            c
+                        })
+                        .collect();
+                }
+                Err(e) => {
+                    tracing::error!("Failed to parse Privy config file '{}': {}", path, e);
+                }
+            },
+            Err(e) => {
+                tracing::error!("Failed to read Privy config file '{}': {}", path, e);
+            }
+        }
+    }
 
     let (backup_job_sender, backup_job_receiver) =
         mpsc::channel::<BackupJobOrShutdown>(args.backup_queue_size);
@@ -112,8 +150,9 @@ async fn main() {
         is_defined(&auth_token)
     );
     info!(
-        "Privy JWT authentication enabled: {}",
-        is_defined(&privy_app_id) && is_defined(&privy_verification_key)
+        "Privy JWT authentication enabled: {} ({} credential set(s))",
+        !privy_credentials.is_empty(),
+        privy_credentials.len()
     );
 
     // Spawn worker pool for backup jobs
@@ -165,7 +204,13 @@ async fn main() {
     // Start the server
     let addr: SocketAddr = args.listen_address.parse().expect("Invalid listen address");
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    let app = build_router(state.clone(), privy_app_id, privy_verification_key);
+    let app = build_router(
+        state.clone(),
+        privy_credentials
+            .into_iter()
+            .map(|c| (c.app_id, c.verification_key))
+            .collect(),
+    );
     info!("Listening on {}", addr);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal)

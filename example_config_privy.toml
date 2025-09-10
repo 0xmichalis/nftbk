@@ -1,0 +1,8 @@
+[[privy]]
+app_id = "your_app_id_here"
+# Use \n to encode newlines if storing on one line (e.g. in env files)
+verification_key = "-----BEGIN PUBLIC KEY-----\nMIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQB...\n-----END PUBLIC KEY-----\n"
+
+[[privy]]
+app_id = "another_app_id"
+verification_key = "-----BEGIN PUBLIC KEY-----\nMIGbMBAGByqGSM49AgEGBSuBBAAjA4GGAAQB...\n-----END PUBLIC KEY-----\n"

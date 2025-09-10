@@ -31,7 +31,21 @@ USERNAME=michalis \
 
 ### Privy support
 
-The server supports authenticating Privy JWT tokens, if both a `PRIVY_APP_ID` and a `PRIVY_VERIFICATION_KEY` are provided in its environment. For the key, set `\n` as newlines so the  key can be set within a single line to work around a limitation in multine support that the latest released `dotenv` version has.
+The server supports authenticating Privy JWT tokens using a TOML configuration file containing one or more credential sets, passed via the `--privy-config` flag.
+
+Example `config_privy.toml` (multiple `[[privy]]` tables):
+
+```toml
+[[privy]]
+app_id = "app_xxxxx"
+verification_key = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
+
+[[privy]]
+app_id = "app_yyyyy"
+verification_key = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
+```
+
+All credential sets in the file are considered valid and tried during authentication.
 
 ## Run
 
