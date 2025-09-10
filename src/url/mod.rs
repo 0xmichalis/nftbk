@@ -50,28 +50,17 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
         return Some(url.as_bytes().to_vec());
     }
 
-    // Handle JSON data URLs
-    if url.starts_with("data:application/json;utf8,") {
-        let json_content = url.trim_start_matches("data:application/json;utf8,");
-        return Some(json_content.as_bytes().to_vec());
-    }
-
-    // Handle text/plain utf8 data URLs (not base64)
-    if url.starts_with("data:text/plain,") {
-        let text_content = url.trim_start_matches("data:text/plain,");
-        return Some(text_content.as_bytes().to_vec());
-    }
-
-    // Handle SVG utf8 data URLs
-    if url.starts_with("data:image/svg+xml;utf8,") {
-        let svg_content = url.trim_start_matches("data:image/svg+xml;utf8,");
-        return Some(svg_content.as_bytes().to_vec());
-    }
-
-    // Handle SVG data URLs without encoding (default charset, plain text)
-    if url.starts_with("data:image/svg+xml,") {
-        let svg_content = url.trim_start_matches("data:image/svg+xml,");
-        return Some(svg_content.as_bytes().to_vec());
+    // Handle common non-base64 data URL prefixes via a single loop
+    const NON_BASE64_PREFIXES: &[&str] = &[
+        "data:application/json;utf8,",
+        "data:text/plain,",
+        "data:image/svg+xml;utf8,",
+        "data:image/svg+xml,",
+    ];
+    for prefix in NON_BASE64_PREFIXES {
+        if url.starts_with(prefix) {
+            return decode_after_prefix(url, prefix);
+        }
     }
 
     // Handle base64 encoded data URLs (generic)
@@ -85,6 +74,17 @@ pub fn get_data_url(url: &str) -> Option<Vec<u8>> {
         .ok()?;
 
     Some(data)
+}
+
+/// Attempts to percent-decode the substring after a given prefix.
+/// Falls back to raw bytes if decoding fails.
+fn decode_after_prefix(url: &str, prefix: &str) -> Option<Vec<u8>> {
+    let content = url.strip_prefix(prefix)?;
+    if let Ok(decoded) = urlencoding::decode(content) {
+        Some(decoded.into_owned().into_bytes())
+    } else {
+        Some(content.as_bytes().to_vec())
+    }
 }
 
 pub fn is_svg_content(s: &str) -> bool {
