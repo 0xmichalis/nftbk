@@ -62,17 +62,17 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
 
     async fn fetch_metadata(
         &self,
-        token_uri: &str,
         token: &Self::ContractTokenId,
         output_path: &std::path::Path,
     ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)> {
+        let token_uri = self.get_uri(token).await?;
         debug!(
             "Fetching metadata from {} for contract {}",
             token_uri,
             token.address()
         );
         let metadata_content = fetch_and_save_content(
-            token_uri,
+            &token_uri,
             &self.chain_name,
             &token.address,
             &token.token_id,

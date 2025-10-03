@@ -37,9 +37,9 @@ pub trait NFTChainProcessor {
     fn chain_name(&self) -> &str;
 
     /// Fetch the metadata JSON for a given contract/token.
+    /// Implementations should resolve the token URI internally.
     async fn fetch_metadata(
         &self,
-        token_uri: &str,
         contract: &Self::ContractTokenId,
         output_path: &std::path::Path,
     ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)>;
@@ -74,37 +74,14 @@ where
             token.address(),
             token.token_id()
         );
-        let token_uri = match processor.get_uri(&token).await {
-            Ok(uri) => uri,
-            Err(e) => {
-                let msg = format!(
-                    "Failed to get token URI for {} contract {} (token ID {}): {}",
-                    processor.chain_name(),
-                    token.address(),
-                    token.token_id(),
-                    e
-                );
-                if config.exit_on_error {
-                    return Err(anyhow!(msg));
-                }
-                error!("{}", msg);
-                errors.push(msg);
-                continue;
-            }
-        };
-
-        let (metadata, metadata_path) = match processor
-            .fetch_metadata(&token_uri, &token, output_path)
-            .await
-        {
+        let (metadata, metadata_path) = match processor.fetch_metadata(&token, output_path).await {
             Ok(pair) => pair,
             Err(e) => {
                 let msg = format!(
-                    "Failed to fetch metadata for {} contract {} (token ID {}) from {}: {}",
+                    "Failed to fetch metadata for {} contract {} (token ID {}): {}",
                     processor.chain_name(),
                     token.address(),
                     token.token_id(),
-                    token_uri,
                     e
                 );
                 if config.exit_on_error {
