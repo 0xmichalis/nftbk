@@ -8,7 +8,7 @@ use std::time::Instant;
 use tokio::fs;
 use tracing::{info, warn, Instrument};
 
-use crate::chain::common::ContractWithToken;
+use crate::chain::common::ContractTokenId;
 use crate::chain::evm::EvmChainProcessor;
 use crate::chain::process_nfts;
 use crate::chain::tezos::TezosChainProcessor;
@@ -93,28 +93,24 @@ pub mod backup {
             let mut all_files = Vec::new();
             let mut all_errors = Vec::new();
             let mut nft_count = 0;
-            for (chain_name, contracts) in &token_config.chains {
-                if contracts.is_empty() {
-                    warn!("No contracts configured for chain {}", chain_name);
+            for (chain_name, tokens) in &token_config.chains {
+                if tokens.is_empty() {
+                    warn!("No tokens configured for chain {}", chain_name);
                     continue;
                 }
-                info!(
-                    "Processing {} contracts on {} ...",
-                    contracts.len(),
-                    chain_name
-                );
+                info!("Processing {} tokens on {} ...", tokens.len(), chain_name);
                 let rpc_url = chain_config
                     .get(chain_name)
                     .context(format!("No RPC URL configured for chain {chain_name}"))?;
-                let contracts = ContractWithToken::parse_contracts(contracts);
-                nft_count += contracts.len();
+                let tokens = ContractTokenId::parse_tokens(tokens);
+                nft_count += tokens.len();
 
                 let (files, errors) = if chain_name == "tezos" {
                     let processor = Arc::new(TezosChainProcessor::new(chain_name, rpc_url)?);
                     let process_config = cfg.process_config.clone();
                     process_nfts(
                         processor,
-                        contracts,
+                        tokens,
                         &output_path,
                         process_config,
                         |metadata| metadata.artifact_uri.as_deref(),
@@ -125,7 +121,7 @@ pub mod backup {
                     let process_config = cfg.process_config.clone();
                     process_nfts(
                         processor,
-                        contracts,
+                        tokens,
                         &output_path,
                         process_config,
                         |_metadata| None,

@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::debug;
 
-use crate::chain::common::{ContractWithToken, NFTAttribute};
+use crate::chain::common::{ContractTokenId, NFTAttribute};
 use crate::chain::ContractTokenInfo;
 use crate::content::{fetch_and_save_content, Options};
 
@@ -165,7 +165,7 @@ impl EvmChainProcessor {
 #[async_trait::async_trait]
 impl crate::chain::NFTChainProcessor for EvmChainProcessor {
     type Metadata = NFTMetadata;
-    type ContractWithToken = ContractWithToken;
+    type ContractTokenId = ContractTokenId;
     type RpcClient = alloy::providers::RootProvider<Http<Client>>;
 
     fn chain_name(&self) -> &str {
@@ -175,20 +175,20 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
     async fn fetch_metadata(
         &self,
         token_uri: &str,
-        contract: &Self::ContractWithToken,
+        token: &Self::ContractTokenId,
         output_path: &std::path::Path,
         chain_name: &str,
     ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)> {
         debug!(
             "Fetching metadata from {} for contract {}",
             token_uri,
-            contract.address()
+            token.address()
         );
         let metadata_content = fetch_and_save_content(
             token_uri,
             chain_name,
-            &contract.address,
-            &contract.token_id,
+            &token.address,
+            &token.token_id,
             output_path,
             Options {
                 overriden_filename: Some("metadata.json".to_string()),
@@ -309,19 +309,19 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         urls_to_download
     }
 
-    async fn get_uri(&self, contract: &Self::ContractWithToken) -> anyhow::Result<String> {
-        let contract_addr = contract.address().parse::<Address>()?;
-        let token_id = U256::from_str_radix(contract.token_id(), 10)?;
+    async fn get_uri(&self, token: &Self::ContractTokenId) -> anyhow::Result<String> {
+        let token_addr = token.address().parse::<Address>()?;
+        let token_id = U256::from_str_radix(token.token_id(), 10)?;
 
         // Check for special contract handling first
         if let Some(special_uri) =
-            handle_special_contract_uri(&self.rpc, &self.chain_name, contract.address(), &token_id)
+            handle_special_contract_uri(&self.rpc, &self.chain_name, token.address(), &token_id)
                 .await?
         {
             return Ok(special_uri);
         }
 
-        let nft = INFT::new(contract_addr, &self.rpc);
+        let nft = INFT::new(token_addr, &self.rpc);
 
         let uri = match try_call_contract(|| {
             let nft = nft.clone();
@@ -380,26 +380,26 @@ fn replace_id_pattern(uri: &str, token_id: &U256) -> Option<String> {
 async fn handle_special_contract_uri(
     rpc: &alloy::providers::RootProvider<Http<Client>>,
     chain_name: &str,
-    contract_address: &str,
+    token_address: &str,
     token_id: &U256,
 ) -> anyhow::Result<Option<String>> {
     // Handle CryptoPunks on Ethereum mainnet
     if chain_name == "ethereum"
-        && contract_address.to_lowercase() == "0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb"
+        && token_address.to_lowercase() == "0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb"
     {
         return generate_cryptopunks_data_uri(rpc, token_id).await.map(Some);
     }
 
     // Handle Beeple's contract on Ethereum mainnet
     if chain_name == "ethereum"
-        && contract_address.to_lowercase() == "0xd92e44ac213b9ebda0178e1523cc0ce177b7fa96"
+        && token_address.to_lowercase() == "0xd92e44ac213b9ebda0178e1523cc0ce177b7fa96"
     {
         return Ok(Some(generate_beeple_uri(token_id)));
     }
 
     // Future special contracts can be added here
     // Example:
-    // if chain_name == "ethereum" && contract_address.to_lowercase() == "0x..." {
+    // if chain_name == "ethereum" && token_address.to_lowercase() == "0x..." {
     //     return handle_other_special_contract(rpc, token_id).await.map(Some);
     // }
 

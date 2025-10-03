@@ -6,12 +6,12 @@ pub trait ContractTokenInfo {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ContractWithToken {
+pub struct ContractTokenId {
     pub address: String,
     pub token_id: String,
 }
 
-impl ContractTokenInfo for ContractWithToken {
+impl ContractTokenInfo for ContractTokenId {
     fn address(&self) -> &str {
         &self.address
     }
@@ -20,13 +20,13 @@ impl ContractTokenInfo for ContractWithToken {
     }
 }
 
-impl ContractWithToken {
-    pub fn parse_contracts(contracts: &[String]) -> Vec<Self> {
-        contracts
+impl ContractTokenId {
+    pub fn parse_tokens(tokens: &[String]) -> Vec<Self> {
+        tokens
             .iter()
             .map(|s| {
                 let parts: Vec<&str> = s.split(':').collect();
-                ContractWithToken {
+                ContractTokenId {
                     address: parts[0].to_string(),
                     token_id: parts[1].to_string(),
                 }

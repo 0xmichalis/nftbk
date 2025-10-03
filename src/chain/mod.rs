@@ -30,7 +30,7 @@ fn check_shutdown_signal(config: &crate::ProcessManagementConfig) -> anyhow::Res
 #[async_trait]
 pub trait NFTChainProcessor {
     type Metadata;
-    type ContractWithToken: ContractTokenInfo + Send + Sync;
+    type ContractTokenId: ContractTokenInfo + Send + Sync;
     type RpcClient: Send + Sync;
 
     /// The name of the chain for logging and routing.
@@ -40,7 +40,7 @@ pub trait NFTChainProcessor {
     async fn fetch_metadata(
         &self,
         token_uri: &str,
-        contract: &Self::ContractWithToken,
+        contract: &Self::ContractTokenId,
         output_path: &std::path::Path,
         chain_name: &str,
     ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)>;
@@ -49,40 +49,40 @@ pub trait NFTChainProcessor {
     fn collect_urls(metadata: &Self::Metadata) -> Vec<(String, Options)>;
 
     /// Get the token URI for a contract using the chain's RPC client.
-    async fn get_uri(&self, contract: &Self::ContractWithToken) -> anyhow::Result<String>;
+    async fn get_uri(&self, contract: &Self::ContractTokenId) -> anyhow::Result<String>;
 }
 
 pub async fn process_nfts<C, FExtraUri>(
     processor: std::sync::Arc<C>,
-    contracts: Vec<C::ContractWithToken>,
+    tokens: Vec<C::ContractTokenId>,
     output_path: &Path,
     config: crate::ProcessManagementConfig,
     get_extra_content_uri: FExtraUri,
 ) -> anyhow::Result<(Vec<std::path::PathBuf>, Vec<String>)>
 where
     C: NFTChainProcessor + Sync + Send + 'static,
-    C::ContractWithToken: ContractTokenInfo,
+    C::ContractTokenId: ContractTokenInfo,
     FExtraUri: Fn(&C::Metadata) -> Option<&str>,
 {
     let mut all_files = Vec::new();
     let mut errors = Vec::new();
-    for contract in contracts {
+    for token in tokens {
         check_shutdown_signal(&config)?;
 
         debug!(
             "Processing {} contract {} (token ID {})",
             processor.chain_name(),
-            contract.address(),
-            contract.token_id()
+            token.address(),
+            token.token_id()
         );
-        let token_uri = match processor.get_uri(&contract).await {
+        let token_uri = match processor.get_uri(&token).await {
             Ok(uri) => uri,
             Err(e) => {
                 let msg = format!(
                     "Failed to get token URI for {} contract {} (token ID {}): {}",
                     processor.chain_name(),
-                    contract.address(),
-                    contract.token_id(),
+                    token.address(),
+                    token.token_id(),
                     e
                 );
                 if config.exit_on_error {
@@ -95,7 +95,7 @@ where
         };
 
         let (metadata, metadata_path) = match processor
-            .fetch_metadata(&token_uri, &contract, output_path, processor.chain_name())
+            .fetch_metadata(&token_uri, &token, output_path, processor.chain_name())
             .await
         {
             Ok(pair) => pair,
@@ -103,8 +103,8 @@ where
                 let msg = format!(
                     "Failed to fetch metadata for {} contract {} (token ID {}) from {}: {}",
                     processor.chain_name(),
-                    contract.address(),
-                    contract.token_id(),
+                    token.address(),
+                    token.token_id(),
                     token_uri,
                     e
                 );
@@ -136,8 +136,8 @@ where
             match fetch_and_save_content(
                 &url,
                 processor.chain_name(),
-                contract.address(),
-                contract.token_id(),
+                token.address(),
+                token.token_id(),
                 output_path,
                 opts,
             )
@@ -154,8 +154,8 @@ where
                         "Failed to fetch {} for {} contract {} (token ID {}): {}",
                         name_for_log,
                         processor.chain_name(),
-                        contract.address(),
-                        contract.token_id(),
+                        token.address(),
+                        token.token_id(),
                         e
                     );
                     if config.exit_on_error {
@@ -170,8 +170,8 @@ where
         // Fetch extra content if needed
         match fetch_and_save_extra_content(
             processor.chain_name(),
-            contract.address(),
-            contract.token_id(),
+            token.address(),
+            token.token_id(),
             output_path,
             get_extra_content_uri(&metadata),
         )
@@ -184,8 +184,8 @@ where
                 let msg = format!(
                     "Failed to fetch extra content for {} contract {} (token ID {}): {}",
                     processor.chain_name(),
-                    contract.address(),
-                    contract.token_id(),
+                    token.address(),
+                    token.token_id(),
                     e
                 );
                 if config.exit_on_error {

@@ -8,7 +8,7 @@ use tezos_rpc::client::TezosRpc;
 use tezos_rpc::http::default::HttpClient;
 use tracing::debug;
 
-use crate::chain::common::ContractWithToken;
+use crate::chain::common::ContractTokenId;
 use crate::chain::ContractTokenInfo;
 use crate::content::fetch_and_save_content;
 use crate::content::Options;
@@ -53,7 +53,7 @@ impl TezosChainProcessor {
 #[async_trait::async_trait]
 impl crate::chain::NFTChainProcessor for TezosChainProcessor {
     type Metadata = NFTMetadata;
-    type ContractWithToken = ContractWithToken;
+    type ContractTokenId = ContractTokenId;
     type RpcClient = tezos_rpc::client::TezosRpc<tezos_rpc::http::default::HttpClient>;
 
     fn chain_name(&self) -> &str {
@@ -63,20 +63,20 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
     async fn fetch_metadata(
         &self,
         token_uri: &str,
-        contract: &Self::ContractWithToken,
+        token: &Self::ContractTokenId,
         output_path: &std::path::Path,
         chain_name: &str,
     ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)> {
         debug!(
             "Fetching metadata from {} for contract {}",
             token_uri,
-            contract.address()
+            token.address()
         );
         let metadata_content = fetch_and_save_content(
             token_uri,
             chain_name,
-            &contract.address,
-            &contract.token_id,
+            &token.address,
+            &token.token_id,
             output_path,
             Options {
                 overriden_filename: Some("metadata.json".to_string()),
@@ -140,17 +140,17 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         urls_to_download
     }
 
-    async fn get_uri(&self, contract: &Self::ContractWithToken) -> anyhow::Result<String> {
+    async fn get_uri(&self, token: &Self::ContractTokenId) -> anyhow::Result<String> {
         let nft_contract = self
             .rpc
-            .contract_at(contract.address.clone().try_into()?, None)
+            .contract_at(token.address.clone().try_into()?, None)
             .await?;
         let token_metadata = nft_contract
             .storage()
             .big_maps()
             .get_by_name("token_metadata")
             .ok_or_else(|| anyhow::anyhow!("Contract does not have token_metadata big map"))?;
-        let token_id = Int::from(&contract.token_id)?;
+        let token_id = Int::from(&token.token_id)?;
         let token_id_michelson = data::int(token_id);
         let value = token_metadata
             .get_value(&self.rpc, token_id_michelson, None)
