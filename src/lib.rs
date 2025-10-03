@@ -110,10 +110,7 @@ pub mod backup {
                 nft_count += contracts.len();
 
                 let (files, errors) = if chain_name == "tezos" {
-                    let processor = Arc::new(TezosChainProcessor {
-                        rpc_url: rpc_url.to_string(),
-                        chain_name: chain_name.to_string(),
-                    });
+                    let processor = Arc::new(TezosChainProcessor::new(chain_name, rpc_url)?);
                     let process_config = cfg.process_config.clone();
                     process_nfts(
                         processor,
@@ -124,10 +121,7 @@ pub mod backup {
                     )
                     .await?
                 } else {
-                    let processor = Arc::new(EvmChainProcessor {
-                        rpc_url: rpc_url.to_string(),
-                        chain_name: chain_name.to_string(),
-                    });
+                    let processor = Arc::new(EvmChainProcessor::new(chain_name, rpc_url)?);
                     let process_config = cfg.process_config.clone();
                     process_nfts(
                         processor,

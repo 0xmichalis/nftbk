@@ -36,8 +36,18 @@ pub struct NFTFormat {
 }
 
 pub struct TezosChainProcessor {
-    pub rpc_url: String,
+    pub rpc: TezosRpc<HttpClient>,
     pub chain_name: String,
+}
+
+impl TezosChainProcessor {
+    pub fn new(chain_name: impl Into<String>, rpc_url: &str) -> anyhow::Result<Self> {
+        let rpc = TezosRpc::<HttpClient>::new(rpc_url.to_string());
+        Ok(Self {
+            rpc,
+            chain_name: chain_name.into(),
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -48,10 +58,6 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
 
     fn chain_name(&self) -> &str {
         &self.chain_name
-    }
-
-    fn build_rpc_client(&self) -> anyhow::Result<Self::RpcClient> {
-        Ok(TezosRpc::<HttpClient>::new(self.rpc_url.to_string()))
     }
 
     async fn fetch_metadata(
@@ -134,12 +140,9 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         urls_to_download
     }
 
-    async fn get_uri(
-        &self,
-        rpc: &Self::RpcClient,
-        contract: &Self::ContractWithToken,
-    ) -> anyhow::Result<String> {
-        let nft_contract = rpc
+    async fn get_uri(&self, contract: &Self::ContractWithToken) -> anyhow::Result<String> {
+        let nft_contract = self
+            .rpc
             .contract_at(contract.address.clone().try_into()?, None)
             .await?;
         let token_metadata = nft_contract
@@ -150,7 +153,7 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         let token_id = Int::from(&contract.token_id)?;
         let token_id_michelson = data::int(token_id);
         let value = token_metadata
-            .get_value(rpc, token_id_michelson, None)
+            .get_value(&self.rpc, token_id_michelson, None)
             .await?;
 
         // Convert to JSON to access the raw hex string
