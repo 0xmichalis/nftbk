@@ -16,6 +16,7 @@ use crate::chain::tezos::TezosChainProcessor;
 pub mod chain;
 pub mod content;
 pub mod envvar;
+pub mod ipfs;
 pub mod logging;
 pub mod prune;
 pub mod server;
