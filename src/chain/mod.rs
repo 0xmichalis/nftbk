@@ -33,8 +33,11 @@ pub trait NFTChainProcessor {
     type ContractWithToken: ContractTokenInfo + Send + Sync;
     type RpcClient: Send + Sync;
 
-    /// Build the chain-specific RPC client from the given URL.
-    fn build_rpc_client(&self, rpc_url: &str) -> anyhow::Result<Self::RpcClient>;
+    /// The name of the chain for logging and routing.
+    fn chain_name(&self) -> &str;
+
+    /// Build the chain-specific RPC client using internal configuration.
+    fn build_rpc_client(&self) -> anyhow::Result<Self::RpcClient>;
 
     /// Fetch the metadata JSON for a given contract/token.
     async fn fetch_metadata(
@@ -53,16 +56,13 @@ pub trait NFTChainProcessor {
         &self,
         rpc: &Self::RpcClient,
         contract: &Self::ContractWithToken,
-        chain_name: &str,
     ) -> anyhow::Result<String>;
 }
 
 pub async fn process_nfts<C, FExtraUri>(
     processor: std::sync::Arc<C>,
-    rpc_url: &str,
     contracts: Vec<C::ContractWithToken>,
     output_path: &Path,
-    chain_name: &str,
     config: crate::ProcessManagementConfig,
     get_extra_content_uri: FExtraUri,
 ) -> anyhow::Result<(Vec<std::path::PathBuf>, Vec<String>)>
@@ -73,12 +73,12 @@ where
 {
     let mut all_files = Vec::new();
     let mut errors = Vec::new();
-    let provider = match processor.build_rpc_client(rpc_url) {
+    let provider = match processor.build_rpc_client() {
         Ok(p) => std::sync::Arc::new(p),
         Err(e) => {
             return Err(anyhow::anyhow!(
                 "Failed to build RPC client for {}: {}",
-                chain_name,
+                processor.chain_name(),
                 e
             ))
         }
@@ -88,16 +88,16 @@ where
 
         debug!(
             "Processing {} contract {} (token ID {})",
-            chain_name,
+            processor.chain_name(),
             contract.address(),
             contract.token_id()
         );
-        let token_uri = match processor.get_uri(&provider, &contract, chain_name).await {
+        let token_uri = match processor.get_uri(&provider, &contract).await {
             Ok(uri) => uri,
             Err(e) => {
                 let msg = format!(
                     "Failed to get token URI for {} contract {} (token ID {}): {}",
-                    chain_name,
+                    processor.chain_name(),
                     contract.address(),
                     contract.token_id(),
                     e
@@ -112,14 +112,14 @@ where
         };
 
         let (metadata, metadata_path) = match processor
-            .fetch_metadata(&token_uri, &contract, output_path, chain_name)
+            .fetch_metadata(&token_uri, &contract, output_path, processor.chain_name())
             .await
         {
             Ok(pair) => pair,
             Err(e) => {
                 let msg = format!(
                     "Failed to fetch metadata for {} contract {} (token ID {}) from {}: {}",
-                    chain_name,
+                    processor.chain_name(),
                     contract.address(),
                     contract.token_id(),
                     token_uri,
@@ -152,7 +152,7 @@ where
             let opts_for_log = opts.clone();
             match fetch_and_save_content(
                 &url,
-                chain_name,
+                processor.chain_name(),
                 contract.address(),
                 contract.token_id(),
                 output_path,
@@ -170,7 +170,7 @@ where
                     let msg = format!(
                         "Failed to fetch {} for {} contract {} (token ID {}): {}",
                         name_for_log,
-                        chain_name,
+                        processor.chain_name(),
                         contract.address(),
                         contract.token_id(),
                         e
@@ -186,7 +186,7 @@ where
 
         // Fetch extra content if needed
         match fetch_and_save_extra_content(
-            chain_name,
+            processor.chain_name(),
             contract.address(),
             contract.token_id(),
             output_path,
@@ -200,7 +200,7 @@ where
             Err(e) => {
                 let msg = format!(
                     "Failed to fetch extra content for {} contract {} (token ID {}): {}",
-                    chain_name,
+                    processor.chain_name(),
                     contract.address(),
                     contract.token_id(),
                     e

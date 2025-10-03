@@ -147,7 +147,10 @@ where
     }
 }
 
-pub struct EvmChainProcessor;
+pub struct EvmChainProcessor {
+    pub rpc_url: String,
+    pub chain_name: String,
+}
 
 #[async_trait::async_trait]
 impl crate::chain::NFTChainProcessor for EvmChainProcessor {
@@ -155,8 +158,12 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
     type ContractWithToken = ContractWithToken;
     type RpcClient = alloy::providers::RootProvider<Http<Client>>;
 
-    fn build_rpc_client(&self, rpc_url: &str) -> anyhow::Result<Self::RpcClient> {
-        Ok(ProviderBuilder::new().on_http(rpc_url.parse()?))
+    fn chain_name(&self) -> &str {
+        &self.chain_name
+    }
+
+    fn build_rpc_client(&self) -> anyhow::Result<Self::RpcClient> {
+        Ok(ProviderBuilder::new().on_http(self.rpc_url.parse()?))
     }
 
     async fn fetch_metadata(
@@ -300,14 +307,14 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         &self,
         rpc: &Self::RpcClient,
         contract: &Self::ContractWithToken,
-        chain_name: &str,
     ) -> anyhow::Result<String> {
         let contract_addr = contract.address().parse::<Address>()?;
         let token_id = U256::from_str_radix(contract.token_id(), 10)?;
 
         // Check for special contract handling first
         if let Some(special_uri) =
-            handle_special_contract_uri(rpc, chain_name, contract.address(), &token_id).await?
+            handle_special_contract_uri(rpc, &self.chain_name, contract.address(), &token_id)
+                .await?
         {
             return Ok(special_uri);
         }

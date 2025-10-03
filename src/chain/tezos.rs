@@ -35,7 +35,10 @@ pub struct NFTFormat {
     pub file_name: String,
 }
 
-pub struct TezosChainProcessor;
+pub struct TezosChainProcessor {
+    pub rpc_url: String,
+    pub chain_name: String,
+}
 
 #[async_trait::async_trait]
 impl crate::chain::NFTChainProcessor for TezosChainProcessor {
@@ -43,8 +46,12 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
     type ContractWithToken = ContractWithToken;
     type RpcClient = tezos_rpc::client::TezosRpc<tezos_rpc::http::default::HttpClient>;
 
-    fn build_rpc_client(&self, rpc_url: &str) -> anyhow::Result<Self::RpcClient> {
-        Ok(TezosRpc::<HttpClient>::new(rpc_url.to_string()))
+    fn chain_name(&self) -> &str {
+        &self.chain_name
+    }
+
+    fn build_rpc_client(&self) -> anyhow::Result<Self::RpcClient> {
+        Ok(TezosRpc::<HttpClient>::new(self.rpc_url.to_string()))
     }
 
     async fn fetch_metadata(
@@ -131,7 +138,6 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         &self,
         rpc: &Self::RpcClient,
         contract: &Self::ContractWithToken,
-        _chain_name: &str,
     ) -> anyhow::Result<String> {
         let nft_contract = rpc
             .contract_at(contract.address.clone().try_into()?, None)
