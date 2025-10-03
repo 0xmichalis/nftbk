@@ -1,4 +1,3 @@
-use alloy::providers::ProviderBuilder;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -6,8 +5,6 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
-use tezos_rpc::client::TezosRpc;
-use tezos_rpc::http::default::HttpClient;
 use tokio::fs;
 use tracing::{info, warn, Instrument};
 
@@ -114,11 +111,10 @@ pub mod backup {
 
                 let (files, errors) = if chain_name == "tezos" {
                     let processor = Arc::new(TezosChainProcessor);
-                    let provider = Arc::new(TezosRpc::<HttpClient>::new(rpc_url.to_string()));
                     let config = cfg.process_config.clone();
                     process_nfts(
                         processor,
-                        provider,
+                        rpc_url,
                         contracts,
                         &output_path,
                         chain_name,
@@ -128,12 +124,10 @@ pub mod backup {
                     .await?
                 } else {
                     let processor = Arc::new(EvmChainProcessor);
-                    let provider =
-                        Arc::new(ProviderBuilder::new().on_http(rpc_url.parse().unwrap()));
                     let config = cfg.process_config.clone();
                     process_nfts(
                         processor,
-                        provider,
+                        rpc_url,
                         contracts,
                         &output_path,
                         chain_name,

@@ -1,9 +1,11 @@
 use alloy::{
     contract::Error,
     primitives::{Address, U256},
+    providers::ProviderBuilder,
     sol,
     transports::http::{Client, Http},
 };
+
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -152,6 +154,10 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
     type Metadata = NFTMetadata;
     type ContractWithToken = ContractWithToken;
     type RpcClient = alloy::providers::RootProvider<Http<Client>>;
+
+    fn build_rpc_client(&self, rpc_url: &str) -> anyhow::Result<Self::RpcClient> {
+        Ok(ProviderBuilder::new().on_http(rpc_url.parse()?))
+    }
 
     async fn fetch_metadata(
         &self,

@@ -4,6 +4,8 @@ use std::convert::TryInto;
 use tezos_contract::ContractFetcher;
 use tezos_core::types::number::Int;
 use tezos_michelson::michelson::data;
+use tezos_rpc::client::TezosRpc;
+use tezos_rpc::http::default::HttpClient;
 use tracing::debug;
 
 use crate::chain::common::ContractWithToken;
@@ -40,6 +42,10 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
     type Metadata = NFTMetadata;
     type ContractWithToken = ContractWithToken;
     type RpcClient = tezos_rpc::client::TezosRpc<tezos_rpc::http::default::HttpClient>;
+
+    fn build_rpc_client(&self, rpc_url: &str) -> anyhow::Result<Self::RpcClient> {
+        Ok(TezosRpc::<HttpClient>::new(rpc_url.to_string()))
+    }
 
     async fn fetch_metadata(
         &self,

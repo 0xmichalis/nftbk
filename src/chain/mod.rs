@@ -33,6 +33,9 @@ pub trait NFTChainProcessor {
     type ContractWithToken: ContractTokenInfo + Send + Sync;
     type RpcClient: Send + Sync;
 
+    /// Build the chain-specific RPC client from the given URL.
+    fn build_rpc_client(&self, rpc_url: &str) -> anyhow::Result<Self::RpcClient>;
+
     /// Fetch the metadata JSON for a given contract/token.
     async fn fetch_metadata(
         &self,
@@ -56,7 +59,7 @@ pub trait NFTChainProcessor {
 
 pub async fn process_nfts<C, FExtraUri>(
     processor: std::sync::Arc<C>,
-    provider: std::sync::Arc<C::RpcClient>,
+    rpc_url: &str,
     contracts: Vec<C::ContractWithToken>,
     output_path: &Path,
     chain_name: &str,
@@ -70,6 +73,16 @@ where
 {
     let mut all_files = Vec::new();
     let mut errors = Vec::new();
+    let provider = match processor.build_rpc_client(rpc_url) {
+        Ok(p) => std::sync::Arc::new(p),
+        Err(e) => {
+            return Err(anyhow::anyhow!(
+                "Failed to build RPC client for {}: {}",
+                chain_name,
+                e
+            ))
+        }
+    };
     for contract in contracts {
         check_shutdown_signal(&config)?;
 
