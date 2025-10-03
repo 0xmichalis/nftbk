@@ -72,6 +72,10 @@ struct Args {
     /// When provided, these are used in addition to any PRIVY_* env vars
     #[arg(long)]
     privy_config: Option<String>,
+
+    /// IPFS pinning service base URL (enables IPFS pinning when provided)
+    #[arg(long)]
+    ipfs_pin_url: Option<String>,
 }
 
 #[derive(serde::Deserialize, Clone, Debug)]
@@ -141,6 +145,7 @@ async fn main() {
         &db_url,
         (args.backup_queue_size + 1) as u32,
         shutdown_flag.clone(),
+        args.ipfs_pin_url.clone(),
     )
     .await;
 

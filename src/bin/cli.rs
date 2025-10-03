@@ -19,7 +19,7 @@ use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
 use nftbk::server::archive::archive_format_from_user_agent;
-use nftbk::ProcessManagementConfig;
+use nftbk::{ProcessManagementConfig, StorageConfig};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -55,6 +55,10 @@ struct Args {
     /// Exit on the first error encountered
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     exit_on_error: bool,
+
+    /// IPFS pinning service base URL (enables IPFS pinning when provided)
+    #[arg(long)]
+    ipfs_pin_url: Option<String>,
 
     /// Force rerunning a completed backup task
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
@@ -473,12 +477,24 @@ async fn main() -> Result<()> {
         toml::from_str(&chains_content).context("Failed to parse chains config file")?;
     chain_config.resolve_env_vars()?;
 
+    // Get IPFS pin token from environment variable if IPFS URL is provided
+    let ipfs_pin_token = if args.ipfs_pin_url.is_some() {
+        std::env::var("IPFS_PIN_TOKEN").ok()
+    } else {
+        None
+    };
+
     let output_path = args.output_path.clone();
     let backup_config = BackupConfig {
         chain_config,
         token_config,
-        output_path: output_path.clone(),
-        prune_redundant: args.prune_redundant,
+        storage_config: StorageConfig {
+            output_path: output_path.clone(),
+            prune_redundant: args.prune_redundant,
+            enable_ipfs_pinning: args.ipfs_pin_url.is_some(),
+            ipfs_pin_base_url: args.ipfs_pin_url,
+            ipfs_pin_token,
+        },
         process_config: ProcessManagementConfig {
             exit_on_error: args.exit_on_error,
             shutdown_flag: None,

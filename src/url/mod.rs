@@ -123,20 +123,13 @@ fn construct_gateway_url(ipfs_content: &str, gateway: &IpfsGatewayConfig) -> Str
 
 /// Returns all possible IPFS gateway URLs for a given IPFS URL/hash
 pub fn get_ipfs_gateway_urls(url: &str) -> Vec<String> {
-    let ipfs_path = if url.starts_with("ipfs://ipfs/") {
-        url.trim_start_matches("ipfs://ipfs/")
-    } else if url.starts_with("ipfs://") {
-        url.trim_start_matches("ipfs://")
-    } else if (url.starts_with("Qm") && url.len() == 46) || url.starts_with("bafy") {
-        url
-    } else {
-        return vec![url.to_string()];
-    };
-
-    IPFS_GATEWAYS
-        .iter()
-        .map(|gw| construct_gateway_url(ipfs_path, gw))
-        .collect()
+    if let Some(ipfs_path) = extract_ipfs_content(url) {
+        return IPFS_GATEWAYS
+            .iter()
+            .map(|gw| construct_gateway_url(&ipfs_path, gw))
+            .collect();
+    }
+    vec![url.to_string()]
 }
 
 /// Converts IPFS/Arweave URLs to use a gateway, otherwise returns the original URL
@@ -210,6 +203,42 @@ pub fn is_ipfs_gateway_url(url: &str) -> bool {
     lower.contains("/ipfs/")
 }
 
+/// Extract a CID from various IPFS URL forms (ipfs://, gateway URLs, or raw CID)
+pub fn extract_ipfs_cid(url: &str) -> Option<String> {
+    extract_ipfs_content(url).map(|s| s.split('/').next().unwrap_or("").to_string())
+}
+
+/// Extract the IPFS content path (CID plus optional suffix path) from various forms.
+/// Returns None if the URL is not IPFS-related.
+pub fn extract_ipfs_content(url: &str) -> Option<String> {
+    if url.starts_with("ipfs://ipfs/") {
+        return Some(url.trim_start_matches("ipfs://ipfs/").to_string());
+    }
+    if url.starts_with("ipfs://") {
+        return Some(url.trim_start_matches("ipfs://").to_string());
+    }
+    if (url.starts_with("Qm") && url.len() == 46) || url.starts_with("bafy") {
+        return Some(url.to_string());
+    }
+    if let Some(content) = extract_ipfs_content_from_gateway_url(url) {
+        return Some(content);
+    }
+    None
+}
+
+/// Given a list of URLs, return only those that are IPFS-specific (ipfs://, raw CID, or gateway URLs)
+pub fn filter_ipfs_urls(urls: &[String]) -> Vec<String> {
+    urls.iter()
+        .filter(|u| {
+            u.starts_with("ipfs://")
+                || is_ipfs_gateway_url(u)
+                || (u.starts_with("Qm") && u.len() == 46)
+                || u.starts_with("bafy")
+        })
+        .cloned()
+        .collect()
+}
+
 pub fn get_last_path_segment(url: &str, fallback: &str) -> String {
     Url::parse(url)
         .ok()
@@ -234,6 +263,71 @@ mod tests {
             get_url(ipfs_url),
             "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco"
         );
+    }
+
+    #[test]
+    fn test_extract_ipfs_content_and_cid() {
+        // ipfs:// form
+        let p = extract_ipfs_content("ipfs://QmHash/path/to").unwrap();
+        assert_eq!(p, "QmHash/path/to");
+        assert_eq!(
+            extract_ipfs_cid("ipfs://QmHash/path/to").as_deref(),
+            Some("QmHash")
+        );
+
+        // ipfs://ipfs/ form
+        let p2 = extract_ipfs_content("ipfs://ipfs/QmHash/dir/file").unwrap();
+        assert_eq!(p2, "QmHash/dir/file");
+        assert_eq!(
+            extract_ipfs_cid("ipfs://ipfs/QmHash/dir/file").as_deref(),
+            Some("QmHash")
+        );
+
+        // raw Qm cid
+        let raw = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+        assert_eq!(extract_ipfs_content(raw).as_deref(), Some(raw));
+        assert_eq!(extract_ipfs_cid(raw).as_deref(), Some(raw));
+
+        // raw bafy cid
+        let bafy = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
+        assert_eq!(extract_ipfs_content(bafy).as_deref(), Some(bafy));
+        assert_eq!(extract_ipfs_cid(bafy).as_deref(), Some(bafy));
+
+        // gateway path-based
+        let gw = "https://ipfs.io/ipfs/QmHash/foo?bar=baz#frag";
+        assert_eq!(extract_ipfs_content(gw).as_deref(), Some("QmHash/foo"));
+        assert_eq!(extract_ipfs_cid(gw).as_deref(), Some("QmHash"));
+
+        // gateway subdomain
+        let sub = "https://QmHash.ipfs.4everland.io/path/file";
+        assert_eq!(
+            extract_ipfs_content(sub).as_deref(),
+            Some("QmHash/path/file")
+        );
+        assert_eq!(extract_ipfs_cid(sub).as_deref(), Some("QmHash"));
+
+        // non-ipfs URL returns None
+        assert!(extract_ipfs_content("https://example.com").is_none());
+        assert!(extract_ipfs_cid("https://example.com").is_none());
+    }
+
+    #[test]
+    fn test_filter_ipfs_urls() {
+        let urls = vec![
+            "https://example.com/file.png".to_string(),
+            "ipfs://QmHash".to_string(),
+            "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco".to_string(),
+            "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string(),
+            "https://ipfs.io/ipfs/QmHash".to_string(),
+        ];
+        let filtered = filter_ipfs_urls(&urls);
+        assert_eq!(filtered.len(), 4);
+        assert!(filtered.iter().any(|u| u.starts_with("ipfs://")));
+        assert!(filtered.iter().any(|u| u.starts_with("QmXoypizj")));
+        assert!(filtered.iter().any(|u| u.starts_with("bafy")));
+        assert!(filtered
+            .iter()
+            .any(|u| u.contains("/ipfs/") && u.starts_with("https://")));
     }
 
     #[test]

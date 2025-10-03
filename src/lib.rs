@@ -62,20 +62,27 @@ pub struct ProcessManagementConfig {
     pub shutdown_flag: Option<Arc<AtomicBool>>,
 }
 
+#[derive(Clone)]
+pub struct StorageConfig {
+    /// If Some, store content locally under this path
+    pub output_path: Option<PathBuf>,
+    pub prune_redundant: bool,
+    /// Enable IPFS pinning mode: IPFS content will be pinned to the IPFS network
+    pub enable_ipfs_pinning: bool,
+    pub ipfs_pin_base_url: Option<String>,
+    pub ipfs_pin_token: Option<String>,
+}
+
 pub struct BackupConfig {
     pub chain_config: ChainConfig,
     pub token_config: TokenConfig,
-    pub output_path: Option<PathBuf>,
-    pub prune_redundant: bool,
+    pub storage_config: StorageConfig,
     pub process_config: ProcessManagementConfig,
 }
 
 pub mod backup {
     use super::*;
     pub async fn backup_from_config(
-        // TODO: add support for pinning content via cfg
-        // We should actually make configurable both the IPFS pinning and the fs backups
-        // so clients can choose any combination (fs only, fs + ipfs, ipfs only)
         cfg: BackupConfig,
         span: Option<tracing::Span>,
     ) -> Result<(Vec<PathBuf>, Vec<String>)> {
@@ -84,8 +91,9 @@ pub mod backup {
                 "The following user agent will be used to fetch content: {}",
                 USER_AGENT
             );
-            let output_path = cfg.output_path.unwrap();
-            fs::create_dir_all(&output_path).await?;
+            if let Some(ref out) = cfg.storage_config.output_path {
+                fs::create_dir_all(out).await?;
+            }
 
             let chain_config = &cfg.chain_config.0;
             let token_config = &cfg.token_config;
@@ -106,45 +114,54 @@ pub mod backup {
                 let tokens = ContractTokenId::parse_tokens(tokens);
                 nft_count += tokens.len();
 
-                let (files, errors) = if chain_name == "tezos" {
-                    let processor = Arc::new(TezosChainProcessor::new(chain_name, rpc_url)?);
+                let (files, errors, pins) = if chain_name == "tezos" {
+                    let processor = Arc::new(TezosChainProcessor::new(
+                        chain_name,
+                        rpc_url,
+                        cfg.storage_config.clone(),
+                    )?);
                     let process_config = cfg.process_config.clone();
-                    process_nfts(
-                        processor,
-                        tokens,
-                        &output_path,
-                        process_config,
-                        |metadata| metadata.artifact_uri.as_deref(),
-                    )
+                    process_nfts(processor, tokens, process_config, |metadata| {
+                        metadata.artifact_uri.as_deref()
+                    })
                     .await?
                 } else {
-                    let processor = Arc::new(EvmChainProcessor::new(chain_name, rpc_url)?);
+                    let processor = Arc::new(EvmChainProcessor::new(
+                        chain_name,
+                        rpc_url,
+                        cfg.storage_config.clone(),
+                    )?);
                     let process_config = cfg.process_config.clone();
-                    process_nfts(
-                        processor,
-                        tokens,
-                        &output_path,
-                        process_config,
-                        |_metadata| None,
-                    )
-                    .await?
+                    process_nfts(processor, tokens, process_config, |_metadata| None).await?
                 };
                 all_files.extend(files);
                 all_errors.extend(errors);
+                let _ = pins; // currently unused; could be logged or returned at higher level later
             }
 
-            if cfg.prune_redundant {
-                info!("Pruning redundant files...");
-                prune::prune_redundant_files(&output_path, token_config, &all_files).await?;
+            if cfg.storage_config.prune_redundant {
+                if let Some(ref out) = cfg.storage_config.output_path {
+                    info!("Pruning redundant files...");
+                    prune::prune_redundant_files(out, token_config, &all_files).await?;
+                }
             }
 
-            info!(
-                "Backup complete in {:?}s. {} NFTs ({} files) saved in {}.",
-                start.elapsed().as_secs(),
-                nft_count,
-                all_files.len(),
-                output_path.display(),
-            );
+            if let Some(ref out) = cfg.storage_config.output_path {
+                info!(
+                    "Backup complete in {:?}s. {} NFTs ({} files) saved in {}.",
+                    start.elapsed().as_secs(),
+                    nft_count,
+                    all_files.len(),
+                    out.display(),
+                );
+            } else {
+                info!(
+                    "Pinning complete in {:?}s. {} NFTs ({} files).",
+                    start.elapsed().as_secs(),
+                    nft_count,
+                    all_files.len(),
+                );
+            }
 
             Ok((all_files, all_errors))
         }
@@ -183,8 +200,13 @@ mod tests {
         let cfg = BackupConfig {
             chain_config: ChainConfig(chain_config),
             token_config: TokenConfig { chains },
-            output_path: Some("/tmp/test_backup".into()),
-            prune_redundant: false,
+            storage_config: StorageConfig {
+                output_path: Some("/tmp/test_backup".into()),
+                prune_redundant: false,
+                enable_ipfs_pinning: false,
+                ipfs_pin_base_url: None,
+                ipfs_pin_token: None,
+            },
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
                 shutdown_flag: Some(shutdown_flag.clone()),

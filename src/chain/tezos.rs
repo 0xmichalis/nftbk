@@ -1,6 +1,7 @@
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
+use std::path::PathBuf;
 use tezos_contract::ContractFetcher;
 use tezos_core::types::number::Int;
 use tezos_michelson::michelson::data;
@@ -12,6 +13,8 @@ use crate::chain::common::ContractTokenId;
 use crate::chain::ContractTokenInfo;
 use crate::content::fetch_content;
 use crate::content::Options;
+use crate::ipfs::IpfsPinningClient;
+use crate::StorageConfig;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -38,14 +41,34 @@ pub struct NFTFormat {
 pub struct TezosChainProcessor {
     pub rpc: TezosRpc<HttpClient>,
     pub chain_name: String,
+    pub output_path: Option<PathBuf>,
+    pub ipfs_client: Option<IpfsPinningClient>,
 }
 
 impl TezosChainProcessor {
-    pub fn new(chain_name: impl Into<String>, rpc_url: &str) -> anyhow::Result<Self> {
+    pub fn new(
+        chain_name: impl Into<String>,
+        rpc_url: &str,
+        storage_config: StorageConfig,
+    ) -> anyhow::Result<Self> {
         let rpc = TezosRpc::<HttpClient>::new(rpc_url.to_string());
+        let ipfs_client = if storage_config.enable_ipfs_pinning {
+            if let Some(base) = storage_config.ipfs_pin_base_url {
+                let token = storage_config.ipfs_pin_token;
+                Some(IpfsPinningClient::new(base, token))
+            } else {
+                return Err(anyhow::anyhow!(
+                    "IPFS pinning is enabled but no IPFS pinning service base URL is configured"
+                ));
+            }
+        } else {
+            None
+        };
         Ok(Self {
             rpc,
             chain_name: chain_name.into(),
+            output_path: storage_config.output_path,
+            ipfs_client,
         })
     }
 }
@@ -146,6 +169,14 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         let json_value = serde_json::to_value(value)?;
 
         Ok(get_uri_from_token_metadata(&json_value).unwrap_or_default())
+    }
+
+    fn ipfs_client(&self) -> Option<&IpfsPinningClient> {
+        self.ipfs_client.as_ref()
+    }
+
+    fn output_path(&self) -> Option<&std::path::Path> {
+        self.output_path.as_deref()
     }
 }
 

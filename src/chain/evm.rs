@@ -9,6 +9,7 @@ use alloy::{
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
+use std::path::PathBuf;
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::debug;
@@ -16,6 +17,8 @@ use tracing::debug;
 use crate::chain::common::{ContractTokenId, NFTAttribute};
 use crate::chain::ContractTokenInfo;
 use crate::content::{fetch_content, Options};
+use crate::ipfs::IpfsPinningClient;
+use crate::StorageConfig;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -150,14 +153,34 @@ where
 pub struct EvmChainProcessor {
     pub rpc: alloy::providers::RootProvider<Http<Client>>,
     pub chain_name: String,
+    pub output_path: Option<PathBuf>,
+    pub ipfs_client: Option<IpfsPinningClient>,
 }
 
 impl EvmChainProcessor {
-    pub fn new(chain_name: impl Into<String>, rpc_url: &str) -> anyhow::Result<Self> {
+    pub fn new(
+        chain_name: impl Into<String>,
+        rpc_url: &str,
+        storage_config: StorageConfig,
+    ) -> anyhow::Result<Self> {
         let rpc = ProviderBuilder::new().on_http(rpc_url.parse()?);
+        let ipfs_client = if storage_config.enable_ipfs_pinning {
+            if let Some(base) = storage_config.ipfs_pin_base_url {
+                let token = storage_config.ipfs_pin_token;
+                Some(IpfsPinningClient::new(base, token))
+            } else {
+                return Err(anyhow::anyhow!(
+                    "IPFS pinning is enabled but no IPFS pinning service base URL is configured"
+                ));
+            }
+        } else {
+            None
+        };
         Ok(Self {
             rpc,
             chain_name: chain_name.into(),
+            output_path: storage_config.output_path,
+            ipfs_client,
         })
     }
 }
@@ -339,6 +362,14 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         }
 
         Ok(uri)
+    }
+
+    fn ipfs_client(&self) -> Option<&IpfsPinningClient> {
+        self.ipfs_client.as_ref()
+    }
+
+    fn output_path(&self) -> Option<&std::path::Path> {
+        self.output_path.as_deref()
     }
 }
 

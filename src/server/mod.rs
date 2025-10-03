@@ -17,7 +17,9 @@ use crate::server::archive::{
 };
 use crate::server::db::Db;
 use crate::server::hashing::compute_file_sha256;
-use crate::{backup::backup_from_config, BackupConfig, TokenConfig};
+use crate::{
+    backup::backup_from_config, BackupConfig, ProcessManagementConfig, StorageConfig, TokenConfig,
+};
 
 pub mod api;
 pub mod archive;
@@ -49,6 +51,9 @@ pub struct AppState {
     pub backup_job_sender: mpsc::Sender<BackupJobOrShutdown>,
     pub db: Arc<Db>,
     pub shutdown_flag: Arc<AtomicBool>,
+    pub enable_ipfs_pinning: bool,
+    pub ipfs_pin_base_url: Option<String>,
+    pub ipfs_pin_token: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +90,7 @@ impl AppState {
         db_url: &str,
         max_connections: u32,
         shutdown_flag: Arc<AtomicBool>,
+        ipfs_pin_base_url: Option<String>,
     ) -> Self {
         let config_content = tokio::fs::read_to_string(chain_config_path)
             .await
@@ -96,6 +102,13 @@ impl AppState {
             .resolve_env_vars()
             .expect("Failed to resolve environment variables in chain config");
         let db = Arc::new(Db::new(db_url, max_connections).await);
+        // Get IPFS pin token from environment variable if IPFS URL is provided
+        let ipfs_pin_token = if ipfs_pin_base_url.is_some() {
+            std::env::var("IPFS_PIN_TOKEN").ok()
+        } else {
+            None
+        };
+
         AppState {
             chain_config: Arc::new(chain_config),
             base_dir: Arc::new(base_dir.to_string()),
@@ -107,6 +120,9 @@ impl AppState {
             backup_job_sender,
             db,
             shutdown_flag,
+            enable_ipfs_pinning: ipfs_pin_base_url.is_some(),
+            ipfs_pin_base_url,
+            ipfs_pin_token,
         }
     }
 }
@@ -267,9 +283,14 @@ async fn run_backup_job_inner(
     let backup_cfg = BackupConfig {
         chain_config: (*state.chain_config).clone(),
         token_config,
-        output_path: Some(out_path.clone()),
-        prune_redundant: false,
-        process_config: crate::ProcessManagementConfig {
+        storage_config: StorageConfig {
+            output_path: Some(out_path.clone()),
+            prune_redundant: false,
+            enable_ipfs_pinning: state.enable_ipfs_pinning,
+            ipfs_pin_base_url: state.ipfs_pin_base_url.clone(),
+            ipfs_pin_token: state.ipfs_pin_token.clone(),
+        },
+        process_config: ProcessManagementConfig {
             exit_on_error: false,
             shutdown_flag: shutdown_flag.clone(),
         },

@@ -1,12 +1,13 @@
 use anyhow::anyhow;
 use async_trait::async_trait;
 use std::collections::HashSet;
-use std::path::Path;
 use std::sync::atomic::Ordering;
 use tracing::{debug, error, warn};
 
 use crate::content::extra::fetch_and_save_extra_content;
 use crate::content::{fetch_and_save_content, save_metadata, Options};
+use crate::ipfs::IpfsPinningClient;
+use crate::url::extract_ipfs_cid;
 pub use common::ContractTokenInfo;
 
 pub mod common;
@@ -48,15 +49,20 @@ pub trait NFTChainProcessor {
 
     /// Get the token URI for a contract using the chain's RPC client.
     async fn get_uri(&self, contract: &Self::ContractTokenId) -> anyhow::Result<String>;
+
+    /// Optional IPFS pinning client available to the processor
+    fn ipfs_client(&self) -> Option<&IpfsPinningClient>;
+
+    /// Get the output path for local storage
+    fn output_path(&self) -> Option<&std::path::Path>;
 }
 
 pub async fn process_nfts<C, FExtraUri>(
     processor: std::sync::Arc<C>,
     tokens: Vec<C::ContractTokenId>,
-    output_path: &Path,
     config: crate::ProcessManagementConfig,
     get_extra_content_uri: FExtraUri,
-) -> anyhow::Result<(Vec<std::path::PathBuf>, Vec<String>)>
+) -> anyhow::Result<(Vec<std::path::PathBuf>, Vec<String>, Vec<String>)>
 where
     C: NFTChainProcessor + Sync + Send + 'static,
     C::ContractTokenId: ContractTokenInfo,
@@ -65,6 +71,7 @@ where
 {
     let mut all_files = Vec::new();
     let mut errors = Vec::new();
+    let mut all_pins = Vec::new();
     for token in tokens {
         check_shutdown_signal(&config)?;
 
@@ -93,14 +100,14 @@ where
             }
         };
 
-        // Save metadata to disk
-        if !token_uri.is_empty() {
+        // Save metadata to disk only if local storage is enabled
+        if processor.output_path().is_some() {
             match save_metadata(
                 &token_uri,
                 processor.chain_name(),
                 token.address(),
                 token.token_id(),
-                output_path,
+                processor.output_path().expect("checked is_some above"),
                 &metadata,
             )
             .await
@@ -136,6 +143,53 @@ where
                 );
                 continue;
             }
+
+            // If pinning mode is enabled and URL is IPFS, try pinning
+            if let Some(ipfs_client) = processor.ipfs_client() {
+                if let Some(cid) = extract_ipfs_cid(&url) {
+                    debug!(
+                        "Pinning {} for {} contract {} (token ID {})",
+                        cid,
+                        processor.chain_name(),
+                        token.address(),
+                        token.token_id()
+                    );
+                    match ipfs_client
+                        .create_pin(&crate::ipfs::Pin {
+                            cid: cid.clone(),
+                            name: None,
+                            origins: Default::default(),
+                            meta: None,
+                        })
+                        .await
+                    {
+                        Ok(_) => {
+                            all_pins.push(cid);
+                        }
+                        Err(e) => {
+                            let msg = format!(
+                                "Failed to pin {} for {} contract {} (token ID {}): {}",
+                                cid,
+                                processor.chain_name(),
+                                token.address(),
+                                token.token_id(),
+                                e
+                            );
+                            if config.exit_on_error {
+                                return Err(anyhow!(msg));
+                            }
+                            error!("{}", msg);
+                            errors.push(msg);
+                        }
+                    }
+                }
+            }
+
+            // If no local storage configured, skip download
+            if processor.output_path().is_none() {
+                continue;
+            }
+
             debug!("Downloading {:?} from {}", opts.fallback_filename, url);
             let opts_for_log = opts.clone();
             match fetch_and_save_content(
@@ -143,7 +197,9 @@ where
                 processor.chain_name(),
                 token.address(),
                 token.token_id(),
-                output_path,
+                processor
+                    .output_path()
+                    .expect("output_path exists when downloading"),
                 opts,
             )
             .await
@@ -173,34 +229,36 @@ where
         }
 
         // Fetch extra content if needed
-        match fetch_and_save_extra_content(
-            processor.chain_name(),
-            token.address(),
-            token.token_id(),
-            output_path,
-            get_extra_content_uri(&metadata),
-        )
-        .await
-        {
-            Ok(extra_files) => {
-                all_files.extend(extra_files);
-            }
-            Err(e) => {
-                let msg = format!(
-                    "Failed to fetch extra content for {} contract {} (token ID {}): {}",
-                    processor.chain_name(),
-                    token.address(),
-                    token.token_id(),
-                    e
-                );
-                if config.exit_on_error {
-                    return Err(anyhow!(msg));
+        if let Some(out) = processor.output_path() {
+            match fetch_and_save_extra_content(
+                processor.chain_name(),
+                token.address(),
+                token.token_id(),
+                out,
+                get_extra_content_uri(&metadata),
+            )
+            .await
+            {
+                Ok(extra_files) => {
+                    all_files.extend(extra_files);
                 }
-                error!("{}", msg);
-                errors.push(msg);
+                Err(e) => {
+                    let msg = format!(
+                        "Failed to fetch extra content for {} contract {} (token ID {}): {}",
+                        processor.chain_name(),
+                        token.address(),
+                        token.token_id(),
+                        e
+                    );
+                    if config.exit_on_error {
+                        return Err(anyhow!(msg));
+                    }
+                    error!("{}", msg);
+                    errors.push(msg);
+                }
             }
         }
     }
 
-    Ok((all_files, errors))
+    Ok((all_files, errors, all_pins))
 }
