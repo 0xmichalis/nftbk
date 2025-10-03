@@ -114,19 +114,29 @@ pub mod backup {
                         rpc_url: rpc_url.to_string(),
                         chain_name: chain_name.to_string(),
                     });
-                    let config = cfg.process_config.clone();
-                    process_nfts(processor, contracts, &output_path, config, |metadata| {
-                        metadata.artifact_uri.as_deref()
-                    })
+                    let process_config = cfg.process_config.clone();
+                    process_nfts(
+                        processor,
+                        contracts,
+                        &output_path,
+                        process_config,
+                        |metadata| metadata.artifact_uri.as_deref(),
+                    )
                     .await?
                 } else {
                     let processor = Arc::new(EvmChainProcessor {
                         rpc_url: rpc_url.to_string(),
                         chain_name: chain_name.to_string(),
                     });
-                    let config = cfg.process_config.clone();
-                    process_nfts(processor, contracts, &output_path, config, |_metadata| None)
-                        .await?
+                    let process_config = cfg.process_config.clone();
+                    process_nfts(
+                        processor,
+                        contracts,
+                        &output_path,
+                        process_config,
+                        |_metadata| None,
+                    )
+                    .await?
                 };
                 all_files.extend(files);
                 all_errors.extend(errors);
