@@ -177,7 +177,6 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         token_uri: &str,
         token: &Self::ContractTokenId,
         output_path: &std::path::Path,
-        chain_name: &str,
     ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)> {
         debug!(
             "Fetching metadata from {} for contract {}",
@@ -186,7 +185,7 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         );
         let metadata_content = fetch_and_save_content(
             token_uri,
-            chain_name,
+            &self.chain_name,
             &token.address,
             &token.token_id,
             output_path,

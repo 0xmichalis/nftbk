@@ -42,7 +42,6 @@ pub trait NFTChainProcessor {
         token_uri: &str,
         contract: &Self::ContractTokenId,
         output_path: &std::path::Path,
-        chain_name: &str,
     ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)>;
 
     /// Collect all URLs to download from the metadata.
@@ -95,7 +94,7 @@ where
         };
 
         let (metadata, metadata_path) = match processor
-            .fetch_metadata(&token_uri, &token, output_path, processor.chain_name())
+            .fetch_metadata(&token_uri, &token, output_path)
             .await
         {
             Ok(pair) => pair,
