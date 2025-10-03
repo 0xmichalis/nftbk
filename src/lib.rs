@@ -75,6 +75,9 @@ pub struct BackupConfig {
 pub mod backup {
     use super::*;
     pub async fn backup_from_config(
+        // TODO: add support for pinning content via cfg
+        // We should actually make configurable both the IPFS pinning and the fs backups
+        // so clients can choose any combination (fs only, fs + ipfs, ipfs only)
         cfg: BackupConfig,
         span: Option<tracing::Span>,
     ) -> Result<(Vec<PathBuf>, Vec<String>)> {
