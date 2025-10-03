@@ -25,6 +25,13 @@ sqlxprepare:
 	fi
 	cargo sqlx prepare
 
+.PHONY: cover
+cover:
+	@if ! cargo-llvm-cov --version >/dev/null 2>&1; then \
+		cargo install cargo-llvm-cov; \
+	fi
+	cargo llvm-cov --verbose --html
+
 .PHONY: test
 test:
 	@SQLX_OFFLINE=true cargo test

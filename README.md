@@ -1,6 +1,6 @@
 # nftbk
 
-[![CI](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml/badge.svg)](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml)
+[![CI](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml/badge.svg)](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml)[![Coverage](https://coveralls.io/repos/github/0xmichalis/nftbk/badge.svg?branch=main)](https://coveralls.io/github/0xmichalis/nftbk?branch=main)
 
 A library, server, and CLI tool for backing up NFT metadata and content from EVM and Tezos NFT contracts.
 
@@ -102,11 +102,15 @@ open http://localhost:8080/swagger-ui
 
 ```sh
 # Install the pre-commit hook to aid with development
+# The hook runs formatting, clippy, and tests
 cp .hooks/pre-commit .git/hooks/pre-commit
 
 # Update the sqlx cache and commit any changes when necessary - this is needed when developing new
 # queries or updating existing queries in the server.
 make sqlxprepare
+
+# Run tests with coverage output in HTML
+make cover
 ```
 
 ## Donations

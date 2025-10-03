@@ -7,3 +7,4 @@ config_*.toml
 /nft_backup*
 /*.json
 !.sqlx/*
+lcov.info
