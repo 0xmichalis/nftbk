@@ -182,7 +182,7 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         Ok((metadata, metadata_content))
     }
 
-    fn collect_urls_to_download(metadata: &Self::Metadata) -> Vec<(String, Options)> {
+    fn collect_urls(metadata: &Self::Metadata) -> Vec<(String, Options)> {
         let mut urls_to_download = Vec::new();
         let mut seen = std::collections::HashSet::new();
 

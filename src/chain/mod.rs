@@ -43,7 +43,7 @@ pub trait NFTChainProcessor {
     ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)>;
 
     /// Collect all URLs to download from the metadata.
-    fn collect_urls_to_download(metadata: &Self::Metadata) -> Vec<(String, Options)>;
+    fn collect_urls(metadata: &Self::Metadata) -> Vec<(String, Options)>;
 
     /// Get the token URI for a contract using the chain's RPC client.
     async fn get_uri(
@@ -122,7 +122,7 @@ where
         };
         all_files.push(metadata_path);
 
-        let urls_to_download = C::collect_urls_to_download(&metadata);
+        let urls_to_download = C::collect_urls(&metadata);
 
         let mut downloaded = HashSet::new();
         for (url, opts) in urls_to_download {
