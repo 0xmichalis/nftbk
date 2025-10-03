@@ -15,7 +15,7 @@ use tracing::debug;
 
 use crate::chain::common::{ContractTokenId, NFTAttribute};
 use crate::chain::ContractTokenInfo;
-use crate::content::{fetch_and_save_content, Options};
+use crate::content::{fetch_content, Options};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -175,29 +175,16 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
     async fn fetch_metadata(
         &self,
         token: &Self::ContractTokenId,
-        output_path: &std::path::Path,
-    ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)> {
+    ) -> anyhow::Result<(Self::Metadata, String)> {
         let token_uri = self.get_uri(token).await?;
         debug!(
             "Fetching metadata from {} for contract {}",
             token_uri,
             token.address()
         );
-        let metadata_content = fetch_and_save_content(
-            &token_uri,
-            &self.chain_name,
-            &token.address,
-            &token.token_id,
-            output_path,
-            Options {
-                overriden_filename: Some("metadata.json".to_string()),
-                fallback_filename: None,
-            },
-        )
-        .await?;
-        let metadata_content_str = tokio::fs::read_to_string(&metadata_content).await?;
-        let metadata: NFTMetadata = serde_json::from_str(&metadata_content_str)?;
-        Ok((metadata, metadata_content))
+        let bytes = fetch_content(&token_uri).await?;
+        let metadata: NFTMetadata = serde_json::from_slice(&bytes)?;
+        Ok((metadata, token_uri))
     }
 
     fn collect_urls(metadata: &Self::Metadata) -> Vec<(String, Options)> {

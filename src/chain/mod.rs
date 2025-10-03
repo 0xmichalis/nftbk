@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use tracing::{debug, error, warn};
 
 use crate::content::extra::fetch_and_save_extra_content;
-use crate::content::{fetch_and_save_content, Options};
+use crate::content::{fetch_and_save_content, save_metadata, Options};
 pub use common::ContractTokenInfo;
 
 pub mod common;
@@ -36,13 +36,12 @@ pub trait NFTChainProcessor {
     /// The name of the chain for logging and routing.
     fn chain_name(&self) -> &str;
 
-    /// Fetch the metadata JSON for a given contract/token.
-    /// Implementations should resolve the token URI internally.
+    /// Fetch the metadata JSON for a given contract/token and return it in-memory
+    /// along with the resolved token URI.
     async fn fetch_metadata(
         &self,
         contract: &Self::ContractTokenId,
-        output_path: &std::path::Path,
-    ) -> anyhow::Result<(Self::Metadata, std::path::PathBuf)>;
+    ) -> anyhow::Result<(Self::Metadata, String)>;
 
     /// Collect all URLs to download from the metadata.
     fn collect_urls(metadata: &Self::Metadata) -> Vec<(String, Options)>;
@@ -61,6 +60,7 @@ pub async fn process_nfts<C, FExtraUri>(
 where
     C: NFTChainProcessor + Sync + Send + 'static,
     C::ContractTokenId: ContractTokenInfo,
+    C::Metadata: serde::Serialize,
     FExtraUri: Fn(&C::Metadata) -> Option<&str>,
 {
     let mut all_files = Vec::new();
@@ -74,7 +74,7 @@ where
             token.address(),
             token.token_id()
         );
-        let (metadata, metadata_path) = match processor.fetch_metadata(&token, output_path).await {
+        let (metadata, token_uri) = match processor.fetch_metadata(&token).await {
             Ok(pair) => pair,
             Err(e) => {
                 let msg = format!(
@@ -92,7 +92,36 @@ where
                 continue;
             }
         };
-        all_files.push(metadata_path);
+
+        // Save metadata to disk
+        if !token_uri.is_empty() {
+            match save_metadata(
+                &token_uri,
+                processor.chain_name(),
+                token.address(),
+                token.token_id(),
+                output_path,
+                &metadata,
+            )
+            .await
+            {
+                Ok(path) => all_files.push(path),
+                Err(e) => {
+                    let msg = format!(
+                        "Failed to save metadata for {} contract {} (token ID {}): {}",
+                        processor.chain_name(),
+                        token.address(),
+                        token.token_id(),
+                        e
+                    );
+                    if config.exit_on_error {
+                        return Err(anyhow!(msg));
+                    }
+                    error!("{}", msg);
+                    errors.push(msg);
+                }
+            }
+        }
 
         let urls_to_download = C::collect_urls(&metadata);
 

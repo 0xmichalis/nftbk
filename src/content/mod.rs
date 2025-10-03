@@ -234,17 +234,17 @@ fn calculate_retry_delay(attempt: u32) -> Duration {
     Duration::from_secs(base_delay) + Duration::from_millis(jitter)
 }
 
-async fn retry_operation(
+async fn retry_operation<T>(
     operation: impl Fn() -> std::pin::Pin<
         Box<
-            dyn std::future::Future<Output = (anyhow::Result<PathBuf>, Option<reqwest::StatusCode>)>
+            dyn std::future::Future<Output = (anyhow::Result<T>, Option<reqwest::StatusCode>)>
                 + Send,
         >,
     >,
     max_retries: u32,
     should_retry: impl Fn(&anyhow::Error, Option<reqwest::StatusCode>) -> bool,
     context: &str,
-) -> anyhow::Result<PathBuf> {
+) -> anyhow::Result<T> {
     let mut attempt = 0;
     loop {
         let (result, status) = operation().await;
@@ -298,6 +298,55 @@ async fn fetch_url(url: &str) -> anyhow::Result<reqwest::Response> {
         .build()?;
 
     Ok(client.get(url).send().await?)
+}
+
+/// Attempt to fetch a URL once, applying IPFS gateway rotation if needed.
+/// Returns (Ok(response), Some(status)) on success; (Err(error), Option(status)) on failure.
+async fn try_fetch_response(
+    url: &str,
+) -> (
+    anyhow::Result<reqwest::Response>,
+    Option<reqwest::StatusCode>,
+) {
+    match fetch_url(url).await {
+        Ok(response) => {
+            let status = response.status();
+            if status.is_success() {
+                (Ok(response), Some(status))
+            } else {
+                // For non-successful status codes, try IPFS gateway rotation if applicable
+                let error = create_http_error(status, url);
+                match handle_ipfs_gateway_rotation(url, error).await {
+                    Ok(alt_response) => {
+                        let alt_status = alt_response.status();
+                        if alt_status.is_success() {
+                            (Ok(alt_response), Some(alt_status))
+                        } else {
+                            (
+                                Err(create_http_error(alt_status, alt_response.url().as_str())),
+                                Some(alt_status),
+                            )
+                        }
+                    }
+                    Err(gateway_err) => (Err(gateway_err), Some(status)),
+                }
+            }
+        }
+        Err(e) => {
+            // Try IPFS gateway rotation if applicable
+            match handle_ipfs_gateway_rotation(url, e).await {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        (Ok(response), Some(status))
+                    } else {
+                        (Err(create_http_error(status, url)), Some(status))
+                    }
+                }
+                Err(gateway_err) => (Err(gateway_err), None),
+            }
+        }
+    }
 }
 
 async fn retry_with_alternative_ipfs_gateways(
@@ -386,50 +435,12 @@ async fn fetch_and_stream_to_file_once(
     url: &str,
     file_path: &Path,
 ) -> (anyhow::Result<PathBuf>, Option<reqwest::StatusCode>) {
-    // Try the original URL first
-    match fetch_url(url).await {
-        Ok(response) => {
-            let status = response.status();
-            if status.is_success() {
-                let result = stream_http_to_file(response, file_path).await;
-                (result, Some(status))
-            } else {
-                // For non-successful status codes, try IPFS gateway rotation if applicable
-                let error = create_http_error(status, url);
-                match handle_ipfs_gateway_rotation(url, error).await {
-                    Ok(alt_response) => {
-                        let alt_url = alt_response.url().as_str();
-                        let alt_status = alt_response.status();
-                        if alt_status.is_success() {
-                            let result = stream_http_to_file(alt_response, file_path).await;
-                            (result, Some(alt_status))
-                        } else {
-                            (
-                                Err(create_http_error(alt_status, alt_url)),
-                                Some(alt_status),
-                            )
-                        }
-                    }
-                    // In case of IPFS gateway rotation error, return the original error
-                    Err(_gateway_err) => (Err(create_http_error(status, url)), Some(status)),
-                }
-            }
+    match try_fetch_response(url).await {
+        (Ok(response), status) => {
+            let result = stream_http_to_file(response, file_path).await;
+            (result, status)
         }
-        Err(e) => {
-            // Try IPFS gateway rotation if applicable
-            match handle_ipfs_gateway_rotation(url, e).await {
-                Ok(response) => {
-                    let status = response.status();
-                    if status.is_success() {
-                        let result = stream_http_to_file(response, file_path).await;
-                        (result, Some(status))
-                    } else {
-                        (Err(create_http_error(status, url)), Some(status))
-                    }
-                }
-                Err(gateway_err) => (Err(gateway_err), None),
-            }
-        }
+        (Err(err), status) => (Err(err), status),
     }
 }
 
@@ -613,6 +624,108 @@ pub async fn fetch_and_save_content(
     Ok(file_path)
 }
 
+/// Fetch content into memory (handles data: URLs and HTTP/IPFS with retries) and return raw bytes.
+pub async fn fetch_content(url: &str) -> anyhow::Result<Vec<u8>> {
+    // Handle data URLs directly
+    if is_data_url(url) {
+        return get_data_url(url)
+            .ok_or_else(|| anyhow::anyhow!("Failed to parse data URL: {}", url));
+    }
+
+    // For HTTP/IPFS URLs, resolve and fetch with retries and gateway rotation
+    let resolved_url = get_url(url);
+
+    const MAX_RETRIES: u32 = 5;
+    retry_operation(
+        || {
+            let url = resolved_url.clone();
+            Box::pin(async move {
+                match try_fetch_response(&url).await {
+                    (Ok(response), status) => match response.bytes().await {
+                        Ok(b) => (Ok(b.to_vec()), status),
+                        Err(e) => (Err(anyhow::anyhow!(e)), status),
+                    },
+                    (Err(err), status) => (Err(err), status),
+                }
+            })
+        },
+        MAX_RETRIES,
+        should_retry,
+        &resolved_url,
+    )
+    .await
+}
+
+/// Save provided content bytes to disk using the same naming/postprocessing rules as fetch_and_save_content.
+/// Skips writing if an existing file is already present (including known extension variations).
+pub async fn save_content(
+    url: &str,
+    chain: &str,
+    contract_address: &str,
+    token_id: &str,
+    output_path: &Path,
+    options: Options,
+    content: &[u8],
+) -> anyhow::Result<PathBuf> {
+    let mut file_path =
+        get_filename(url, chain, contract_address, token_id, output_path, options).await?;
+
+    // Check if a file already exists (with any extension heuristic)
+    if let Some(existing_path) = try_exists(&file_path).await? {
+        debug!(
+            "File already exists at {} (skipping write)",
+            existing_path.display()
+        );
+        return Ok(existing_path);
+    }
+
+    // Ensure parent directory exists
+    let parent = file_path.parent().ok_or_else(|| {
+        anyhow::anyhow!("File path has no parent directory: {}", file_path.display())
+    })?;
+    fs::create_dir_all(parent)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to create directory {}: {}", parent.display(), e))?;
+
+    // If filename has no known extension, try to detect from content and append
+    if !extensions::has_known_extension(&file_path) {
+        if let Some(detected_ext) = extensions::detect_media_extension(content) {
+            let current_path_str = file_path.to_string_lossy();
+            debug!("Appending detected media extension: {}", detected_ext);
+            file_path = PathBuf::from(format!("{current_path_str}.{detected_ext}"));
+        }
+    }
+
+    // Write and postprocess according to type
+    write_and_postprocess_file(&file_path, content, url).await?;
+    Ok(file_path)
+}
+
+/// Serialize metadata to pretty JSON and save it to disk as metadata.json using save_content.
+pub async fn save_metadata<T: serde::Serialize>(
+    token_uri: &str,
+    chain: &str,
+    contract_address: &str,
+    token_id: &str,
+    output_path: &Path,
+    metadata: &T,
+) -> anyhow::Result<PathBuf> {
+    let bytes = serde_json::to_vec_pretty(metadata)?;
+    save_content(
+        token_uri,
+        chain,
+        contract_address,
+        token_id,
+        output_path,
+        Options {
+            overriden_filename: Some("metadata.json".to_string()),
+            fallback_filename: None,
+        },
+        &bytes,
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -641,6 +754,184 @@ mod tests {
 
         let content = std::fs::read_to_string(&file_path).unwrap();
         assert_eq!(content, "Hello, World!");
+    }
+
+    #[tokio::test]
+    async fn test_save_content_skips_existing_exact_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let out = temp_dir.path();
+        let chain = "test";
+        let contract = "0xabc";
+        let token = "1";
+        let url = "https://example.com/file.bin";
+
+        // First write
+        let path1 = save_content(
+            url,
+            chain,
+            contract,
+            token,
+            out,
+            Options {
+                overriden_filename: None,
+                fallback_filename: Some("file".to_string()),
+            },
+            b"data",
+        )
+        .await
+        .expect("first save_content should succeed");
+
+        // Second write should skip and return same path
+        let path2 = save_content(
+            url,
+            chain,
+            contract,
+            token,
+            out,
+            Options {
+                overriden_filename: None,
+                fallback_filename: Some("file".to_string()),
+            },
+            b"new-data",
+        )
+        .await
+        .expect("second save_content should skip and succeed");
+
+        assert_eq!(path1, path2);
+    }
+
+    #[tokio::test]
+    async fn test_save_content_detects_extension_from_bytes() {
+        let temp_dir = TempDir::new().unwrap();
+        let out = temp_dir.path();
+        let chain = "test";
+        let contract = "0xabc";
+        let token = "1";
+
+        // PNG header bytes
+        let png_bytes: &[u8] = b"\x89PNG\r\n\x1A\nrest";
+
+        let path = save_content(
+            "https://example.com/noext",
+            chain,
+            contract,
+            token,
+            out,
+            Options {
+                overriden_filename: None,
+                fallback_filename: Some("image".to_string()),
+            },
+            png_bytes,
+        )
+        .await
+        .expect("save_content should succeed");
+
+        let name = path.file_name().unwrap().to_string_lossy();
+        assert!(
+            name.ends_with(".png"),
+            "expected png extension, got {}",
+            name
+        );
+    }
+
+    #[tokio::test]
+    async fn test_save_metadata_pretty_json_written() {
+        #[derive(serde::Serialize)]
+        struct M {
+            a: u32,
+            b: &'static str,
+        }
+
+        let temp_dir = TempDir::new().unwrap();
+        let out = temp_dir.path();
+        let chain = "test";
+        let contract = "0xabc";
+        let token = "1";
+        let token_uri = "https://example.com/meta";
+
+        let meta = M { a: 1, b: "x" };
+        let path = save_metadata(token_uri, chain, contract, token, out, &meta)
+            .await
+            .expect("save_metadata should succeed");
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("\n"), "expected pretty JSON with newlines");
+        assert!(content.contains("\n  \"a\": 1"));
+        assert!(content.contains("\n  \"b\": \"x\""));
+        assert!(path.file_name().unwrap() == "metadata.json");
+    }
+
+    #[tokio::test]
+    async fn test_sanitize_and_get_filename_via_save_content() {
+        let temp_dir = TempDir::new().unwrap();
+        let out = temp_dir.path();
+        let chain = "test";
+        let contract = "0xabc";
+        let token = "1";
+
+        // URL with traversal and separators
+        let url = "https://example.com/..//folder/../dangerous/../name";
+
+        let path = save_content(
+            url,
+            chain,
+            contract,
+            token,
+            out,
+            Options {
+                overriden_filename: None,
+                fallback_filename: Some("content".to_string()),
+            },
+            b"x",
+        )
+        .await
+        .expect("save_content should succeed");
+
+        // Ensure path is under the expected directory and filename sanitized
+        let expected_dir = out.join(chain).join(contract).join(token);
+        assert!(path.starts_with(&expected_dir));
+        let fname = path.file_name().unwrap().to_string_lossy();
+        assert!(!fname.contains(".."));
+        assert!(!fname.contains('/'));
+        assert!(!fname.contains('\\'));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_content_http_200_success() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/content", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/content"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("OK"))
+            .mount(&mock_server)
+            .await;
+
+        let bytes = fetch_content(&url)
+            .await
+            .expect("fetch_content should succeed");
+        assert_eq!(bytes, b"OK");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_content_http_404_no_retry() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/not-found", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/not-found"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
+            .expect(1)
+            .mount(&mock_server)
+            .await;
+
+        let result = fetch_content(&url).await;
+        assert!(
+            result.is_err(),
+            "fetch_content should error on 404 without retry"
+        );
+        let err = result.err().unwrap().to_string();
+        assert!(err.contains("HTTP error: status 404"));
     }
 
     #[tokio::test]
