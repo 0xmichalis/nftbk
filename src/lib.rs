@@ -132,7 +132,7 @@ pub mod backup {
                 let tokens = ContractTokenId::parse_tokens(tokens, chain_name);
                 nft_count += tokens.len();
 
-                let (files, errors, pins) = if chain_name == "tezos" {
+                let (files, pins, errors) = if chain_name == "tezos" {
                     let processor = Arc::new(TezosChainProcessor::new(
                         rpc_url,
                         cfg.storage_config.clone(),
