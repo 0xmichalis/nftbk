@@ -2,12 +2,15 @@
 
 [![CI](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml/badge.svg)](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml)[![Coverage](https://coveralls.io/repos/github/0xmichalis/nftbk/badge.svg?branch=main)](https://coveralls.io/github/0xmichalis/nftbk?branch=main)
 
-A library, server, and CLI tool for backing up NFT metadata and content from EVM and Tezos NFT contracts.
+A library, server, and CLI tool for protecting NFTs. The following networks are currently supported:
+- EVM (Ethereum, Base, Shape, Zora, etc)
+- Tezos
 
 ## Requirements
 
 - Rust toolchain (install from [rustup.rs](https://rustup.rs))
 - Chain-specific RPC URLs
+- IPFS pinning service (optional)
 - PostgreSQL (server-specific; used for backup metadata storage)
 
 ## Configuration
