@@ -32,14 +32,14 @@ fn check_shutdown_signal(config: &crate::ProcessManagementConfig) -> anyhow::Res
 fn process<T>(
     result: anyhow::Result<T>,
     error_msg: String,
-    config: &crate::ProcessManagementConfig,
+    exit_on_error: bool,
     errors: &mut Vec<String>,
 ) -> anyhow::Result<Option<T>> {
     match result {
         Ok(value) => Ok(Some(value)),
         Err(e) => {
             let full_msg = format!("{error_msg}: {e}");
-            if config.exit_on_error {
+            if exit_on_error {
                 return Err(anyhow!(full_msg));
             }
             error!("{}", full_msg);
@@ -56,7 +56,7 @@ async fn protect_url<C>(
     opts: &Options,
     token: &C::ContractTokenId,
     processor: &C,
-    config: &crate::ProcessManagementConfig,
+    exit_on_error: bool,
     errors: &mut Vec<String>,
 ) -> anyhow::Result<(Option<String>, Option<std::path::PathBuf>)>
 where
@@ -79,7 +79,7 @@ where
                     })
                     .await,
                 format!("Failed to pin {cid} for {token}"),
-                config,
+                exit_on_error,
                 errors,
             )?
             .is_some()
@@ -100,7 +100,7 @@ where
         if let Some(path) = process(
             fetch_and_save_content(url, token, output_path, opts.clone()).await,
             format!("Failed to fetch {name_for_log} for {token}"),
-            config,
+            exit_on_error,
             errors,
         )? {
             downloaded_path = Some(path);
@@ -117,7 +117,7 @@ async fn protect_metadata<C>(
     token: &C::ContractTokenId,
     metadata: &C::Metadata,
     processor: &C,
-    config: &crate::ProcessManagementConfig,
+    exit_on_error: bool,
     errors: &mut Vec<String>,
 ) -> anyhow::Result<(Option<String>, Option<std::path::PathBuf>)>
 where
@@ -141,7 +141,7 @@ where
                     })
                     .await,
                 format!("Failed to pin token URI {cid} for {token}"),
-                config,
+                exit_on_error,
                 errors,
             )?
             .is_some()
@@ -156,7 +156,7 @@ where
         if let Some(path) = process(
             save_metadata(token_uri, token, output_path, metadata).await,
             format!("Failed to save metadata for {token}"),
-            config,
+            exit_on_error,
             errors,
         )? {
             saved_path = Some(path);
@@ -215,7 +215,7 @@ where
         let (metadata, token_uri) = match process(
             processor.fetch_metadata(&token).await,
             format!("Failed to fetch metadata for {token}"),
-            &config,
+            config.exit_on_error,
             &mut errors,
         )? {
             Some(pair) => pair,
@@ -231,7 +231,7 @@ where
             &token,
             &metadata,
             &*processor,
-            &config,
+            config.exit_on_error,
             &mut errors,
         )
         .await?;
@@ -259,8 +259,15 @@ where
             }
 
             // Protect the URL by pinning and downloading
-            let (pinned_cid, downloaded_path) =
-                protect_url(&url, &opts, &token, &*processor, &config, &mut errors).await?;
+            let (pinned_cid, downloaded_path) = protect_url(
+                &url,
+                &opts,
+                &token,
+                &*processor,
+                config.exit_on_error,
+                &mut errors,
+            )
+            .await?;
 
             if let Some(cid) = pinned_cid {
                 all_pins.push(cid);
@@ -276,7 +283,7 @@ where
             if let Some(extra_files) = process(
                 fetch_and_save_extra_content(&token, out, get_extra_content_uri(&metadata)).await,
                 format!("Failed to fetch extra content for {token}"),
-                &config,
+                config.exit_on_error,
                 &mut errors,
             )? {
                 all_files.extend(extra_files);
