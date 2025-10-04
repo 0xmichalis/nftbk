@@ -38,7 +38,7 @@ fn process<T>(
     match result {
         Ok(value) => Ok(Some(value)),
         Err(e) => {
-            let full_msg = format!("{}: {}", error_msg, e);
+            let full_msg = format!("{error_msg}: {e}");
             if config.exit_on_error {
                 return Err(anyhow!(full_msg));
             }
