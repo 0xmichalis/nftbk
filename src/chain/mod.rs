@@ -34,9 +34,6 @@ pub trait NFTChainProcessor {
     type ContractTokenId: ContractTokenInfo + Send + Sync;
     type RpcClient: Send + Sync;
 
-    /// The name of the chain for logging and routing.
-    fn chain_name(&self) -> &str;
-
     /// Fetch the metadata JSON for a given contract/token and return it in-memory
     /// along with the resolved token URI.
     async fn fetch_metadata(
@@ -77,7 +74,7 @@ where
 
         debug!(
             "Processing {} contract {} (token ID {})",
-            processor.chain_name(),
+            token.chain_name(),
             token.address(),
             token.token_id()
         );
@@ -86,7 +83,7 @@ where
             Err(e) => {
                 let msg = format!(
                     "Failed to fetch metadata for {} contract {} (token ID {}): {}",
-                    processor.chain_name(),
+                    token.chain_name(),
                     token.address(),
                     token.token_id(),
                     e
@@ -104,7 +101,7 @@ where
         if processor.output_path().is_some() {
             match save_metadata(
                 &token_uri,
-                processor.chain_name(),
+                token.chain_name(),
                 token.address(),
                 token.token_id(),
                 processor.output_path().expect("checked is_some above"),
@@ -116,7 +113,7 @@ where
                 Err(e) => {
                     let msg = format!(
                         "Failed to save metadata for {} contract {} (token ID {}): {}",
-                        processor.chain_name(),
+                        token.chain_name(),
                         token.address(),
                         token.token_id(),
                         e
@@ -150,7 +147,7 @@ where
                     debug!(
                         "Pinning {} for {} contract {} (token ID {})",
                         cid,
-                        processor.chain_name(),
+                        token.chain_name(),
                         token.address(),
                         token.token_id()
                     );
@@ -170,7 +167,7 @@ where
                             let msg = format!(
                                 "Failed to pin {} for {} contract {} (token ID {}): {}",
                                 cid,
-                                processor.chain_name(),
+                                token.chain_name(),
                                 token.address(),
                                 token.token_id(),
                                 e
@@ -194,7 +191,7 @@ where
             let opts_for_log = opts.clone();
             match fetch_and_save_content(
                 &url,
-                processor.chain_name(),
+                token.chain_name(),
                 token.address(),
                 token.token_id(),
                 processor
@@ -214,7 +211,7 @@ where
                     let msg = format!(
                         "Failed to fetch {} for {} contract {} (token ID {}): {}",
                         name_for_log,
-                        processor.chain_name(),
+                        token.chain_name(),
                         token.address(),
                         token.token_id(),
                         e
@@ -231,7 +228,7 @@ where
         // Fetch extra content if needed
         if let Some(out) = processor.output_path() {
             match fetch_and_save_extra_content(
-                processor.chain_name(),
+                token.chain_name(),
                 token.address(),
                 token.token_id(),
                 out,
@@ -245,7 +242,7 @@ where
                 Err(e) => {
                     let msg = format!(
                         "Failed to fetch extra content for {} contract {} (token ID {}): {}",
-                        processor.chain_name(),
+                        token.chain_name(),
                         token.address(),
                         token.token_id(),
                         e

@@ -111,12 +111,11 @@ pub mod backup {
                 let rpc_url = chain_config
                     .get(chain_name)
                     .context(format!("No RPC URL configured for chain {chain_name}"))?;
-                let tokens = ContractTokenId::parse_tokens(tokens);
+                let tokens = ContractTokenId::parse_tokens(tokens, chain_name);
                 nft_count += tokens.len();
 
                 let (files, errors, pins) = if chain_name == "tezos" {
                     let processor = Arc::new(TezosChainProcessor::new(
-                        chain_name,
                         rpc_url,
                         cfg.storage_config.clone(),
                     )?);
@@ -126,11 +125,8 @@ pub mod backup {
                     })
                     .await?
                 } else {
-                    let processor = Arc::new(EvmChainProcessor::new(
-                        chain_name,
-                        rpc_url,
-                        cfg.storage_config.clone(),
-                    )?);
+                    let processor =
+                        Arc::new(EvmChainProcessor::new(rpc_url, cfg.storage_config.clone())?);
                     let process_config = cfg.process_config.clone();
                     process_nfts(processor, tokens, process_config, |_metadata| None).await?
                 };

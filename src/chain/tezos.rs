@@ -40,17 +40,12 @@ pub struct NFTFormat {
 
 pub struct TezosChainProcessor {
     pub rpc: TezosRpc<HttpClient>,
-    pub chain_name: String,
     pub output_path: Option<PathBuf>,
     pub ipfs_client: Option<IpfsPinningClient>,
 }
 
 impl TezosChainProcessor {
-    pub fn new(
-        chain_name: impl Into<String>,
-        rpc_url: &str,
-        storage_config: StorageConfig,
-    ) -> anyhow::Result<Self> {
+    pub fn new(rpc_url: &str, storage_config: StorageConfig) -> anyhow::Result<Self> {
         let rpc = TezosRpc::<HttpClient>::new(rpc_url.to_string());
         let ipfs_client = if storage_config.enable_ipfs_pinning {
             if let Some(base) = storage_config.ipfs_pin_base_url {
@@ -66,7 +61,6 @@ impl TezosChainProcessor {
         };
         Ok(Self {
             rpc,
-            chain_name: chain_name.into(),
             output_path: storage_config.output_path,
             ipfs_client,
         })
@@ -78,10 +72,6 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
     type Metadata = NFTMetadata;
     type ContractTokenId = ContractTokenId;
     type RpcClient = tezos_rpc::client::TezosRpc<tezos_rpc::http::default::HttpClient>;
-
-    fn chain_name(&self) -> &str {
-        &self.chain_name
-    }
 
     async fn fetch_metadata(
         &self,

@@ -152,17 +152,12 @@ where
 
 pub struct EvmChainProcessor {
     pub rpc: alloy::providers::RootProvider<Http<Client>>,
-    pub chain_name: String,
     pub output_path: Option<PathBuf>,
     pub ipfs_client: Option<IpfsPinningClient>,
 }
 
 impl EvmChainProcessor {
-    pub fn new(
-        chain_name: impl Into<String>,
-        rpc_url: &str,
-        storage_config: StorageConfig,
-    ) -> anyhow::Result<Self> {
+    pub fn new(rpc_url: &str, storage_config: StorageConfig) -> anyhow::Result<Self> {
         let rpc = ProviderBuilder::new().on_http(rpc_url.parse()?);
         let ipfs_client = if storage_config.enable_ipfs_pinning {
             if let Some(base) = storage_config.ipfs_pin_base_url {
@@ -178,7 +173,6 @@ impl EvmChainProcessor {
         };
         Ok(Self {
             rpc,
-            chain_name: chain_name.into(),
             output_path: storage_config.output_path,
             ipfs_client,
         })
@@ -190,10 +184,6 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
     type Metadata = NFTMetadata;
     type ContractTokenId = ContractTokenId;
     type RpcClient = alloy::providers::RootProvider<Http<Client>>;
-
-    fn chain_name(&self) -> &str {
-        &self.chain_name
-    }
 
     async fn fetch_metadata(
         &self,
@@ -324,7 +314,7 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
 
         // Check for special contract handling first
         if let Some(special_uri) =
-            handle_special_contract_uri(&self.rpc, &self.chain_name, token.address(), &token_id)
+            handle_special_contract_uri(&self.rpc, token.chain_name(), token.address(), &token_id)
                 .await?
         {
             return Ok(special_uri);

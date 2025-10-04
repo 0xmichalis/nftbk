@@ -3,12 +3,14 @@ use serde::{Deserialize, Serialize};
 pub trait ContractTokenInfo {
     fn address(&self) -> &str;
     fn token_id(&self) -> &str;
+    fn chain_name(&self) -> &str;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ContractTokenId {
     pub address: String,
     pub token_id: String,
+    pub chain_name: String,
 }
 
 impl ContractTokenInfo for ContractTokenId {
@@ -18,10 +20,13 @@ impl ContractTokenInfo for ContractTokenId {
     fn token_id(&self) -> &str {
         &self.token_id
     }
+    fn chain_name(&self) -> &str {
+        &self.chain_name
+    }
 }
 
 impl ContractTokenId {
-    pub fn parse_tokens(tokens: &[String]) -> Vec<Self> {
+    pub fn parse_tokens(tokens: &[String], chain_name: &str) -> Vec<Self> {
         tokens
             .iter()
             .map(|s| {
@@ -29,6 +34,7 @@ impl ContractTokenId {
                 ContractTokenId {
                     address: parts[0].to_string(),
                     token_id: parts[1].to_string(),
+                    chain_name: chain_name.to_string(),
                 }
             })
             .collect()
