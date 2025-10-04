@@ -27,6 +27,28 @@ fn check_shutdown_signal(config: &crate::ProcessManagementConfig) -> anyhow::Res
     Ok(())
 }
 
+/// Helper function to handle errors consistently across processing steps
+/// Returns Ok(Some(result)) on success, Ok(None) on error (handled), or Err on exit_on_error
+fn process<T>(
+    result: anyhow::Result<T>,
+    error_msg: String,
+    config: &crate::ProcessManagementConfig,
+    errors: &mut Vec<String>,
+) -> anyhow::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(e) => {
+            let full_msg = format!("{}: {}", error_msg, e);
+            if config.exit_on_error {
+                return Err(anyhow!(full_msg));
+            }
+            error!("{}", full_msg);
+            errors.push(full_msg);
+            Ok(None)
+        }
+    }
+}
+
 /// Trait for NFT chain processors to enable shared logic for fetching metadata and collecting URLs.
 #[async_trait]
 pub trait NFTChainProcessor {
@@ -73,40 +95,28 @@ where
         check_shutdown_signal(&config)?;
 
         debug!("Processing {}", token);
-        let (metadata, token_uri) = match processor.fetch_metadata(&token).await {
-            Ok(pair) => pair,
-            Err(e) => {
-                let msg = format!("Failed to fetch metadata for {token}: {e}");
-                if config.exit_on_error {
-                    return Err(anyhow!(msg));
-                }
-                error!("{}", msg);
-                errors.push(msg);
-                continue;
-            }
+        let (metadata, token_uri) = match process(
+            processor.fetch_metadata(&token).await,
+            format!("Failed to fetch metadata for {token}"),
+            &config,
+            &mut errors,
+        )? {
+            Some(pair) => pair,
+            None => continue,
         };
 
+        // Get output path once and reuse it
+        let output_path = processor.output_path();
+
         // Save metadata to disk only if local storage is enabled
-        if processor.output_path().is_some() {
-            match save_metadata(
-                &token_uri,
-                token.chain_name(),
-                token.address(),
-                token.token_id(),
-                processor.output_path().expect("checked is_some above"),
-                &metadata,
-            )
-            .await
-            {
-                Ok(path) => all_files.push(path),
-                Err(e) => {
-                    let msg = format!("Failed to save metadata for {token}: {e}");
-                    if config.exit_on_error {
-                        return Err(anyhow!(msg));
-                    }
-                    error!("{}", msg);
-                    errors.push(msg);
-                }
+        if let Some(out_path) = output_path {
+            if let Some(path) = process(
+                save_metadata(&token_uri, &token, out_path, &metadata).await,
+                format!("Failed to save metadata for {token}"),
+                &config,
+                &mut errors,
+            )? {
+                all_files.push(path);
             }
         }
 
@@ -128,88 +138,62 @@ where
             if let Some(ipfs_client) = processor.ipfs_client() {
                 if let Some(cid) = extract_ipfs_cid(&url) {
                     debug!("Pinning {} for {}", cid, token);
-                    match ipfs_client
-                        .create_pin(&crate::ipfs::Pin {
-                            cid: cid.clone(),
-                            name: None,
-                            origins: Default::default(),
-                            meta: None,
-                        })
-                        .await
+                    if process(
+                        ipfs_client
+                            .create_pin(&crate::ipfs::Pin {
+                                cid: cid.clone(),
+                                name: None,
+                                origins: Default::default(),
+                                meta: None,
+                            })
+                            .await,
+                        format!("Failed to pin {cid} for {token}"),
+                        &config,
+                        &mut errors,
+                    )?
+                    .is_some()
                     {
-                        Ok(_) => {
-                            all_pins.push(cid);
-                        }
-                        Err(e) => {
-                            let msg = format!("Failed to pin {cid} for {token}: {e}");
-                            if config.exit_on_error {
-                                return Err(anyhow!(msg));
-                            }
-                            error!("{}", msg);
-                            errors.push(msg);
-                        }
+                        all_pins.push(cid);
                     }
                 }
             }
 
             // If no local storage configured, skip download
-            if processor.output_path().is_none() {
+            if output_path.is_none() {
                 continue;
             }
 
             debug!("Downloading {:?} from {}", opts.fallback_filename, url);
-            let opts_for_log = opts.clone();
-            match fetch_and_save_content(
-                &url,
-                token.chain_name(),
-                token.address(),
-                token.token_id(),
-                processor
-                    .output_path()
-                    .expect("output_path exists when downloading"),
-                opts,
-            )
-            .await
-            {
-                Ok(path) => all_files.push(path),
-                Err(e) => {
-                    let name_for_log = opts_for_log
-                        .fallback_filename
-                        .as_deref()
-                        .filter(|s| !s.is_empty())
-                        .unwrap_or("content");
-                    let msg = format!("Failed to fetch {name_for_log} for {token}: {e}");
-                    if config.exit_on_error {
-                        return Err(anyhow!(msg));
-                    }
-                    error!("{}", msg);
-                    errors.push(msg);
-                }
+            let fallback_filename = opts.fallback_filename.clone();
+            let name_for_log = fallback_filename
+                .as_deref()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("content");
+            if let Some(path) = process(
+                fetch_and_save_content(
+                    &url,
+                    &token,
+                    output_path.expect("output_path exists when downloading"),
+                    opts,
+                )
+                .await,
+                format!("Failed to fetch {name_for_log} for {token}"),
+                &config,
+                &mut errors,
+            )? {
+                all_files.push(path);
             }
         }
 
         // Fetch extra content if needed
-        if let Some(out) = processor.output_path() {
-            match fetch_and_save_extra_content(
-                token.chain_name(),
-                token.address(),
-                token.token_id(),
-                out,
-                get_extra_content_uri(&metadata),
-            )
-            .await
-            {
-                Ok(extra_files) => {
-                    all_files.extend(extra_files);
-                }
-                Err(e) => {
-                    let msg = format!("Failed to fetch extra content for {token}: {e}");
-                    if config.exit_on_error {
-                        return Err(anyhow!(msg));
-                    }
-                    error!("{}", msg);
-                    errors.push(msg);
-                }
+        if let Some(out) = output_path {
+            if let Some(extra_files) = process(
+                fetch_and_save_extra_content(&token, out, get_extra_content_uri(&metadata)).await,
+                format!("Failed to fetch extra content for {token}"),
+                &config,
+                &mut errors,
+            )? {
+                all_files.extend(extra_files);
             }
         }
     }

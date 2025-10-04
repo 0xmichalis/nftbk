@@ -13,6 +13,10 @@ use tokio::time::sleep;
 use tokio_util::io::StreamReader;
 use tracing::{debug, info, warn};
 
+#[cfg(test)]
+use crate::chain::common::ContractTokenId;
+use crate::chain::common::ContractTokenInfo;
+
 use crate::content::html::download_html_resources;
 use crate::url::all_ipfs_gateway_urls;
 use crate::url::{get_data_url, get_last_path_segment, get_url, is_data_url, is_ipfs_gateway_url};
@@ -68,16 +72,14 @@ pub struct Options {
 
 async fn get_filename(
     url: &str,
-    chain: &str,
-    contract_address: &str,
-    token_id: &str,
+    token: &impl ContractTokenInfo,
     output_path: &Path,
     options: Options,
 ) -> Result<PathBuf> {
     let dir_path = output_path
-        .join(chain)
-        .join(contract_address)
-        .join(token_id);
+        .join(token.chain_name())
+        .join(token.address())
+        .join(token.token_id());
 
     // Determine filename
     let filename = if let Some(name) = options.overriden_filename {
@@ -550,14 +552,11 @@ async fn write_and_postprocess_file(
 
 pub async fn fetch_and_save_content(
     url: &str,
-    chain: &str,
-    contract_address: &str,
-    token_id: &str,
+    token: &impl ContractTokenInfo,
     output_path: &Path,
     options: Options,
 ) -> Result<PathBuf> {
-    let mut file_path =
-        get_filename(url, chain, contract_address, token_id, output_path, options).await?;
+    let mut file_path = get_filename(url, token, output_path, options).await?;
 
     // Check if file exists (with any extension) using base path and url
     if let Some(existing_path) = try_exists(&file_path).await? {
@@ -660,15 +659,12 @@ pub async fn fetch_content(url: &str) -> anyhow::Result<Vec<u8>> {
 /// Skips writing if an existing file is already present (including known extension variations).
 pub async fn save_content(
     url: &str,
-    chain: &str,
-    contract_address: &str,
-    token_id: &str,
+    token: &impl ContractTokenInfo,
     output_path: &Path,
     options: Options,
     content: &[u8],
 ) -> anyhow::Result<PathBuf> {
-    let mut file_path =
-        get_filename(url, chain, contract_address, token_id, output_path, options).await?;
+    let mut file_path = get_filename(url, token, output_path, options).await?;
 
     // Check if a file already exists (with any extension heuristic)
     if let Some(existing_path) = try_exists(&file_path).await? {
@@ -704,18 +700,14 @@ pub async fn save_content(
 /// Serialize metadata to pretty JSON and save it to disk as metadata.json using save_content.
 pub async fn save_metadata<T: serde::Serialize>(
     token_uri: &str,
-    chain: &str,
-    contract_address: &str,
-    token_id: &str,
+    token: &impl ContractTokenInfo,
     output_path: &Path,
     metadata: &T,
 ) -> anyhow::Result<PathBuf> {
     let bytes = serde_json::to_vec_pretty(metadata)?;
     save_content(
         token_uri,
-        chain,
-        contract_address,
-        token_id,
+        token,
         output_path,
         Options {
             overriden_filename: Some("metadata.json".to_string()),
@@ -760,17 +752,17 @@ mod tests {
     async fn test_save_content_skips_existing_exact_path() {
         let temp_dir = TempDir::new().unwrap();
         let out = temp_dir.path();
-        let chain = "test";
-        let contract = "0xabc";
-        let token = "1";
+        let token = ContractTokenId {
+            chain_name: "test".to_string(),
+            address: "0xabc".to_string(),
+            token_id: "1".to_string(),
+        };
         let url = "https://example.com/file.bin";
 
         // First write
         let path1 = save_content(
             url,
-            chain,
-            contract,
-            token,
+            &token,
             out,
             Options {
                 overriden_filename: None,
@@ -784,9 +776,7 @@ mod tests {
         // Second write should skip and return same path
         let path2 = save_content(
             url,
-            chain,
-            contract,
-            token,
+            &token,
             out,
             Options {
                 overriden_filename: None,
@@ -804,18 +794,18 @@ mod tests {
     async fn test_save_content_detects_extension_from_bytes() {
         let temp_dir = TempDir::new().unwrap();
         let out = temp_dir.path();
-        let chain = "test";
-        let contract = "0xabc";
-        let token = "1";
+        let token = ContractTokenId {
+            chain_name: "test".to_string(),
+            address: "0xabc".to_string(),
+            token_id: "1".to_string(),
+        };
 
         // PNG header bytes
         let png_bytes: &[u8] = b"\x89PNG\r\n\x1A\nrest";
 
         let path = save_content(
             "https://example.com/noext",
-            chain,
-            contract,
-            token,
+            &token,
             out,
             Options {
                 overriden_filename: None,
@@ -844,13 +834,15 @@ mod tests {
 
         let temp_dir = TempDir::new().unwrap();
         let out = temp_dir.path();
-        let chain = "test";
-        let contract = "0xabc";
-        let token = "1";
+        let token = ContractTokenId {
+            chain_name: "test".to_string(),
+            address: "0xabc".to_string(),
+            token_id: "1".to_string(),
+        };
         let token_uri = "https://example.com/meta";
 
         let meta = M { a: 1, b: "x" };
-        let path = save_metadata(token_uri, chain, contract, token, out, &meta)
+        let path = save_metadata(token_uri, &token, out, &meta)
             .await
             .expect("save_metadata should succeed");
 
@@ -865,18 +857,18 @@ mod tests {
     async fn test_sanitize_and_get_filename_via_save_content() {
         let temp_dir = TempDir::new().unwrap();
         let out = temp_dir.path();
-        let chain = "test";
-        let contract = "0xabc";
-        let token = "1";
+        let token = ContractTokenId {
+            chain_name: "test".to_string(),
+            address: "0xabc".to_string(),
+            token_id: "1".to_string(),
+        };
 
         // URL with traversal and separators
         let url = "https://example.com/..//folder/../dangerous/../name";
 
         let path = save_content(
             url,
-            chain,
-            contract,
-            token,
+            &token,
             out,
             Options {
                 overriden_filename: None,
@@ -888,7 +880,10 @@ mod tests {
         .expect("save_content should succeed");
 
         // Ensure path is under the expected directory and filename sanitized
-        let expected_dir = out.join(chain).join(contract).join(token);
+        let expected_dir = out
+            .join(token.chain_name())
+            .join(token.address())
+            .join(token.token_id());
         assert!(path.starts_with(&expected_dir));
         let fname = path.file_name().unwrap().to_string_lossy();
         assert!(!fname.contains(".."));
