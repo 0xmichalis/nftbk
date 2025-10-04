@@ -83,12 +83,25 @@ pub struct BackupConfig {
 pub mod backup {
     use super::*;
 
+    /// Validates that the backup configuration has at least one storage option enabled
+    pub fn validate_backup_config(cfg: &BackupConfig) -> Result<()> {
+        if cfg.storage_config.output_path.is_none() && !cfg.storage_config.enable_ipfs_pinning {
+            return Err(anyhow::anyhow!(
+                "At least one storage option must be enabled: either output_path or enable_ipfs_pinning"
+            ));
+        }
+        Ok(())
+    }
+
     /// Backup tokens from config
     /// Returns all files saved, all pins created, and all errors encountered
     pub async fn backup_from_config(
         cfg: BackupConfig,
         span: Option<tracing::Span>,
     ) -> Result<(Vec<PathBuf>, Vec<String>, Vec<String>)> {
+        // Validate backup configuration
+        validate_backup_config(&cfg)?;
+
         async fn inner(cfg: BackupConfig) -> Result<(Vec<PathBuf>, Vec<String>, Vec<String>)> {
             info!(
                 "The following user agent will be used to fetch content: {}",
@@ -181,6 +194,92 @@ mod tests {
     use std::sync::atomic::Ordering;
     use std::time::Duration;
     use tokio::time::timeout;
+
+    #[test]
+    fn test_validate_backup_config() {
+        use crate::backup::validate_backup_config;
+        use std::path::PathBuf;
+
+        // Test case 1: Both output_path and enable_ipfs_pinning are enabled - should pass
+        let cfg1 = BackupConfig {
+            chain_config: ChainConfig(HashMap::new()),
+            token_config: TokenConfig {
+                chains: HashMap::new(),
+            },
+            storage_config: StorageConfig {
+                output_path: Some(PathBuf::from("/tmp/test")),
+                prune_redundant: false,
+                enable_ipfs_pinning: true,
+                ipfs_pin_base_url: Some("http://example.com".to_string()),
+                ipfs_pin_token: None,
+            },
+            process_config: ProcessManagementConfig {
+                exit_on_error: false,
+                shutdown_flag: None,
+            },
+        };
+        assert!(validate_backup_config(&cfg1).is_ok());
+
+        // Test case 2: Only output_path is enabled - should pass
+        let cfg2 = BackupConfig {
+            chain_config: ChainConfig(HashMap::new()),
+            token_config: TokenConfig {
+                chains: HashMap::new(),
+            },
+            storage_config: StorageConfig {
+                output_path: Some(PathBuf::from("/tmp/test")),
+                prune_redundant: false,
+                enable_ipfs_pinning: false,
+                ipfs_pin_base_url: None,
+                ipfs_pin_token: None,
+            },
+            process_config: ProcessManagementConfig {
+                exit_on_error: false,
+                shutdown_flag: None,
+            },
+        };
+        assert!(validate_backup_config(&cfg2).is_ok());
+
+        // Test case 3: Only enable_ipfs_pinning is enabled - should pass
+        let cfg3 = BackupConfig {
+            chain_config: ChainConfig(HashMap::new()),
+            token_config: TokenConfig {
+                chains: HashMap::new(),
+            },
+            storage_config: StorageConfig {
+                output_path: None,
+                prune_redundant: false,
+                enable_ipfs_pinning: true,
+                ipfs_pin_base_url: Some("http://example.com".to_string()),
+                ipfs_pin_token: None,
+            },
+            process_config: ProcessManagementConfig {
+                exit_on_error: false,
+                shutdown_flag: None,
+            },
+        };
+        assert!(validate_backup_config(&cfg3).is_ok());
+
+        // Test case 4: Neither output_path nor enable_ipfs_pinning are enabled - should fail
+        let cfg4 = BackupConfig {
+            chain_config: ChainConfig(HashMap::new()),
+            token_config: TokenConfig {
+                chains: HashMap::new(),
+            },
+            storage_config: StorageConfig {
+                output_path: None,
+                prune_redundant: false,
+                enable_ipfs_pinning: false,
+                ipfs_pin_base_url: None,
+                ipfs_pin_token: None,
+            },
+            process_config: ProcessManagementConfig {
+                exit_on_error: false,
+                shutdown_flag: None,
+            },
+        };
+        assert!(validate_backup_config(&cfg4).is_err());
+    }
 
     #[tokio::test]
     async fn test_graceful_shutdown_library() {
