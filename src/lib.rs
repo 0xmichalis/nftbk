@@ -82,11 +82,14 @@ pub struct BackupConfig {
 
 pub mod backup {
     use super::*;
+
+    /// Backup tokens from config
+    /// Returns all files saved, all pins created, and all errors encountered
     pub async fn backup_from_config(
         cfg: BackupConfig,
         span: Option<tracing::Span>,
-    ) -> Result<(Vec<PathBuf>, Vec<String>)> {
-        async fn inner(cfg: BackupConfig) -> Result<(Vec<PathBuf>, Vec<String>)> {
+    ) -> Result<(Vec<PathBuf>, Vec<String>, Vec<String>)> {
+        async fn inner(cfg: BackupConfig) -> Result<(Vec<PathBuf>, Vec<String>, Vec<String>)> {
             info!(
                 "The following user agent will be used to fetch content: {}",
                 USER_AGENT
@@ -101,7 +104,9 @@ pub mod backup {
             let start = Instant::now();
             let mut all_files = Vec::new();
             let mut all_errors = Vec::new();
+            let mut all_pins = Vec::new();
             let mut nft_count = 0;
+
             for (chain_name, tokens) in &token_config.chains {
                 if tokens.is_empty() {
                     warn!("No tokens configured for chain {}", chain_name);
@@ -132,7 +137,7 @@ pub mod backup {
                 };
                 all_files.extend(files);
                 all_errors.extend(errors);
-                let _ = pins; // currently unused; could be logged or returned at higher level later
+                all_pins.extend(pins);
             }
 
             if cfg.storage_config.prune_redundant {
@@ -152,14 +157,14 @@ pub mod backup {
                 );
             } else {
                 info!(
-                    "Pinning complete in {:?}s. {} NFTs ({} files).",
+                    "Pinning complete in {:?}s. {} NFTs ({} CIDs pinned).",
                     start.elapsed().as_secs(),
                     nft_count,
-                    all_files.len(),
+                    all_pins.len(),
                 );
             }
 
-            Ok((all_files, all_errors))
+            Ok((all_files, all_pins, all_errors))
         }
 
         match span {

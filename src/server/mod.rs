@@ -299,8 +299,8 @@ async fn run_backup_job_inner(
     let backup_result = backup_from_config(backup_cfg, Some(span)).await;
 
     // Check backup result
-    let (files_written, error_log) = match backup_result {
-        Ok((files, errors)) => (files, errors),
+    let (files_written, _pins, error_log) = match backup_result {
+        Ok((files, pins, errors)) => (files, pins, errors),
         Err(e) => {
             let error_msg = e.to_string();
             if error_msg.contains("interrupted by shutdown signal") {
