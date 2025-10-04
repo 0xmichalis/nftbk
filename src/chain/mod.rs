@@ -50,7 +50,7 @@ fn process<T>(
 }
 
 /// Protect a URL by pinning it to IPFS (if applicable) and downloading content locally
-/// Returns (pinned_cid, downloaded_file_path) where either can be None
+/// Returns (pin_response, downloaded_file_path) where either can be None
 async fn protect_url<C>(
     url: &str,
     opts: &Options,
@@ -58,18 +58,21 @@ async fn protect_url<C>(
     processor: &C,
     exit_on_error: bool,
     errors: &mut Vec<String>,
-) -> anyhow::Result<(Option<String>, Option<std::path::PathBuf>)>
+) -> anyhow::Result<(
+    Option<crate::ipfs::PinStatusResponse>,
+    Option<std::path::PathBuf>,
+)>
 where
     C: NFTChainProcessor,
 {
-    let mut pinned_cid = None;
+    let mut pin_response = None;
     let mut downloaded_path = None;
 
     // If pinning mode is enabled and URL is IPFS, try pinning
     if let Some(ipfs_client) = processor.ipfs_client() {
         if let Some(cid) = extract_ipfs_cid(url) {
             debug!("Pinning {} for {}", cid, token);
-            if process(
+            if let Some(response) = process(
                 ipfs_client
                     .create_pin(&crate::ipfs::Pin {
                         cid: cid.clone(),
@@ -81,10 +84,8 @@ where
                 format!("Failed to pin {cid} for {token}"),
                 exit_on_error,
                 errors,
-            )?
-            .is_some()
-            {
-                pinned_cid = Some(cid);
+            )? {
+                pin_response = Some(response);
             }
         }
     }
@@ -107,11 +108,11 @@ where
         }
     }
 
-    Ok((pinned_cid, downloaded_path))
+    Ok((pin_response, downloaded_path))
 }
 
 /// Protect metadata by pinning the token URI to IPFS (if applicable) and saving metadata locally
-/// Returns (pinned_cid, saved_metadata_path) where either can be None
+/// Returns (pin_response, saved_metadata_path) where either can be None
 async fn protect_metadata<C>(
     token_uri: &str,
     token: &C::ContractTokenId,
@@ -119,19 +120,22 @@ async fn protect_metadata<C>(
     processor: &C,
     exit_on_error: bool,
     errors: &mut Vec<String>,
-) -> anyhow::Result<(Option<String>, Option<std::path::PathBuf>)>
+) -> anyhow::Result<(
+    Option<crate::ipfs::PinStatusResponse>,
+    Option<std::path::PathBuf>,
+)>
 where
     C: NFTChainProcessor,
     C::Metadata: serde::Serialize,
 {
-    let mut pinned_cid = None;
+    let mut pin_response = None;
     let mut saved_path = None;
 
     // If pinning mode is enabled and token URI is IPFS, try pinning
     if let Some(ipfs_client) = processor.ipfs_client() {
         if let Some(cid) = extract_ipfs_cid(token_uri) {
             debug!("Pinning token URI {} for {}", cid, token);
-            if process(
+            if let Some(response) = process(
                 ipfs_client
                     .create_pin(&crate::ipfs::Pin {
                         cid: cid.clone(),
@@ -143,10 +147,8 @@ where
                 format!("Failed to pin token URI {cid} for {token}"),
                 exit_on_error,
                 errors,
-            )?
-            .is_some()
-            {
-                pinned_cid = Some(cid);
+            )? {
+                pin_response = Some(response);
             }
         }
     }
@@ -163,7 +165,7 @@ where
         }
     }
 
-    Ok((pinned_cid, saved_path))
+    Ok((pin_response, saved_path))
 }
 
 /// Trait for NFT chain processors to enable shared logic for fetching metadata and collecting URLs.
@@ -198,7 +200,11 @@ pub async fn process_nfts<C, FExtraUri>(
     tokens: Vec<C::ContractTokenId>,
     config: crate::ProcessManagementConfig,
     get_extra_content_uri: FExtraUri,
-) -> anyhow::Result<(Vec<std::path::PathBuf>, Vec<String>, Vec<String>)>
+) -> anyhow::Result<(
+    Vec<std::path::PathBuf>,
+    Vec<crate::ipfs::PinStatusResponse>,
+    Vec<String>,
+)>
 where
     C: NFTChainProcessor + Sync + Send + 'static,
     C::ContractTokenId: ContractTokenInfo,
@@ -206,7 +212,7 @@ where
     FExtraUri: Fn(&C::Metadata) -> Option<&str>,
 {
     let mut files = Vec::new();
-    let mut pins = Vec::new();
+    let mut pin_responses = Vec::new();
     let mut errors = Vec::new();
 
     for token in tokens {
@@ -227,7 +233,7 @@ where
         let output_path = processor.output_path();
 
         // Protect metadata by pinning token URI and saving locally
-        let (pinned_token_uri_cid, saved_metadata_path) = protect_metadata(
+        let (pin_response, saved_metadata_path) = protect_metadata(
             &token_uri,
             &token,
             &metadata,
@@ -237,8 +243,8 @@ where
         )
         .await?;
 
-        if let Some(cid) = pinned_token_uri_cid {
-            pins.push(cid);
+        if let Some(response) = pin_response {
+            pin_responses.push(response);
         }
 
         if let Some(path) = saved_metadata_path {
@@ -260,7 +266,7 @@ where
             }
 
             // Protect the URL by pinning and downloading
-            let (pinned_cid, downloaded_path) = protect_url(
+            let (pin_response, downloaded_path) = protect_url(
                 &url,
                 &opts,
                 &token,
@@ -270,8 +276,8 @@ where
             )
             .await?;
 
-            if let Some(cid) = pinned_cid {
-                pins.push(cid);
+            if let Some(response) = pin_response {
+                pin_responses.push(response);
             }
 
             if let Some(path) = downloaded_path {
@@ -292,7 +298,7 @@ where
         }
     }
 
-    Ok((files, pins, errors))
+    Ok((files, pin_responses, errors))
 }
 
 #[cfg(test)]
@@ -973,9 +979,14 @@ mod process_nfts_tests {
         assert_eq!(pins.len(), 3); // Three successful pins: metadata, image, and animation
                                    // Content fetching errors are expected for IPFS URLs since we're not mocking the IPFS gateways
 
-        // Verify the pins contain the expected CIDs
-        assert!(pins.contains(&"QmTestMetadataHash".to_string()));
-        assert!(pins.contains(&"QmTestImageHash".to_string()));
-        assert!(pins.contains(&"QmTestAnimationHash".to_string()));
+        // Verify the pins contain the expected request IDs
+        // The mock server returns "test-request-id" as the request ID for all pins
+        for pin_response in pins {
+            assert_eq!(pin_response.requestid, "test-request-id");
+            assert!(matches!(
+                pin_response.status,
+                crate::ipfs::PinStatus::Pinned
+            ));
+        }
     }
 }

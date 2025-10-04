@@ -500,7 +500,7 @@ async fn main() -> Result<()> {
             shutdown_flag: None,
         },
     };
-    let (_files, _pins, error_log) = backup_from_config(backup_config, None).await?;
+    let (_files, _pin_requests, error_log) = backup_from_config(backup_config, None).await?;
     // Write error log to file if present
     if !error_log.is_empty() {
         if let Some(ref out_path) = output_path {

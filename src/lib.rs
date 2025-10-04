@@ -98,15 +98,27 @@ pub mod backup {
     pub async fn backup_from_config(
         cfg: BackupConfig,
         span: Option<tracing::Span>,
-    ) -> Result<(Vec<PathBuf>, Vec<String>, Vec<String>)> {
+    ) -> Result<(
+        Vec<PathBuf>,
+        Vec<crate::ipfs::PinStatusResponse>,
+        Vec<String>,
+    )> {
         // Validate backup configuration
         validate_backup_config(&cfg)?;
 
-        async fn inner(cfg: BackupConfig) -> Result<(Vec<PathBuf>, Vec<String>, Vec<String>)> {
+        async fn inner(
+            cfg: BackupConfig,
+        ) -> Result<(
+            Vec<PathBuf>,
+            Vec<crate::ipfs::PinStatusResponse>,
+            Vec<String>,
+        )> {
             info!(
-                "The following user agent will be used to fetch content: {}",
-                USER_AGENT
+                "Protection requested: download to disk={:?}, pin to IPFS={:?}",
+                cfg.storage_config.output_path.is_some(),
+                cfg.storage_config.enable_ipfs_pinning,
             );
+
             if let Some(ref out) = cfg.storage_config.output_path {
                 fs::create_dir_all(out).await?;
             }
@@ -116,8 +128,8 @@ pub mod backup {
 
             let start = Instant::now();
             let mut all_files = Vec::new();
+            let mut all_pin_responses: Vec<crate::ipfs::PinStatusResponse> = Vec::new();
             let mut all_errors = Vec::new();
-            let mut all_pins = Vec::new();
             let mut nft_count = 0;
 
             for (chain_name, tokens) in &token_config.chains {
@@ -132,7 +144,7 @@ pub mod backup {
                 let tokens = ContractTokenId::parse_tokens(tokens, chain_name);
                 nft_count += tokens.len();
 
-                let (files, pins, errors) = if chain_name == "tezos" {
+                let (files, pin_responses, errors) = if chain_name == "tezos" {
                     let processor = Arc::new(TezosChainProcessor::new(
                         rpc_url,
                         cfg.storage_config.clone(),
@@ -150,7 +162,7 @@ pub mod backup {
                 };
                 all_files.extend(files);
                 all_errors.extend(errors);
-                all_pins.extend(pins);
+                all_pin_responses.extend(pin_responses);
             }
 
             if cfg.storage_config.prune_redundant {
@@ -160,24 +172,19 @@ pub mod backup {
                 }
             }
 
+            info!(
+                "Protection request complete in {:?}s. {} NFTs are protected.",
+                start.elapsed().as_secs(),
+                nft_count,
+            );
             if let Some(ref out) = cfg.storage_config.output_path {
-                info!(
-                    "Backup complete in {:?}s. {} NFTs ({} files) saved in {}.",
-                    start.elapsed().as_secs(),
-                    nft_count,
-                    all_files.len(),
-                    out.display(),
-                );
-            } else {
-                info!(
-                    "Pinning complete in {:?}s. {} NFTs ({} CIDs pinned).",
-                    start.elapsed().as_secs(),
-                    nft_count,
-                    all_pins.len(),
-                );
+                info!("{} files saved in {}.", all_files.len(), out.display(),);
+            }
+            if cfg.storage_config.enable_ipfs_pinning {
+                info!("{} CID pins were requested.", all_pin_responses.len(),);
             }
 
-            Ok((all_files, all_pins, all_errors))
+            Ok((all_files, all_pin_responses, all_errors))
         }
 
         match span {
