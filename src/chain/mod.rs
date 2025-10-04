@@ -49,6 +49,123 @@ fn process<T>(
     }
 }
 
+/// Protect a URL by pinning it to IPFS (if applicable) and downloading content locally
+/// Returns (pinned_cid, downloaded_file_path) where either can be None
+async fn protect_url<C>(
+    url: &str,
+    opts: &Options,
+    token: &C::ContractTokenId,
+    processor: &C,
+    config: &crate::ProcessManagementConfig,
+    errors: &mut Vec<String>,
+) -> anyhow::Result<(Option<String>, Option<std::path::PathBuf>)>
+where
+    C: NFTChainProcessor,
+{
+    let mut pinned_cid = None;
+    let mut downloaded_path = None;
+
+    // If pinning mode is enabled and URL is IPFS, try pinning
+    if let Some(ipfs_client) = processor.ipfs_client() {
+        if let Some(cid) = extract_ipfs_cid(url) {
+            debug!("Pinning {} for {}", cid, token);
+            if process(
+                ipfs_client
+                    .create_pin(&crate::ipfs::Pin {
+                        cid: cid.clone(),
+                        name: None,
+                        origins: Default::default(),
+                        meta: None,
+                    })
+                    .await,
+                format!("Failed to pin {cid} for {token}"),
+                config,
+                errors,
+            )?
+            .is_some()
+            {
+                pinned_cid = Some(cid);
+            }
+        }
+    }
+
+    // If local storage is configured, download content
+    if let Some(output_path) = processor.output_path() {
+        debug!("Downloading {:?} from {}", opts.fallback_filename, url);
+        let fallback_filename = opts.fallback_filename.clone();
+        let name_for_log = fallback_filename
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .unwrap_or("content");
+        if let Some(path) = process(
+            fetch_and_save_content(url, token, output_path, opts.clone()).await,
+            format!("Failed to fetch {name_for_log} for {token}"),
+            config,
+            errors,
+        )? {
+            downloaded_path = Some(path);
+        }
+    }
+
+    Ok((pinned_cid, downloaded_path))
+}
+
+/// Protect metadata by pinning the token URI to IPFS (if applicable) and saving metadata locally
+/// Returns (pinned_cid, saved_metadata_path) where either can be None
+async fn protect_metadata<C>(
+    token_uri: &str,
+    token: &C::ContractTokenId,
+    metadata: &C::Metadata,
+    processor: &C,
+    config: &crate::ProcessManagementConfig,
+    errors: &mut Vec<String>,
+) -> anyhow::Result<(Option<String>, Option<std::path::PathBuf>)>
+where
+    C: NFTChainProcessor,
+    C::Metadata: serde::Serialize,
+{
+    let mut pinned_cid = None;
+    let mut saved_path = None;
+
+    // If pinning mode is enabled and token URI is IPFS, try pinning
+    if let Some(ipfs_client) = processor.ipfs_client() {
+        if let Some(cid) = extract_ipfs_cid(token_uri) {
+            debug!("Pinning token URI {} for {}", cid, token);
+            if process(
+                ipfs_client
+                    .create_pin(&crate::ipfs::Pin {
+                        cid: cid.clone(),
+                        name: None,
+                        origins: Default::default(),
+                        meta: None,
+                    })
+                    .await,
+                format!("Failed to pin token URI {cid} for {token}"),
+                config,
+                errors,
+            )?
+            .is_some()
+            {
+                pinned_cid = Some(cid);
+            }
+        }
+    }
+
+    // If local storage is configured, save metadata
+    if let Some(output_path) = processor.output_path() {
+        if let Some(path) = process(
+            save_metadata(token_uri, token, output_path, metadata).await,
+            format!("Failed to save metadata for {token}"),
+            config,
+            errors,
+        )? {
+            saved_path = Some(path);
+        }
+    }
+
+    Ok((pinned_cid, saved_path))
+}
+
 /// Trait for NFT chain processors to enable shared logic for fetching metadata and collecting URLs.
 #[async_trait]
 pub trait NFTChainProcessor {
@@ -108,16 +225,23 @@ where
         // Get output path once and reuse it
         let output_path = processor.output_path();
 
-        // Save metadata to disk only if local storage is enabled
-        if let Some(out_path) = output_path {
-            if let Some(path) = process(
-                save_metadata(&token_uri, &token, out_path, &metadata).await,
-                format!("Failed to save metadata for {token}"),
-                &config,
-                &mut errors,
-            )? {
-                all_files.push(path);
-            }
+        // Protect metadata by pinning token URI and saving locally
+        let (pinned_token_uri_cid, saved_metadata_path) = protect_metadata(
+            &token_uri,
+            &token,
+            &metadata,
+            &*processor,
+            &config,
+            &mut errors,
+        )
+        .await?;
+
+        if let Some(cid) = pinned_token_uri_cid {
+            all_pins.push(cid);
+        }
+
+        if let Some(path) = saved_metadata_path {
+            all_files.push(path);
         }
 
         let urls_to_protect = C::collect_urls(&metadata);
@@ -134,53 +258,15 @@ where
                 continue;
             }
 
-            // If pinning mode is enabled and URL is IPFS, try pinning
-            if let Some(ipfs_client) = processor.ipfs_client() {
-                if let Some(cid) = extract_ipfs_cid(&url) {
-                    debug!("Pinning {} for {}", cid, token);
-                    if process(
-                        ipfs_client
-                            .create_pin(&crate::ipfs::Pin {
-                                cid: cid.clone(),
-                                name: None,
-                                origins: Default::default(),
-                                meta: None,
-                            })
-                            .await,
-                        format!("Failed to pin {cid} for {token}"),
-                        &config,
-                        &mut errors,
-                    )?
-                    .is_some()
-                    {
-                        all_pins.push(cid);
-                    }
-                }
+            // Protect the URL by pinning and downloading
+            let (pinned_cid, downloaded_path) =
+                protect_url(&url, &opts, &token, &*processor, &config, &mut errors).await?;
+
+            if let Some(cid) = pinned_cid {
+                all_pins.push(cid);
             }
 
-            // If no local storage configured, skip download
-            if output_path.is_none() {
-                continue;
-            }
-
-            debug!("Downloading {:?} from {}", opts.fallback_filename, url);
-            let fallback_filename = opts.fallback_filename.clone();
-            let name_for_log = fallback_filename
-                .as_deref()
-                .filter(|s| !s.is_empty())
-                .unwrap_or("content");
-            if let Some(path) = process(
-                fetch_and_save_content(
-                    &url,
-                    &token,
-                    output_path.expect("output_path exists when downloading"),
-                    opts,
-                )
-                .await,
-                format!("Failed to fetch {name_for_log} for {token}"),
-                &config,
-                &mut errors,
-            )? {
+            if let Some(path) = downloaded_path {
                 all_files.push(path);
             }
         }
