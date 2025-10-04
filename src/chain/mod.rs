@@ -293,3 +293,141 @@ where
 
     Ok((all_files, errors, all_pins))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::anyhow;
+
+    #[test]
+    fn test_process_success() {
+        let mut errors = Vec::new();
+        let result = process(
+            Ok("test_value".to_string()),
+            "Test operation".to_string(),
+            false,
+            &mut errors,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), Some("test_value".to_string()));
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_process_error_exit_on_error_true() {
+        let mut errors = Vec::new();
+        let result = process::<String>(
+            Err(anyhow!("Test error")),
+            "Test operation".to_string(),
+            true,
+            &mut errors,
+        );
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(error_msg.contains("Test operation: Test error"));
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn test_process_error_exit_on_error_false() {
+        let mut errors = Vec::new();
+        let result = process::<String>(
+            Err(anyhow!("Test error")),
+            "Test operation".to_string(),
+            false,
+            &mut errors,
+        );
+
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), None);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0], "Test operation: Test error");
+    }
+
+    #[test]
+    fn test_process_error_message_formatting() {
+        let mut errors = Vec::new();
+        let result = process::<String>(
+            Err(anyhow!("Inner error message")),
+            "Outer operation".to_string(),
+            true,
+            &mut errors,
+        );
+
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert_eq!(error_msg, "Outer operation: Inner error message");
+    }
+
+    #[test]
+    fn test_process_multiple_errors_accumulation() {
+        let mut errors = Vec::new();
+
+        // First error
+        let result1 = process::<String>(
+            Err(anyhow!("First error")),
+            "First operation".to_string(),
+            false,
+            &mut errors,
+        );
+        assert!(result1.is_ok());
+        assert_eq!(result1.unwrap(), None);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0], "First operation: First error");
+
+        // Second error
+        let result2 = process::<String>(
+            Err(anyhow!("Second error")),
+            "Second operation".to_string(),
+            false,
+            &mut errors,
+        );
+        assert!(result2.is_ok());
+        assert_eq!(result2.unwrap(), None);
+        assert_eq!(errors.len(), 2);
+        assert_eq!(errors[1], "Second operation: Second error");
+
+        // Success should not add to errors
+        let result3 = process(
+            Ok("success_value".to_string()),
+            "Success operation".to_string(),
+            false,
+            &mut errors,
+        );
+        assert!(result3.is_ok());
+        assert_eq!(result3.unwrap(), Some("success_value".to_string()));
+        assert_eq!(errors.len(), 2); // Should still be 2
+    }
+
+    #[test]
+    fn test_process_with_different_result_types() {
+        let mut errors = Vec::new();
+
+        // Test with integer result
+        let int_result = process(Ok(42), "Integer operation".to_string(), false, &mut errors);
+        assert!(int_result.is_ok());
+        assert_eq!(int_result.unwrap(), Some(42));
+
+        // Test with boolean result
+        let bool_result = process(
+            Ok(true),
+            "Boolean operation".to_string(),
+            false,
+            &mut errors,
+        );
+        assert!(bool_result.is_ok());
+        assert_eq!(bool_result.unwrap(), Some(true));
+
+        // Test with vector result
+        let vec_result = process(
+            Ok(vec![1, 2, 3]),
+            "Vector operation".to_string(),
+            false,
+            &mut errors,
+        );
+        assert!(vec_result.is_ok());
+        assert_eq!(vec_result.unwrap(), Some(vec![1, 2, 3]));
+    }
+}
