@@ -31,21 +31,21 @@ fn check_shutdown_signal(config: &crate::ProcessManagementConfig) -> anyhow::Res
 #[async_trait]
 pub trait NFTChainProcessor {
     type Metadata;
-    type ContractTokenId: ContractTokenInfo + Send + Sync;
+    type ContractTokenId: ContractTokenInfo + Send + Sync + std::fmt::Display;
     type RpcClient: Send + Sync;
+
+    /// Get the token URI for a contract using the chain's RPC client.
+    async fn get_uri(&self, token: &Self::ContractTokenId) -> anyhow::Result<String>;
 
     /// Fetch the metadata JSON for a given contract/token and return it in-memory
     /// along with the resolved token URI.
     async fn fetch_metadata(
         &self,
-        contract: &Self::ContractTokenId,
+        token: &Self::ContractTokenId,
     ) -> anyhow::Result<(Self::Metadata, String)>;
 
     /// Collect all URLs to download from the metadata.
     fn collect_urls(metadata: &Self::Metadata) -> Vec<(String, Options)>;
-
-    /// Get the token URI for a contract using the chain's RPC client.
-    async fn get_uri(&self, contract: &Self::ContractTokenId) -> anyhow::Result<String>;
 
     /// Optional IPFS pinning client available to the processor
     fn ipfs_client(&self) -> Option<&IpfsPinningClient>;
@@ -72,22 +72,11 @@ where
     for token in tokens {
         check_shutdown_signal(&config)?;
 
-        debug!(
-            "Processing {} contract {} (token ID {})",
-            token.chain_name(),
-            token.address(),
-            token.token_id()
-        );
+        debug!("Processing {}", token);
         let (metadata, token_uri) = match processor.fetch_metadata(&token).await {
             Ok(pair) => pair,
             Err(e) => {
-                let msg = format!(
-                    "Failed to fetch metadata for {} contract {} (token ID {}): {}",
-                    token.chain_name(),
-                    token.address(),
-                    token.token_id(),
-                    e
-                );
+                let msg = format!("Failed to fetch metadata for {}: {}", token, e);
                 if config.exit_on_error {
                     return Err(anyhow!(msg));
                 }
@@ -111,13 +100,7 @@ where
             {
                 Ok(path) => all_files.push(path),
                 Err(e) => {
-                    let msg = format!(
-                        "Failed to save metadata for {} contract {} (token ID {}): {}",
-                        token.chain_name(),
-                        token.address(),
-                        token.token_id(),
-                        e
-                    );
+                    let msg = format!("Failed to save metadata for {}: {}", token, e);
                     if config.exit_on_error {
                         return Err(anyhow!(msg));
                     }
@@ -144,13 +127,7 @@ where
             // If pinning mode is enabled and URL is IPFS, try pinning
             if let Some(ipfs_client) = processor.ipfs_client() {
                 if let Some(cid) = extract_ipfs_cid(&url) {
-                    debug!(
-                        "Pinning {} for {} contract {} (token ID {})",
-                        cid,
-                        token.chain_name(),
-                        token.address(),
-                        token.token_id()
-                    );
+                    debug!("Pinning {} for {}", cid, token);
                     match ipfs_client
                         .create_pin(&crate::ipfs::Pin {
                             cid: cid.clone(),
@@ -164,14 +141,7 @@ where
                             all_pins.push(cid);
                         }
                         Err(e) => {
-                            let msg = format!(
-                                "Failed to pin {} for {} contract {} (token ID {}): {}",
-                                cid,
-                                token.chain_name(),
-                                token.address(),
-                                token.token_id(),
-                                e
-                            );
+                            let msg = format!("Failed to pin {} for {}: {}", cid, token, e);
                             if config.exit_on_error {
                                 return Err(anyhow!(msg));
                             }
@@ -208,14 +178,7 @@ where
                         .as_deref()
                         .filter(|s| !s.is_empty())
                         .unwrap_or("content");
-                    let msg = format!(
-                        "Failed to fetch {} for {} contract {} (token ID {}): {}",
-                        name_for_log,
-                        token.chain_name(),
-                        token.address(),
-                        token.token_id(),
-                        e
-                    );
+                    let msg = format!("Failed to fetch {} for {}: {}", name_for_log, token, e);
                     if config.exit_on_error {
                         return Err(anyhow!(msg));
                     }
@@ -240,13 +203,7 @@ where
                     all_files.extend(extra_files);
                 }
                 Err(e) => {
-                    let msg = format!(
-                        "Failed to fetch extra content for {} contract {} (token ID {}): {}",
-                        token.chain_name(),
-                        token.address(),
-                        token.token_id(),
-                        e
-                    );
+                    let msg = format!("Failed to fetch extra content for {}: {}", token, e);
                     if config.exit_on_error {
                         return Err(anyhow!(msg));
                     }

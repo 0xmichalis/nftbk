@@ -190,11 +190,7 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         token: &Self::ContractTokenId,
     ) -> anyhow::Result<(Self::Metadata, String)> {
         let token_uri = self.get_uri(token).await?;
-        debug!(
-            "Fetching metadata from {} for contract {}",
-            token_uri,
-            token.address()
-        );
+        debug!("Fetching metadata from {} for {}", token_uri, token);
         let bytes = fetch_content(&token_uri).await?;
         let metadata: NFTMetadata = serde_json::from_slice(&bytes)?;
         Ok((metadata, token_uri))

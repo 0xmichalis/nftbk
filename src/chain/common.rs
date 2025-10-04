@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 pub trait ContractTokenInfo {
     fn address(&self) -> &str;
@@ -38,6 +39,36 @@ impl ContractTokenId {
                 }
             })
             .collect()
+    }
+}
+
+impl fmt::Display for ContractTokenId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} contract {} (token ID {})",
+            self.chain_name, self.address, self.token_id
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_display_contract_token_id() {
+        let token = ContractTokenId {
+            address: "0x1234567890123456789012345678901234567890".to_string(),
+            token_id: "42".to_string(),
+            chain_name: "ethereum".to_string(),
+        };
+
+        let formatted = format!("{}", token);
+        assert_eq!(
+            formatted,
+            "ethereum contract 0x1234567890123456789012345678901234567890 (token ID 42)"
+        );
     }
 }
 

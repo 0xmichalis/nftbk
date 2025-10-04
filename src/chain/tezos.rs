@@ -10,7 +10,6 @@ use tezos_rpc::http::default::HttpClient;
 use tracing::debug;
 
 use crate::chain::common::ContractTokenId;
-use crate::chain::ContractTokenInfo;
 use crate::content::fetch_content;
 use crate::content::Options;
 use crate::ipfs::IpfsPinningClient;
@@ -78,11 +77,7 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         token: &Self::ContractTokenId,
     ) -> anyhow::Result<(Self::Metadata, String)> {
         let token_uri = self.get_uri(token).await?;
-        debug!(
-            "Fetching metadata from {} for contract {}",
-            token_uri,
-            token.address()
-        );
+        debug!("Fetching metadata from {} for {}", token_uri, token);
         let bytes = fetch_content(&token_uri).await?;
         let metadata: NFTMetadata = serde_json::from_slice(&bytes)?;
         Ok((metadata, token_uri))
