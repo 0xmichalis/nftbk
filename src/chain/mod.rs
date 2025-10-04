@@ -76,7 +76,7 @@ where
         let (metadata, token_uri) = match processor.fetch_metadata(&token).await {
             Ok(pair) => pair,
             Err(e) => {
-                let msg = format!("Failed to fetch metadata for {}: {}", token, e);
+                let msg = format!("Failed to fetch metadata for {token}: {e}");
                 if config.exit_on_error {
                     return Err(anyhow!(msg));
                 }
@@ -100,7 +100,7 @@ where
             {
                 Ok(path) => all_files.push(path),
                 Err(e) => {
-                    let msg = format!("Failed to save metadata for {}: {}", token, e);
+                    let msg = format!("Failed to save metadata for {token}: {e}");
                     if config.exit_on_error {
                         return Err(anyhow!(msg));
                     }
@@ -141,7 +141,7 @@ where
                             all_pins.push(cid);
                         }
                         Err(e) => {
-                            let msg = format!("Failed to pin {} for {}: {}", cid, token, e);
+                            let msg = format!("Failed to pin {cid} for {token}: {e}");
                             if config.exit_on_error {
                                 return Err(anyhow!(msg));
                             }
@@ -178,7 +178,7 @@ where
                         .as_deref()
                         .filter(|s| !s.is_empty())
                         .unwrap_or("content");
-                    let msg = format!("Failed to fetch {} for {}: {}", name_for_log, token, e);
+                    let msg = format!("Failed to fetch {name_for_log} for {token}: {e}");
                     if config.exit_on_error {
                         return Err(anyhow!(msg));
                     }
@@ -203,7 +203,7 @@ where
                     all_files.extend(extra_files);
                 }
                 Err(e) => {
-                    let msg = format!("Failed to fetch extra content for {}: {}", token, e);
+                    let msg = format!("Failed to fetch extra content for {token}: {e}");
                     if config.exit_on_error {
                         return Err(anyhow!(msg));
                     }

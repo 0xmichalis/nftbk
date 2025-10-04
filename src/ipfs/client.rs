@@ -45,7 +45,7 @@ impl IpfsPinningClient {
             return Err(anyhow::anyhow!("{}: {}", err, text));
         }
         let parsed: PinStatusResponse = serde_json::from_str(&text)
-            .with_context(|| format!("decoding PinStatusResponse: {}", text))?;
+            .with_context(|| format!("decoding PinStatusResponse: {text}"))?;
         Ok(parsed)
     }
 
@@ -63,7 +63,7 @@ impl IpfsPinningClient {
             return Err(anyhow::anyhow!("{}: {}", err, text));
         }
         let parsed: PinStatusResponse = serde_json::from_str(&text)
-            .with_context(|| format!("decoding PinStatusResponse: {}", text))?;
+            .with_context(|| format!("decoding PinStatusResponse: {text}"))?;
         Ok(parsed)
     }
 
@@ -107,7 +107,7 @@ impl IpfsPinningClient {
             return Err(anyhow::anyhow!("{}: {}", err, text));
         }
         let parsed: PinsListResponse = serde_json::from_str(&text)
-            .with_context(|| format!("decoding PinsListResponse: {}", text))?;
+            .with_context(|| format!("decoding PinsListResponse: {text}"))?;
         Ok(parsed)
     }
 
@@ -126,7 +126,7 @@ impl IpfsPinningClient {
             return Err(anyhow::anyhow!("{}: {}", err, text));
         }
         let parsed: PinStatusResponse = serde_json::from_str(&text)
-            .with_context(|| format!("decoding PinStatusResponse: {}", text))?;
+            .with_context(|| format!("decoding PinStatusResponse: {text}"))?;
         Ok(parsed)
     }
 
