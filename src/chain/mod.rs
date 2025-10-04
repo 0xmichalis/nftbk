@@ -130,10 +130,10 @@ where
             }
         }
 
-        let urls_to_download = C::collect_urls(&metadata);
+        let urls_to_protect = C::collect_urls(&metadata);
 
         let mut downloaded = HashSet::new();
-        for (url, opts) in urls_to_download {
+        for (url, opts) in urls_to_protect {
             check_shutdown_signal(&config)?;
 
             if !downloaded.insert(url.clone()) {
