@@ -80,8 +80,8 @@ mod tests {
             chain: "tezos".to_string(),
             tokens: vec!["a".to_string()],
         };
-        let hash1 = compute_task_id(&[t1.clone()], Some("tenant"));
-        let hash2 = compute_task_id(&[t2.clone()], Some("tenant"));
+        let hash1 = compute_task_id(std::slice::from_ref(&t1), Some("tenant"));
+        let hash2 = compute_task_id(std::slice::from_ref(&t2), Some("tenant"));
         assert_ne!(
             hash1, hash2,
             "Same token on different chains should have different hashes"
@@ -112,7 +112,7 @@ mod tests {
             chain: "eth".to_string(),
             tokens: vec!["a".to_string()],
         };
-        let h1 = compute_task_id(&[t.clone()], Some("tenant-a"));
+        let h1 = compute_task_id(std::slice::from_ref(&t), Some("tenant-a"));
         let h2 = compute_task_id(&[t], Some("tenant-b"));
         assert_ne!(
             h1, h2,

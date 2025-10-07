@@ -59,8 +59,7 @@ mod tests {
     use tempfile::TempDir;
 
     async fn setup_test_dir() -> TempDir {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        temp_dir
+        TempDir::new().expect("Failed to create temp dir")
     }
 
     #[tokio::test]

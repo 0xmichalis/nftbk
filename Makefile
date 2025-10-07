@@ -9,7 +9,7 @@ fmt:
 
 .PHONY: clippy
 clippy:
-	@SQLX_OFFLINE=true cargo clippy -- -D warnings
+	@SQLX_OFFLINE=true cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 .PHONY: sort
 sort:

@@ -95,8 +95,7 @@ mod tests {
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     async fn setup_test_dir() -> TempDir {
-        let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        temp_dir
+        TempDir::new().expect("Failed to create temp dir")
     }
 
     async fn setup_mock_server() -> MockServer {
