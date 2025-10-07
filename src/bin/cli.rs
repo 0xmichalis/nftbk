@@ -486,9 +486,9 @@ async fn main() -> Result<()> {
     // Load IPFS provider configuration from file if provided
     let ipfs_providers = if let Some(path) = &args.ipfs_config {
         let contents = std::fs::read_to_string(path)
-            .with_context(|| format!("Failed to read IPFS config file '{}'", path))?;
+            .with_context(|| format!("Failed to read IPFS config file '{path}'"))?;
         let config: IpfsConfigFile = toml::from_str(&contents)
-            .with_context(|| format!("Failed to parse IPFS config file '{}'", path))?;
+            .with_context(|| format!("Failed to parse IPFS config file '{path}'"))?;
         config.ipfs_provider
     } else {
         Vec::new()
