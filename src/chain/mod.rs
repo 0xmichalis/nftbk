@@ -77,7 +77,7 @@ where
     let name = if is_metadata {
         format!("{token}-metadata-{cid}")
     } else {
-        format!("{token}:{cid}")
+        format!("{token}-{cid}")
     };
     let pin_request = PinRequest {
         cid: cid.to_string(),
@@ -198,7 +198,7 @@ mod pin_tests {
             .unwrap();
         assert_eq!(res.len(), 1);
         // id mirrors the pin name set by pin_cid
-        assert!(res[0].id.contains(":QmCid"));
+        assert!(res[0].id.contains("-QmCid"));
     }
 
     #[tokio::test]
