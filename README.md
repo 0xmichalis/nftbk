@@ -130,8 +130,8 @@ open http://localhost:8080/swagger-ui
 # The hook runs formatting, clippy, and tests
 cp .hooks/pre-commit .git/hooks/pre-commit
 
-# Update the sqlx cache and commit any changes when necessary - this is needed when developing new
-# queries or updating existing queries in the server.
+# Update the sqlx cache and commit any changes when necessary - this is needed when developing
+# new or updating existing static queries in the server.
 make sqlxprepare
 
 # Run tests with coverage output in HTML
