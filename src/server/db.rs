@@ -372,7 +372,7 @@ impl Db {
             let p4 = bind_count + 4;
             let p5 = bind_count + 5;
             bind_count += 5;
-            query.push_str(&format!("(${}, ${}, ${}, ${}, ${})", p1, p2, p3, p4, p5));
+            query.push_str(&format!("(${p1}, ${p2}, ${p3}, ${p4}, ${p5})"));
         }
         let mut q = sqlx::query(&query);
         for pin in pins {
