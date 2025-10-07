@@ -2,7 +2,7 @@ use anyhow::anyhow;
 use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
-use tracing::{debug, error, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::content::extra::fetch_and_save_extra_content;
 use crate::content::{fetch_and_save_content, save_metadata, Options};
@@ -85,15 +85,24 @@ where
     };
 
     for provider in providers {
+        info!(
+            "Requesting to pin {cid} for {token} to provider {}",
+            provider.provider_name()
+        );
         if let Some(response) = process(
             provider.create_pin(&pin_request).await,
             format!(
-                "Failed to pin {cid} for {token} to provider {}",
+                "Failed to request pinning {cid} for {token} to provider {}",
                 provider.provider_name()
             ),
             exit_on_error,
             errors,
         )? {
+            info!(
+                "Requested to pin {cid} for {token} to provider {} (request id: {})",
+                provider.provider_name(),
+                response.id
+            );
             pin_responses.push(response);
         }
     }
