@@ -39,6 +39,7 @@ httpdate = "1.0"
 hyper = { version = "1.0", features = ["full"] }
 josekit = "0.10.3"
 libc = "0.2"
+once_cell = { version = "1", default-features = false }
 prettytable = "0.10"
 rand = "0.8"
 regex = "1"
@@ -69,6 +70,7 @@ uuid = { version = "1.4", features = ["v4"] }
 zip = "0.6"
 
 [dev-dependencies]
+once_cell = { version = "1", default-features = false }
 tempfile = "3.8"
 tokio-test = "0.4"
 wiremock = "0.5"

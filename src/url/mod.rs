@@ -1,4 +1,6 @@
 use base64::Engine;
+use once_cell::sync::Lazy;
+use std::sync::RwLock;
 use url::Url;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +31,63 @@ pub const IPFS_GATEWAYS: &[IpfsGatewayConfig] = &[
         gateway_type: IpfsGatewayType::Path,
     },
 ];
+
+// Returns gateways configured via environment or falls back to the defaults above.
+// Env format (comma-separated list):
+//   IPFS_GATEWAYS="https://ipfs.local|path,https://gw.example.com|subdomain"
+// If type is omitted, defaults to |path.
+fn configured_ipfs_gateways() -> Vec<IpfsGatewayConfig> {
+    {
+        if let Some(over) = IPFS_GATEWAYS_OVERRIDE.read().unwrap().as_ref() {
+            return over.clone();
+        }
+    }
+    let env_val = match std::env::var("IPFS_GATEWAYS") {
+        Ok(v) if !v.trim().is_empty() => v,
+        _ => return IPFS_GATEWAYS.to_vec(),
+    };
+
+    env_val
+        .split(',')
+        .filter_map(|entry| {
+            let trimmed = entry.trim();
+            if trimmed.is_empty() {
+                return None;
+            }
+            let mut parts = trimmed.split('|');
+            let url = parts.next()?.trim();
+            if url.is_empty() {
+                return None;
+            }
+            let ty_str = parts.next().unwrap_or("path").trim().to_ascii_lowercase();
+            let gateway_type = match ty_str.as_str() {
+                "subdomain" => IpfsGatewayType::Subdomain,
+                _ => IpfsGatewayType::Path,
+            };
+            Some(IpfsGatewayConfig {
+                url: Box::leak(url.to_string().into_boxed_str()),
+                gateway_type,
+            })
+        })
+        .collect()
+}
+
+static IPFS_GATEWAYS_OVERRIDE: Lazy<RwLock<Option<Vec<IpfsGatewayConfig>>>> =
+    Lazy::new(|| RwLock::new(None));
+
+/// Override the in-process IPFS gateways for the current process.
+/// Passing None clears the override and falls back to defaults/env.
+pub fn set_ipfs_gateways_override(gateways: Option<Vec<(String, IpfsGatewayType)>>) {
+    let mut guard = IPFS_GATEWAYS_OVERRIDE.write().unwrap();
+    *guard = gateways.map(|list| {
+        list.into_iter()
+            .map(|(url, gateway_type)| IpfsGatewayConfig {
+                url: Box::leak(url.into_boxed_str()),
+                gateway_type,
+            })
+            .collect()
+    });
+}
 
 pub fn is_data_url(url: &str) -> bool {
     url.starts_with("data:") || is_svg_content(url) || is_json_content(url)
@@ -122,9 +181,9 @@ fn construct_gateway_url(ipfs_content: &str, gateway: &IpfsGatewayConfig) -> Str
 }
 
 /// Returns all possible IPFS gateway URLs for a given IPFS URL/hash
-pub fn get_ipfs_gateway_urls(url: &str) -> Vec<String> {
+fn get_ipfs_gateway_urls(url: &str) -> Vec<String> {
     if let Some(ipfs_path) = extract_ipfs_content(url) {
-        return IPFS_GATEWAYS
+        return configured_ipfs_gateways()
             .iter()
             .map(|gw| construct_gateway_url(&ipfs_path, gw))
             .collect();
@@ -147,7 +206,7 @@ pub fn get_url(url: &str) -> String {
 /// TODO: Should probably collapse this into get_ipfs_gateway_urls
 pub fn all_ipfs_gateway_urls(url: &str) -> Option<Vec<String>> {
     extract_ipfs_content_from_gateway_url(url).map(|ipfs_content| {
-        IPFS_GATEWAYS
+        configured_ipfs_gateways()
             .iter()
             .map(|gw| construct_gateway_url(&ipfs_content, gw))
             .collect()

@@ -824,6 +824,12 @@ mod process_nfts_tests {
         // Start wiremock server
         let mock_server = MockServer::start().await;
 
+        // Ensure gateway resolution uses only the mock server during this test (scoped override)
+        crate::url::set_ipfs_gateways_override(Some(vec![(
+            mock_server.uri(),
+            crate::url::IpfsGatewayType::Path,
+        )]));
+
         // Create temp directory
         let temp_dir = TempDir::new().unwrap();
 
@@ -879,6 +885,9 @@ mod process_nfts_tests {
                 .await
                 .unwrap();
 
+        // Restore default gateway configuration
+        crate::url::set_ipfs_gateways_override(None);
+
         // Verify results - files should still be created even if IPFS pinning fails
         assert_eq!(files.len(), 1); // Only metadata.json (content fetching fails for IPFS URLs)
         assert_eq!(pins.len(), 0); // No successful pins due to IPFS failure
@@ -894,6 +903,12 @@ mod process_nfts_tests {
     async fn test_process_nfts_with_ipfs_auth_required() {
         // Start wiremock server
         let mock_server = MockServer::start().await;
+
+        // Ensure gateway resolution uses only the mock server during this test (scoped override)
+        crate::url::set_ipfs_gateways_override(Some(vec![(
+            mock_server.uri(),
+            crate::url::IpfsGatewayType::Path,
+        )]));
 
         // Create temp directory
         let temp_dir = TempDir::new().unwrap();
@@ -947,6 +962,9 @@ mod process_nfts_tests {
                 .await
                 .unwrap();
 
+        // Restore default gateway configuration
+        crate::url::set_ipfs_gateways_override(None);
+
         // Verify results - files should still be created even if IPFS auth fails
         assert_eq!(files.len(), 1); // Only metadata.json (content fetching fails for IPFS URLs)
         assert_eq!(pins.len(), 0); // No successful pins due to auth failure
@@ -962,6 +980,12 @@ mod process_nfts_tests {
     async fn test_process_nfts_with_ipfs_pinning_success() {
         // Start wiremock server
         let mock_server = MockServer::start().await;
+
+        // Ensure gateway resolution uses only the mock server during this test (scoped override)
+        crate::url::set_ipfs_gateways_override(Some(vec![(
+            mock_server.uri(),
+            crate::url::IpfsGatewayType::Path,
+        )]));
 
         // Create temp directory
         let temp_dir = TempDir::new().unwrap();
@@ -1015,6 +1039,9 @@ mod process_nfts_tests {
             process_nfts(processor, tokens, config, get_no_extra_content_uri)
                 .await
                 .unwrap();
+
+        // Restore default gateway configuration
+        crate::url::set_ipfs_gateways_override(None);
 
         // Verify results - IPFS pinning should work even if content fetching fails
         assert_eq!(files.len(), 1); // Only metadata.json (content fetching may fail for IPFS URLs)
