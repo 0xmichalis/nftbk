@@ -31,9 +31,6 @@ WORKDIR /app
 COPY --from=builder /usr/src/app/target/release/nftbk-server /app/nftbk-server
 COPY config_chains.toml /app/config_chains.toml
 
-# Expose the port your server listens on (adjust if needed)
-EXPOSE 8080
-
 # Run as non-root user for security
 USER nonroot:nonroot
 
