@@ -544,11 +544,11 @@ mod tests {
                 .to_string(),
         ];
 
-        let ipfs_url = &format!("ipfs://{}", valid_qm);
+        let ipfs_url = &format!("ipfs://{valid_qm}");
         let urls = get_ipfs_gateway_urls(ipfs_url);
         assert_eq!(urls, expected);
 
-        let ipfs_url2 = &format!("ipfs://ipfs/{}", valid_qm);
+        let ipfs_url2 = &format!("ipfs://ipfs/{valid_qm}");
         let urls2 = get_ipfs_gateway_urls(ipfs_url2);
         assert_eq!(urls2, expected);
 
@@ -594,8 +594,7 @@ mod tests {
         for expected_url in &expected_urls {
             assert!(
                 urls.contains(expected_url),
-                "Missing expected URL: {}",
-                expected_url
+                "Missing expected URL: {expected_url}"
             );
         }
 
@@ -695,16 +694,14 @@ mod tests {
         let expected_subdomain = "https://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco.ipfs.4everland.io/images/logo.png";
         assert!(
             urls.contains(&expected_subdomain.to_string()),
-            "URLs should contain subdomain gateway with path: {}",
-            expected_subdomain
+            "URLs should contain subdomain gateway with path: {expected_subdomain}"
         );
 
         let expected_path =
             "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png";
         assert!(
             urls.contains(&expected_path.to_string()),
-            "URLs should contain path-based gateway: {}",
-            expected_path
+            "URLs should contain path-based gateway: {expected_path}"
         );
     }
 
@@ -717,16 +714,14 @@ mod tests {
         let expected_subdomain = "https://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco.ipfs.4everland.io/images/logo.png";
         assert!(
             urls.contains(&expected_subdomain.to_string()),
-            "URLs should contain subdomain gateway with path: {}",
-            expected_subdomain
+            "URLs should contain subdomain gateway with path: {expected_subdomain}"
         );
 
         let expected_path =
             "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png";
         assert!(
             urls.contains(&expected_path.to_string()),
-            "URLs should contain path-based gateway: {}",
-            expected_path
+            "URLs should contain path-based gateway: {expected_path}"
         );
     }
 
@@ -779,8 +774,7 @@ mod tests {
         for expected_url in &expected_urls {
             assert!(
                 urls.contains(expected_url),
-                "Missing expected URL: {}",
-                expected_url
+                "Missing expected URL: {expected_url}"
             );
         }
 

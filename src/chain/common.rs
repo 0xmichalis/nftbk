@@ -81,7 +81,7 @@ mod tests {
             chain_name: "ethereum".to_string(),
         };
 
-        let formatted = format!("{}", token);
+        let formatted = format!("{token}");
         assert_eq!(
             formatted,
             "ethereum contract 0x1234567890123456789012345678901234567890 (token ID 42)"

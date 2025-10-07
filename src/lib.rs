@@ -333,10 +333,7 @@ mod tests {
                             e.to_string().contains("shutdown")
                                 || e.to_string().contains("interrupted")
                         );
-                        println!(
-                            "Backup was interrupted by shutdown signal as expected: {}",
-                            e
-                        );
+                        println!("Backup was interrupted by shutdown signal as expected: {e}");
                     }
                 }
             }

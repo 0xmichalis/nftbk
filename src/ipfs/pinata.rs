@@ -432,8 +432,7 @@ mod tests {
             let response = client.create_pin(&request).await.unwrap();
             assert_eq!(
                 response.status, expected_status,
-                "Status '{}' should map to {:?}",
-                pinata_status, expected_status
+                "Status '{pinata_status}' should map to {expected_status:?}"
             );
         }
     }

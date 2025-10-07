@@ -668,7 +668,7 @@ mod tests {
     fn get_evm_rpc_url() -> String {
         if let Ok(api_key) = std::env::var("ALCHEMY_API_KEY") {
             if !api_key.is_empty() {
-                return format!("{}/{}", DEFAULT_ALCHEMY_URL, api_key);
+                return format!("{DEFAULT_ALCHEMY_URL}/{api_key}");
             }
         }
         DEFAULT_LLAMARPC_URL.to_string()
@@ -735,8 +735,7 @@ mod tests {
                     let type_value = type_attr.value.as_str().unwrap();
                     assert!(
                         matches!(type_value, "Male" | "Female" | "Zombie" | "Ape" | "Alien"),
-                        "Type should be one of the valid CryptoPunk types, got: {}",
-                        type_value
+                        "Type should be one of the valid CryptoPunk types, got: {type_value}"
                     );
                 }
 
@@ -747,7 +746,7 @@ mod tests {
             }
             Err(e) => {
                 // Network error is acceptable in tests, but log it
-                println!("Network error in test (acceptable): {}", e);
+                println!("Network error in test (acceptable): {e}");
                 // We can't fully test the network call, but we can verify the contract detection logic
                 // by checking that it doesn't return None for CryptoPunks
                 assert!(
@@ -836,8 +835,7 @@ mod tests {
                     let type_value = type_attr.value.as_str().unwrap();
                     assert!(
                         matches!(type_value, "Male" | "Female" | "Zombie" | "Ape" | "Alien"),
-                        "Type should be one of the valid CryptoPunk types from contract, got: {}",
-                        type_value
+                        "Type should be one of the valid CryptoPunk types from contract, got: {type_value}"
                     );
                 }
 
@@ -857,7 +855,7 @@ mod tests {
             }
             Err(e) => {
                 // Network error is acceptable in tests, but log it
-                println!("Network error in test (acceptable): {}", e);
+                println!("Network error in test (acceptable): {e}");
                 // We can't fully test the network call, but we can verify the function exists and compiles
                 assert!(
                     !e.to_string().contains("not found"),

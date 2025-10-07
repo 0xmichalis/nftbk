@@ -817,11 +817,7 @@ mod tests {
         .expect("save_content should succeed");
 
         let name = path.file_name().unwrap().to_string_lossy();
-        assert!(
-            name.ends_with(".png"),
-            "expected png extension, got {}",
-            name
-        );
+        assert!(name.ends_with(".png"), "expected png extension, got {name}");
     }
 
     #[tokio::test]
@@ -1031,7 +1027,7 @@ mod tests {
         // This test is more about ensuring the retry mechanism works
         // The actual result depends on timing and network conditions
         // For now, we just verify the function doesn't panic
-        println!("Streaming test result: {:?}", result);
+        println!("Streaming test result: {result:?}");
 
         // The delay doesn't cause a streaming error, so no retry happens
         // This is expected behavior - the test verifies the function doesn't panic
