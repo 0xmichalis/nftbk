@@ -19,7 +19,7 @@ jobs:
         fetch-depth: 0  # Full clone to ensure git history is available
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@1.88.0
+      uses: dtolnay/rust-toolchain@stable
       with:
         components: rustfmt, clippy
 
