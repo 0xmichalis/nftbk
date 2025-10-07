@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub struct PinRequest {
     pub cid: String,
     pub name: Option<String>,
+    pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 /// Unified pin response that all providers return

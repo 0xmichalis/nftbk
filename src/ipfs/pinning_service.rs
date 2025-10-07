@@ -5,7 +5,7 @@ use reqwest::Client;
 use crate::USER_AGENT;
 
 use super::provider::{IpfsPinningProvider, PinRequest, PinResponse, PinResponseStatus};
-use super::types::{Pin, PinStatusResponse, PinsListQuery, PinsListResponse};
+use super::types::{Pin, PinMeta, PinStatusResponse, PinsListQuery, PinsListResponse};
 
 #[derive(Clone)]
 pub struct IpfsPinningClient {
@@ -119,7 +119,7 @@ impl IpfsPinningProvider for IpfsPinningClient {
             cid: request.cid.clone(),
             name: request.name.clone(),
             origins: Default::default(),
-            meta: None,
+            meta: request.metadata.as_ref().map(|m| PinMeta(m.clone())),
         };
 
         let req = self.http.post(url).json(&pin);
@@ -260,6 +260,7 @@ mod tests {
         let request = PinRequest {
             cid: "bafy...".into(),
             name: Some("my".into()),
+            metadata: None,
         };
 
         let res = client.create_pin(&request).await.unwrap();

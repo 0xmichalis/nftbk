@@ -57,6 +57,7 @@ async fn pin_cid<C>(
     exit_on_error: bool,
     errors: &mut Vec<String>,
     is_metadata: bool,
+    fallback_filename: Option<&str>,
 ) -> anyhow::Result<Vec<crate::ipfs::PinResponse>>
 where
     C: NFTChainProcessor,
@@ -74,14 +75,18 @@ where
         providers.len()
     );
 
-    let name = if is_metadata {
-        format!("{token}-metadata-{cid}")
-    } else {
-        format!("{token}-{cid}")
-    };
+    let name = fallback_filename
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(if is_metadata {
+            "metadata.json"
+        } else {
+            "content"
+        });
     let pin_request = PinRequest {
         cid: cid.to_string(),
-        name: Some(name),
+        name: Some(name.to_string()),
+        metadata: Some(token.to_pin_metadata_map()),
     };
 
     for provider in providers {
@@ -128,8 +133,17 @@ where
 
     // If pinning mode is enabled and URL is IPFS, try pinning
     if let Some(cid) = extract_ipfs_cid(url) {
-        pin_responses =
-            pin_cid(cid.as_str(), token, processor, exit_on_error, errors, false).await?;
+        let fallback = opts.fallback_filename.as_deref().filter(|s| !s.is_empty());
+        pin_responses = pin_cid(
+            cid.as_str(),
+            token,
+            processor,
+            exit_on_error,
+            errors,
+            false,
+            fallback,
+        )
+        .await?;
     }
 
     // If local storage is configured, download content
@@ -172,8 +186,16 @@ where
 
     // If pinning mode is enabled and token URI is IPFS, try pinning to all providers
     if let Some(cid) = extract_ipfs_cid(token_uri) {
-        let responses =
-            pin_cid(cid.as_str(), token, processor, exit_on_error, errors, true).await?;
+        let responses = pin_cid(
+            cid.as_str(),
+            token,
+            processor,
+            exit_on_error,
+            errors,
+            true,
+            Some("metadata"),
+        )
+        .await?;
         pin_responses.extend(responses);
     }
 
@@ -1094,12 +1116,19 @@ mod pin_cid_tests {
             chain_name: "ethereum".into(),
         };
         let mut errors = Vec::new();
-        let res = pin_cid("QmCid", &token, &processor, false, &mut errors, false)
-            .await
-            .unwrap();
+        let res = pin_cid(
+            "QmCid",
+            &token,
+            &processor,
+            false,
+            &mut errors,
+            false,
+            Some("fallback"),
+        )
+        .await
+        .unwrap();
         assert_eq!(res.len(), 1);
-        // id mirrors the pin name set by pin_cid
-        assert!(res[0].id.contains("-QmCid"));
+        assert_eq!(res[0].id, "fallback");
     }
 
     #[tokio::test]
@@ -1113,11 +1142,19 @@ mod pin_cid_tests {
             chain_name: "ethereum".into(),
         };
         let mut errors = Vec::new();
-        let res = pin_cid("QmMeta", &token, &processor, false, &mut errors, true)
-            .await
-            .unwrap();
+        let res = pin_cid(
+            "QmMeta",
+            &token,
+            &processor,
+            false,
+            &mut errors,
+            true,
+            Some("metadata"),
+        )
+        .await
+        .unwrap();
         assert_eq!(res.len(), 1);
-        assert!(res[0].id.contains("-metadata-QmMeta"));
+        assert_eq!(res[0].id, "metadata");
     }
 
     #[tokio::test]
@@ -1131,10 +1168,19 @@ mod pin_cid_tests {
             chain_name: "ethereum".into(),
         };
         let mut errors = Vec::new();
-        let res = pin_cid("QmX", &token, &processor, false, &mut errors, false)
-            .await
-            .unwrap();
+        let res = pin_cid(
+            "QmX",
+            &token,
+            &processor,
+            false,
+            &mut errors,
+            false,
+            Some("x"),
+        )
+        .await
+        .unwrap();
         assert_eq!(res.len(), 2);
+        assert!(res.iter().all(|r| r.id == "x"));
         let providers: std::collections::HashSet<_> =
             res.iter().map(|r| r.provider.as_str()).collect();
         assert!(providers.contains("p1") && providers.contains("p2"));

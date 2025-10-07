@@ -21,6 +21,8 @@ struct PinataPinByCidRequest {
     cid: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keyvalues: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -130,6 +132,7 @@ impl IpfsPinningProvider for PinataClient {
         let pinata_request = PinataPinByCidRequest {
             cid: request.cid.clone(),
             name: effective_name.clone(),
+            keyvalues: request.metadata.clone(),
         };
 
         let res = self
@@ -278,6 +281,7 @@ mod tests {
         let request = PinRequest {
             cid: "QmTestHash".to_string(),
             name: Some("test-pin".to_string()),
+            metadata: None,
         };
 
         let response = client.create_pin(&request).await.unwrap();
@@ -312,6 +316,7 @@ mod tests {
         let request = PinRequest {
             cid: "QmAnotherHash".to_string(),
             name: None,
+            metadata: None,
         };
 
         let response = client.create_pin(&request).await.unwrap();
@@ -349,6 +354,7 @@ mod tests {
         let request = PinRequest {
             cid: "QmLongNameHash".to_string(),
             name: Some(long_name),
+            metadata: None,
         };
 
         let response = client.create_pin(&request).await.unwrap();
@@ -375,6 +381,7 @@ mod tests {
         let request = PinRequest {
             cid: "QmTestHash".to_string(),
             name: None,
+            metadata: None,
         };
 
         let result = client.create_pin(&request).await;
@@ -419,6 +426,7 @@ mod tests {
             let request = PinRequest {
                 cid: "QmTest".to_string(),
                 name: None,
+                metadata: None,
             };
 
             let response = client.create_pin(&request).await.unwrap();
@@ -452,6 +460,7 @@ mod tests {
         let request = PinRequest {
             cid: "QmTest".to_string(),
             name: None,
+            metadata: None,
         };
 
         let response = client.create_pin(&request).await.unwrap();

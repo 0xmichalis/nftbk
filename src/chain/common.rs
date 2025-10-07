@@ -5,6 +5,23 @@ pub trait ContractTokenInfo {
     fn address(&self) -> &str;
     fn token_id(&self) -> &str;
     fn chain_name(&self) -> &str;
+
+    fn to_pin_metadata_map(&self) -> serde_json::Map<String, serde_json::Value> {
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "chain".to_string(),
+            serde_json::Value::String(self.chain_name().to_string()),
+        );
+        metadata.insert(
+            "address".to_string(),
+            serde_json::Value::String(self.address().to_string()),
+        );
+        metadata.insert(
+            "token_id".to_string(),
+            serde_json::Value::String(self.token_id().to_string()),
+        );
+        metadata
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
