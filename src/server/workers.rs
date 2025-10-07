@@ -24,14 +24,7 @@ pub fn spawn_backup_workers(
                 };
                 match job {
                     Some(BackupJobOrShutdown::Job(job)) => {
-                        run_backup_job(
-                            state_clone.clone(),
-                            job.task_id,
-                            job.tokens,
-                            job.force,
-                            job.archive_format,
-                        )
-                        .await;
+                        run_backup_job(state_clone.clone(), job).await;
                     }
                     Some(BackupJobOrShutdown::Shutdown) | None => break,
                 }

@@ -13,7 +13,7 @@ pub struct PinRequest {
 /// Unified pin response that all providers return
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PinResponse {
-    /// Provider-specific request/pin ID
+    /// Provider-specific request ID
     pub id: String,
     /// The CID that was pinned
     pub cid: String,

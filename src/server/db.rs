@@ -346,4 +346,52 @@ impl Db {
 
         Ok(recs)
     }
+
+    /// Insert pin request rows for a given requestor
+    pub async fn insert_pin_requests(
+        &self,
+        requestor: &str,
+        pins: &[crate::ipfs::PinResponse],
+    ) -> Result<(), sqlx::Error> {
+        if pins.is_empty() {
+            return Ok(());
+        }
+        // Build a single multi-values INSERT for efficiency
+        let mut query = String::from(
+            "INSERT INTO pin_requests (provider, cid, request_id, status, requestor) VALUES ",
+        );
+        let mut bind_count = 0;
+        for i in 0..pins.len() {
+            if i > 0 {
+                query.push_str(", ");
+            }
+            // 5 bind params per row
+            let p1 = bind_count + 1;
+            let p2 = bind_count + 2;
+            let p3 = bind_count + 3;
+            let p4 = bind_count + 4;
+            let p5 = bind_count + 5;
+            bind_count += 5;
+            query.push_str(&format!("(${}, ${}, ${}, ${}, ${})", p1, p2, p3, p4, p5));
+        }
+        let mut q = sqlx::query(&query);
+        for pin in pins {
+            // Map status enum to lowercase string to satisfy CHECK constraint
+            let status = match pin.status {
+                crate::ipfs::PinResponseStatus::Queued => "queued",
+                crate::ipfs::PinResponseStatus::Pinning => "pinning",
+                crate::ipfs::PinResponseStatus::Pinned => "pinned",
+                crate::ipfs::PinResponseStatus::Failed => "failed",
+            };
+            q = q
+                .bind(&pin.provider)
+                .bind(&pin.cid)
+                .bind(&pin.id)
+                .bind(status)
+                .bind(requestor);
+        }
+
+        q.execute(&self.pool).await?;
+        Ok(())
+    }
 }
