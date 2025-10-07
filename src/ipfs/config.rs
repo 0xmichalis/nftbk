@@ -59,10 +59,7 @@ impl IpfsProviderConfig {
     ) -> Result<Option<String>> {
         if let Some(env_name) = env_var_name {
             let token = std::env::var(env_name).with_context(|| {
-                format!(
-                    "Environment variable '{}' not set for IPFS provider token",
-                    env_name
-                )
+                format!("Environment variable '{env_name}' not set for IPFS provider token",)
             })?;
             Ok(Some(token))
         } else {
