@@ -139,6 +139,7 @@ impl IpfsPinningProvider for IpfsPinningClient {
             cid: parsed.pin.cid,
             status: Self::convert_status(parsed.status),
             provider: self.provider_name().to_string(),
+            metadata: parsed.pin.meta.map(|m| m.0),
         })
     }
 
@@ -164,6 +165,7 @@ impl IpfsPinningProvider for IpfsPinningClient {
             cid: parsed.pin.cid,
             status: Self::convert_status(parsed.status),
             provider: self.provider_name().to_string(),
+            metadata: parsed.pin.meta.map(|m| m.0),
         })
     }
 
@@ -181,6 +183,7 @@ impl IpfsPinningProvider for IpfsPinningClient {
                 cid: pin_status.pin.cid,
                 status: Self::convert_status(pin_status.status),
                 provider: self.provider_name().to_string(),
+                metadata: pin_status.pin.meta.map(|m| m.0),
             })
             .collect();
 

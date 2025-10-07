@@ -1078,6 +1078,7 @@ mod pin_cid_tests {
                 cid: request.cid.clone(),
                 status: crate::ipfs::PinResponseStatus::Queued,
                 provider: self.provider_name().to_string(),
+                metadata: None,
             })
         }
 

@@ -38,6 +38,8 @@ struct PinataResponseData {
     name: Option<String>,
     cid: String,
     status: String,
+    #[serde(default)]
+    keyvalues: serde_json::Value,
 }
 
 // Pinata API types for list_pins
@@ -162,6 +164,10 @@ impl IpfsPinningProvider for PinataClient {
             cid: parsed.data.cid,
             status,
             provider: self.provider_name().to_string(),
+            metadata: match parsed.data.keyvalues {
+                serde_json::Value::Object(map) => Some(map),
+                _ => None,
+            },
         })
     }
 
@@ -207,6 +213,10 @@ impl IpfsPinningProvider for PinataClient {
                     cid: job.cid,
                     status,
                     provider: self.provider_name().to_string(),
+                    metadata: match job.keyvalues {
+                        serde_json::Value::Object(map) => Some(map),
+                        _ => None,
+                    },
                 }
             })
             .collect();
