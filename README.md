@@ -52,9 +52,9 @@ All credential sets in the file are considered valid and tried during authentica
 
 ### IPFS Pinning
 
-The server supports pinning content to IPFS using configurable providers. Configuration is provided via a TOML file passed with the `--ipfs-config` flag.
+There is support for pinning IPFS content using multiple providers. Both the [IPFS Pinning Service API](https://ipfs.github.io/pinning-services-api-spec/) and the [Pinata API](https://docs.pinata.cloud/api-reference/introduction) are currently supported. 
 
-Example `config_ipfs.toml`:
+Both the server and CLI can be configured to pin CIDs on IPFS via a TOML file passed with the `--ipfs-config` flag. Example `config_ipfs.toml`:
 
 ```toml
 # Pin to a standard IPFS Pinning Service
@@ -71,12 +71,6 @@ bearer_token_env = "PINATA_TOKEN"
 ```
 
 **Security best practice**: Use `bearer_token_env` to reference environment variables for API keys rather than embedding tokens directly in the config file. If both `bearer_token` and `bearer_token_env` are provided, `bearer_token_env` takes precedence.
-
-**CLI usage**: The CLI uses the same configuration file approach:
-```sh
-# Backup with IPFS pinning enabled
-nftbk-cli --ipfs-config config_ipfs.toml
-```
 
 ## Run
 
