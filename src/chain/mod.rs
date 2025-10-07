@@ -322,7 +322,7 @@ where
 }
 
 #[cfg(test)]
-mod tests {
+mod process_tests {
     use super::*;
     use anyhow::anyhow;
 
@@ -1012,7 +1012,7 @@ mod process_nfts_tests {
 }
 
 #[cfg(test)]
-mod pin_tests {
+mod pin_cid_tests {
     use super::*;
     use crate::chain::common::ContractTokenId;
 
