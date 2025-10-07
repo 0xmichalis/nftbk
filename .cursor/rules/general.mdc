@@ -44,3 +44,7 @@ The best way to ensure that is to run `make all`.
 ## Debugging
 
 - When you see `error communicating with database` error then that means that some of the tests are trying to communicate with a real database. Avoid these errors by running tests with `SQLX_OFFLINE=true` or use the Makefile target for running tests `make test` that already sets SQLX_OFFLINE
+
+## Testing
+
+- When adding unit tests for a function, create a test module dedicates to that function named `mod <function_name>_tests`
