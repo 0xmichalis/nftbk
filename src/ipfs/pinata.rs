@@ -107,14 +107,29 @@ impl PinataClient {
     }
 }
 
+const MAX_PIN_NAME_LEN: usize = 50;
+
 #[async_trait]
 impl IpfsPinningProvider for PinataClient {
     async fn create_pin(&self, request: &PinRequest) -> Result<PinResponse> {
         let url = format!("{}/v3/files/public/pin_by_cid", self.base_url);
 
+        // Enforce Pinata-specific name length constraint
+        let mut effective_name = request.name.clone();
+        if let Some(n) = &mut effective_name {
+            if n.len() > MAX_PIN_NAME_LEN {
+                warn!(
+                    "Pinata pin name too long ({} > {}), truncating",
+                    n.len(),
+                    MAX_PIN_NAME_LEN
+                );
+                n.truncate(MAX_PIN_NAME_LEN);
+            }
+        }
+
         let pinata_request = PinataPinByCidRequest {
             cid: request.cid.clone(),
-            name: request.name.clone(),
+            name: effective_name.clone(),
         };
 
         let res = self
@@ -303,6 +318,42 @@ mod tests {
 
         assert_eq!(response.id, "test-pin-id-456");
         assert_eq!(response.cid, "QmAnotherHash");
+        assert_eq!(response.status, PinResponseStatus::Queued);
+        assert_eq!(response.provider, "pinata");
+    }
+
+    #[tokio::test]
+    async fn test_pinata_create_pin_name_truncated() {
+        let server = MockServer::start().await;
+
+        let long_name = "x".repeat(100);
+        let _expected_truncated = "x".repeat(MAX_PIN_NAME_LEN);
+
+        let expected_response = serde_json::json!({
+            "data": {
+                "id": "test-pin-id-999",
+                "cid": "QmLongNameHash",
+                "status": "prechecking"
+            }
+        });
+
+        Mock::given(method("POST"))
+            .and(path("/v3/files/public/pin_by_cid"))
+            .and(header("user-agent", USER_AGENT))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(expected_response))
+            .mount(&server)
+            .await;
+
+        let client = PinataClient::new(server.uri(), "test-token".to_string());
+        let request = PinRequest {
+            cid: "QmLongNameHash".to_string(),
+            name: Some(long_name),
+        };
+
+        let response = client.create_pin(&request).await.unwrap();
+        assert_eq!(response.cid, "QmLongNameHash");
+        // Status mapping of prechecking -> Queued
         assert_eq!(response.status, PinResponseStatus::Queued);
         assert_eq!(response.provider, "pinata");
     }
