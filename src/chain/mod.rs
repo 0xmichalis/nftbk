@@ -49,6 +49,188 @@ fn process<T>(
     }
 }
 
+/// Pin a CID to all configured providers with a standardized name
+async fn pin_cid<C>(
+    cid: &str,
+    token: &C::ContractTokenId,
+    processor: &C,
+    exit_on_error: bool,
+    errors: &mut Vec<String>,
+    is_metadata: bool,
+) -> anyhow::Result<Vec<crate::ipfs::PinResponse>>
+where
+    C: NFTChainProcessor,
+{
+    let mut pin_responses = Vec::new();
+    let providers = processor.ipfs_providers();
+    if providers.is_empty() {
+        return Ok(pin_responses);
+    }
+
+    debug!(
+        "Pinning {} for {} to {} provider(s)",
+        cid,
+        token,
+        providers.len()
+    );
+
+    let name = if is_metadata {
+        format!("{token}-metadata-{cid}")
+    } else {
+        format!("{token}:{cid}")
+    };
+    let pin_request = PinRequest {
+        cid: cid.to_string(),
+        name: Some(name),
+    };
+
+    for provider in providers {
+        if let Some(response) = process(
+            provider.create_pin(&pin_request).await,
+            format!(
+                "Failed to pin {cid} for {token} to provider {}",
+                provider.provider_name()
+            ),
+            exit_on_error,
+            errors,
+        )? {
+            pin_responses.push(response);
+        }
+    }
+
+    Ok(pin_responses)
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::*;
+    use crate::chain::common::ContractTokenId;
+
+    struct MockProvider(&'static str);
+
+    #[async_trait]
+    impl IpfsPinningProvider for MockProvider {
+        async fn create_pin(
+            &self,
+            request: &PinRequest,
+        ) -> anyhow::Result<crate::ipfs::PinResponse> {
+            Ok(crate::ipfs::PinResponse {
+                id: request.name.clone().unwrap_or_default(),
+                cid: request.cid.clone(),
+                status: crate::ipfs::PinResponseStatus::Queued,
+                provider: self.provider_name().to_string(),
+            })
+        }
+
+        async fn get_pin(&self, _pin_id: &str) -> anyhow::Result<crate::ipfs::PinResponse> {
+            unimplemented!()
+        }
+
+        async fn list_pins(&self) -> anyhow::Result<Vec<crate::ipfs::PinResponse>> {
+            unimplemented!()
+        }
+
+        async fn delete_pin(&self, _request_id: &str) -> anyhow::Result<()> {
+            unimplemented!()
+        }
+
+        fn provider_name(&self) -> &str {
+            self.0
+        }
+    }
+
+    struct TestProcessor {
+        providers: Vec<Box<dyn IpfsPinningProvider>>,
+    }
+
+    #[async_trait]
+    impl NFTChainProcessor for TestProcessor {
+        type Metadata = serde_json::Value;
+        type ContractTokenId = ContractTokenId;
+        type RpcClient = ();
+
+        async fn get_uri(&self, _token: &Self::ContractTokenId) -> anyhow::Result<String> {
+            unimplemented!()
+        }
+
+        async fn fetch_metadata(
+            &self,
+            _token: &Self::ContractTokenId,
+        ) -> anyhow::Result<(Self::Metadata, String)> {
+            unimplemented!()
+        }
+
+        fn collect_urls(_metadata: &Self::Metadata) -> Vec<(String, Options)> {
+            Vec::new()
+        }
+
+        fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
+            &self.providers
+        }
+
+        fn output_path(&self) -> Option<&std::path::Path> {
+            None
+        }
+    }
+
+    #[tokio::test]
+    async fn test_pin_cid_sets_content_name() {
+        let processor = TestProcessor {
+            providers: vec![Box::new(MockProvider("p1"))],
+        };
+        let token = ContractTokenId {
+            address: "0xabc".into(),
+            token_id: "1".into(),
+            chain_name: "ethereum".into(),
+        };
+        let mut errors = Vec::new();
+        let res = pin_cid("QmCid", &token, &processor, false, &mut errors, false)
+            .await
+            .unwrap();
+        assert_eq!(res.len(), 1);
+        // id mirrors the pin name set by pin_cid
+        assert!(res[0].id.contains(":QmCid"));
+    }
+
+    #[tokio::test]
+    async fn test_pin_cid_sets_metadata_name() {
+        let processor = TestProcessor {
+            providers: vec![Box::new(MockProvider("p1"))],
+        };
+        let token = ContractTokenId {
+            address: "0xabc".into(),
+            token_id: "1".into(),
+            chain_name: "ethereum".into(),
+        };
+        let mut errors = Vec::new();
+        let res = pin_cid("QmMeta", &token, &processor, false, &mut errors, true)
+            .await
+            .unwrap();
+        assert_eq!(res.len(), 1);
+        assert!(res[0].id.contains("-metadata-QmMeta"));
+    }
+
+    #[tokio::test]
+    async fn test_pin_cid_multiple_providers() {
+        let processor = TestProcessor {
+            providers: vec![Box::new(MockProvider("p1")), Box::new(MockProvider("p2"))],
+        };
+        let token = ContractTokenId {
+            address: "0xabc".into(),
+            token_id: "1".into(),
+            chain_name: "ethereum".into(),
+        };
+        let mut errors = Vec::new();
+        let res = pin_cid("QmX", &token, &processor, false, &mut errors, false)
+            .await
+            .unwrap();
+        assert_eq!(res.len(), 2);
+        let providers: std::collections::HashSet<_> =
+            res.iter().map(|r| r.provider.as_str()).collect();
+        assert!(providers.contains("p1") && providers.contains("p2"));
+    }
+}
+
 /// Protect a URL by pinning it to IPFS (if applicable) and downloading content locally
 /// Returns (pin_responses, downloaded_file_path) where either can be empty/None
 async fn protect_url<C>(
@@ -65,37 +247,10 @@ where
     let mut pin_responses = Vec::new();
     let mut downloaded_path = None;
 
-    // If pinning mode is enabled and URL is IPFS, try pinning to all providers
-    let providers = processor.ipfs_providers();
-    if !providers.is_empty() {
-        if let Some(cid) = extract_ipfs_cid(url) {
-            debug!(
-                "Pinning {} for {} to {} provider(s)",
-                cid,
-                token,
-                providers.len()
-            );
-
-            let pin_request = PinRequest {
-                cid: cid.clone(),
-                name: Some(format!("{token}:{cid}")),
-            };
-
-            // Pin to all providers
-            for provider in providers {
-                if let Some(response) = process(
-                    provider.create_pin(&pin_request).await,
-                    format!(
-                        "Failed to pin {cid} for {token} to provider {}",
-                        provider.provider_name()
-                    ),
-                    exit_on_error,
-                    errors,
-                )? {
-                    pin_responses.push(response);
-                }
-            }
-        }
+    // If pinning mode is enabled and URL is IPFS, try pinning
+    if let Some(cid) = extract_ipfs_cid(url) {
+        pin_responses =
+            pin_cid(cid.as_str(), token, processor, exit_on_error, errors, false).await?;
     }
 
     // If local storage is configured, download content
@@ -137,36 +292,10 @@ where
     let mut saved_path = None;
 
     // If pinning mode is enabled and token URI is IPFS, try pinning to all providers
-    let providers = processor.ipfs_providers();
-    if !providers.is_empty() {
-        if let Some(cid) = extract_ipfs_cid(token_uri) {
-            debug!(
-                "Pinning token URI {} for {} to {} provider(s)",
-                cid,
-                token,
-                providers.len()
-            );
-
-            let pin_request = PinRequest {
-                cid: cid.clone(),
-                name: Some(format!("{token}:{cid}")),
-            };
-
-            // Pin to all providers
-            for provider in providers {
-                if let Some(response) = process(
-                    provider.create_pin(&pin_request).await,
-                    format!(
-                        "Failed to pin token URI {cid} for {token} to provider {}",
-                        provider.provider_name()
-                    ),
-                    exit_on_error,
-                    errors,
-                )? {
-                    pin_responses.push(response);
-                }
-            }
-        }
+    if let Some(cid) = extract_ipfs_cid(token_uri) {
+        let responses =
+            pin_cid(cid.as_str(), token, processor, exit_on_error, errors, true).await?;
+        pin_responses.extend(responses);
     }
 
     // If local storage is configured, save metadata
