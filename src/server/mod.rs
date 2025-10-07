@@ -11,6 +11,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::backup::ChainConfig;
+use crate::ipfs::IpfsProviderConfig;
 use crate::server::api::Tokens;
 use crate::server::archive::{
     get_zipped_backup_paths, zip_backup, ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
@@ -51,9 +52,7 @@ pub struct AppState {
     pub backup_job_sender: mpsc::Sender<BackupJobOrShutdown>,
     pub db: Arc<Db>,
     pub shutdown_flag: Arc<AtomicBool>,
-    pub enable_ipfs_pinning: bool,
-    pub ipfs_pin_base_url: Option<String>,
-    pub ipfs_pin_token: Option<String>,
+    pub ipfs_providers: Vec<IpfsProviderConfig>,
 }
 
 #[derive(Debug, Clone)]
@@ -90,7 +89,7 @@ impl AppState {
         db_url: &str,
         max_connections: u32,
         shutdown_flag: Arc<AtomicBool>,
-        ipfs_pin_base_url: Option<String>,
+        ipfs_provider_config: Vec<IpfsProviderConfig>,
     ) -> Self {
         let config_content = tokio::fs::read_to_string(chain_config_path)
             .await
@@ -102,12 +101,9 @@ impl AppState {
             .resolve_env_vars()
             .expect("Failed to resolve environment variables in chain config");
         let db = Arc::new(Db::new(db_url, max_connections).await);
-        // Get IPFS pin token from environment variable if IPFS URL is provided
-        let ipfs_pin_token = if ipfs_pin_base_url.is_some() {
-            std::env::var("IPFS_PIN_TOKEN").ok()
-        } else {
-            None
-        };
+
+        // Use IPFS providers from config
+        let ipfs_providers = ipfs_provider_config;
 
         AppState {
             chain_config: Arc::new(chain_config),
@@ -120,9 +116,7 @@ impl AppState {
             backup_job_sender,
             db,
             shutdown_flag,
-            enable_ipfs_pinning: ipfs_pin_base_url.is_some(),
-            ipfs_pin_base_url,
-            ipfs_pin_token,
+            ipfs_providers,
         }
     }
 }
@@ -286,9 +280,7 @@ async fn run_backup_job_inner(
         storage_config: StorageConfig {
             output_path: Some(out_path.clone()),
             prune_redundant: false,
-            enable_ipfs_pinning: state.enable_ipfs_pinning,
-            ipfs_pin_base_url: state.ipfs_pin_base_url.clone(),
-            ipfs_pin_token: state.ipfs_pin_token.clone(),
+            ipfs_providers: state.ipfs_providers.clone(),
         },
         process_config: ProcessManagementConfig {
             exit_on_error: false,

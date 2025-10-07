@@ -12,7 +12,7 @@ use tracing::debug;
 use crate::chain::common::ContractTokenId;
 use crate::content::fetch_content;
 use crate::content::Options;
-use crate::ipfs::IpfsPinningClient;
+use crate::ipfs::IpfsPinningProvider;
 use crate::StorageConfig;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -40,28 +40,21 @@ pub struct NFTFormat {
 pub struct TezosChainProcessor {
     pub rpc: TezosRpc<HttpClient>,
     pub output_path: Option<PathBuf>,
-    pub ipfs_client: Option<IpfsPinningClient>,
+    pub ipfs_providers: Vec<Box<dyn IpfsPinningProvider>>,
 }
 
 impl TezosChainProcessor {
     pub fn new(rpc_url: &str, storage_config: StorageConfig) -> anyhow::Result<Self> {
         let rpc = TezosRpc::<HttpClient>::new(rpc_url.to_string());
-        let ipfs_client = if storage_config.enable_ipfs_pinning {
-            if let Some(base) = storage_config.ipfs_pin_base_url {
-                let token = storage_config.ipfs_pin_token;
-                Some(IpfsPinningClient::new(base, token))
-            } else {
-                return Err(anyhow::anyhow!(
-                    "IPFS pinning is enabled but no IPFS pinning service base URL is configured"
-                ));
-            }
-        } else {
-            None
-        };
+        let ipfs_providers: Vec<Box<dyn IpfsPinningProvider>> = storage_config
+            .ipfs_providers
+            .iter()
+            .map(|config| config.create_provider())
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             rpc,
             output_path: storage_config.output_path,
-            ipfs_client,
+            ipfs_providers,
         })
     }
 }
@@ -156,8 +149,8 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         Ok(get_uri_from_token_metadata(&json_value).unwrap_or_default())
     }
 
-    fn ipfs_client(&self) -> Option<&IpfsPinningClient> {
-        self.ipfs_client.as_ref()
+    fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
+        &self.ipfs_providers
     }
 
     fn output_path(&self) -> Option<&std::path::Path> {

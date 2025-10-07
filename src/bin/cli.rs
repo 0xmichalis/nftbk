@@ -15,11 +15,17 @@ use zip::ZipArchive;
 
 use nftbk::backup::{backup_from_config, BackupConfig, ChainConfig, TokenConfig};
 use nftbk::envvar::is_defined;
+use nftbk::ipfs::IpfsProviderConfig;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
 use nftbk::server::archive::archive_format_from_user_agent;
 use nftbk::{ProcessManagementConfig, StorageConfig};
+
+#[derive(serde::Deserialize)]
+struct IpfsConfigFile {
+    ipfs_provider: Vec<IpfsProviderConfig>,
+}
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -56,10 +62,6 @@ struct Args {
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     exit_on_error: bool,
 
-    /// IPFS pinning service base URL (enables IPFS pinning when provided)
-    #[arg(long)]
-    ipfs_pin_url: Option<String>,
-
     /// Force rerunning a completed backup task
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     force: bool,
@@ -75,6 +77,10 @@ struct Args {
     /// Disable colored log output
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     no_color: bool,
+
+    /// Path to a TOML file with IPFS provider configuration
+    #[arg(long)]
+    ipfs_config: Option<String>,
 }
 
 enum BackupStart {
@@ -477,11 +483,15 @@ async fn main() -> Result<()> {
         toml::from_str(&chains_content).context("Failed to parse chains config file")?;
     chain_config.resolve_env_vars()?;
 
-    // Get IPFS pin token from environment variable if IPFS URL is provided
-    let ipfs_pin_token = if args.ipfs_pin_url.is_some() {
-        std::env::var("IPFS_PIN_TOKEN").ok()
+    // Load IPFS provider configuration from file if provided
+    let ipfs_providers = if let Some(path) = &args.ipfs_config {
+        let contents = std::fs::read_to_string(path)
+            .with_context(|| format!("Failed to read IPFS config file '{}'", path))?;
+        let config: IpfsConfigFile = toml::from_str(&contents)
+            .with_context(|| format!("Failed to parse IPFS config file '{}'", path))?;
+        config.ipfs_provider
     } else {
-        None
+        Vec::new()
     };
 
     let output_path = args.output_path.clone();
@@ -491,9 +501,7 @@ async fn main() -> Result<()> {
         storage_config: StorageConfig {
             output_path: output_path.clone(),
             prune_redundant: args.prune_redundant,
-            enable_ipfs_pinning: args.ipfs_pin_url.is_some(),
-            ipfs_pin_base_url: args.ipfs_pin_url,
-            ipfs_pin_token,
+            ipfs_providers,
         },
         process_config: ProcessManagementConfig {
             exit_on_error: args.exit_on_error,

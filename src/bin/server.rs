@@ -73,9 +73,10 @@ struct Args {
     #[arg(long)]
     privy_config: Option<String>,
 
-    /// IPFS pinning service base URL (enables IPFS pinning when provided)
+    /// Path to a TOML file with IPFS provider configuration
+    /// When provided, this is used instead of IPFS_* env vars
     #[arg(long)]
-    ipfs_pin_url: Option<String>,
+    ipfs_config: Option<String>,
 }
 
 #[derive(serde::Deserialize, Clone, Debug)]
@@ -87,6 +88,11 @@ struct PrivyCredential {
 #[derive(serde::Deserialize)]
 struct PrivyFile {
     privy: Vec<PrivyCredential>,
+}
+
+#[derive(serde::Deserialize)]
+struct IpfsConfigFile {
+    ipfs_provider: Vec<nftbk::ipfs::IpfsProviderConfig>,
 }
 
 #[tokio::main]
@@ -129,6 +135,33 @@ async fn main() {
         }
     }
 
+    // Load IPFS provider configuration from file if provided
+    let ipfs_providers = if let Some(path) = &args.ipfs_config {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => match toml::from_str::<IpfsConfigFile>(&contents) {
+                Ok(file) => {
+                    info!(
+                        "Loaded {} IPFS provider(s) from config file '{}'",
+                        file.ipfs_provider.len(),
+                        path
+                    );
+                    file.ipfs_provider
+                }
+                Err(e) => {
+                    error!("Failed to parse IPFS config file '{}': {}", path, e);
+                    std::process::exit(1);
+                }
+            },
+            Err(e) => {
+                error!("Failed to read IPFS config file '{}': {}", path, e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        // No config file, use empty list (AppState will fall back to env vars)
+        Vec::new()
+    };
+
     let (backup_job_sender, backup_job_receiver) =
         mpsc::channel::<BackupJobOrShutdown>(args.backup_queue_size);
     let db_url =
@@ -145,7 +178,7 @@ async fn main() {
         &db_url,
         (args.backup_queue_size + 1) as u32,
         shutdown_flag.clone(),
-        args.ipfs_pin_url.clone(),
+        ipfs_providers, // ipfs_provider_config parameter
     )
     .await;
 

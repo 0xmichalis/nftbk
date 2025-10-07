@@ -50,6 +50,34 @@ verification_key = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
 
 All credential sets in the file are considered valid and tried during authentication.
 
+### IPFS Pinning
+
+The server supports pinning content to IPFS using configurable providers. Configuration is provided via a TOML file passed with the `--ipfs-config` flag.
+
+Example `config_ipfs.toml`:
+
+```toml
+# Pin to a standard IPFS Pinning Service
+[[ipfs_provider]]
+type = "pinning-service"
+base_url = "https://my-ipfs-service.example.com"
+bearer_token_env = "IPFS_PINNING_SERVICE_TOKEN"
+
+# Pin to Pinata
+[[ipfs_provider]]
+type = "pinata"
+base_url = "https://api.pinata.cloud"
+bearer_token_env = "PINATA_TOKEN"
+```
+
+**Security best practice**: Use `bearer_token_env` to reference environment variables for API keys rather than embedding tokens directly in the config file. If both `bearer_token` and `bearer_token_env` are provided, `bearer_token_env` takes precedence.
+
+**CLI usage**: The CLI uses the same configuration file approach:
+```sh
+# Backup with IPFS pinning enabled
+nftbk-cli --ipfs-config config_ipfs.toml
+```
+
 ## Run
 
 ### CLI

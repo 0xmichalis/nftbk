@@ -67,10 +67,8 @@ pub struct StorageConfig {
     /// If Some, store content locally under this path
     pub output_path: Option<PathBuf>,
     pub prune_redundant: bool,
-    /// Enable IPFS pinning mode: IPFS content will be pinned to the IPFS network
-    pub enable_ipfs_pinning: bool,
-    pub ipfs_pin_base_url: Option<String>,
-    pub ipfs_pin_token: Option<String>,
+    /// IPFS pinning providers - content will be pinned to all configured providers
+    pub ipfs_providers: Vec<ipfs::IpfsProviderConfig>,
 }
 
 pub struct BackupConfig {
@@ -85,9 +83,10 @@ pub mod backup {
 
     /// Validates that the backup configuration has at least one storage option enabled
     pub fn validate_backup_config(cfg: &BackupConfig) -> Result<()> {
-        if cfg.storage_config.output_path.is_none() && !cfg.storage_config.enable_ipfs_pinning {
+        if cfg.storage_config.output_path.is_none() && cfg.storage_config.ipfs_providers.is_empty()
+        {
             return Err(anyhow::anyhow!(
-                "At least one storage option must be enabled: either output_path or enable_ipfs_pinning"
+                "At least one storage option must be enabled: either output_path or ipfs_providers"
             ));
         }
         Ok(())
@@ -98,25 +97,17 @@ pub mod backup {
     pub async fn backup_from_config(
         cfg: BackupConfig,
         span: Option<tracing::Span>,
-    ) -> Result<(
-        Vec<PathBuf>,
-        Vec<crate::ipfs::PinStatusResponse>,
-        Vec<String>,
-    )> {
+    ) -> Result<(Vec<PathBuf>, Vec<crate::ipfs::PinResponse>, Vec<String>)> {
         // Validate backup configuration
         validate_backup_config(&cfg)?;
 
         async fn inner(
             cfg: BackupConfig,
-        ) -> Result<(
-            Vec<PathBuf>,
-            Vec<crate::ipfs::PinStatusResponse>,
-            Vec<String>,
-        )> {
+        ) -> Result<(Vec<PathBuf>, Vec<crate::ipfs::PinResponse>, Vec<String>)> {
             info!(
-                "Protection requested: download to disk={:?}, pin to IPFS={:?}",
+                "Protection requested: download to disk={}, pin to IPFS (providers={})",
                 cfg.storage_config.output_path.is_some(),
-                cfg.storage_config.enable_ipfs_pinning,
+                cfg.storage_config.ipfs_providers.len(),
             );
 
             if let Some(ref out) = cfg.storage_config.output_path {
@@ -128,7 +119,7 @@ pub mod backup {
 
             let start = Instant::now();
             let mut all_files = Vec::new();
-            let mut all_pin_responses: Vec<crate::ipfs::PinStatusResponse> = Vec::new();
+            let mut all_pin_responses: Vec<crate::ipfs::PinResponse> = Vec::new();
             let mut all_errors = Vec::new();
             let mut nft_count = 0;
 
@@ -180,8 +171,12 @@ pub mod backup {
             if let Some(ref out) = cfg.storage_config.output_path {
                 info!("{} files saved in {}.", all_files.len(), out.display(),);
             }
-            if cfg.storage_config.enable_ipfs_pinning {
-                info!("{} CID pins were requested.", all_pin_responses.len(),);
+            if !cfg.storage_config.ipfs_providers.is_empty() {
+                info!(
+                    "{} CID pins were requested across {} provider(s).",
+                    all_pin_responses.len(),
+                    cfg.storage_config.ipfs_providers.len()
+                );
             }
 
             Ok((all_files, all_pin_responses, all_errors))
@@ -216,9 +211,11 @@ mod tests {
             storage_config: StorageConfig {
                 output_path: Some(PathBuf::from("/tmp/test")),
                 prune_redundant: false,
-                enable_ipfs_pinning: true,
-                ipfs_pin_base_url: Some("http://example.com".to_string()),
-                ipfs_pin_token: None,
+                ipfs_providers: vec![ipfs::IpfsProviderConfig::IpfsPinningService {
+                    base_url: "http://example.com".to_string(),
+                    bearer_token: None,
+                    bearer_token_env: None,
+                }],
             },
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
@@ -236,9 +233,7 @@ mod tests {
             storage_config: StorageConfig {
                 output_path: Some(PathBuf::from("/tmp/test")),
                 prune_redundant: false,
-                enable_ipfs_pinning: false,
-                ipfs_pin_base_url: None,
-                ipfs_pin_token: None,
+                ipfs_providers: vec![],
             },
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
@@ -256,9 +251,11 @@ mod tests {
             storage_config: StorageConfig {
                 output_path: None,
                 prune_redundant: false,
-                enable_ipfs_pinning: true,
-                ipfs_pin_base_url: Some("http://example.com".to_string()),
-                ipfs_pin_token: None,
+                ipfs_providers: vec![ipfs::IpfsProviderConfig::IpfsPinningService {
+                    base_url: "http://example.com".to_string(),
+                    bearer_token: None,
+                    bearer_token_env: None,
+                }],
             },
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
@@ -276,9 +273,7 @@ mod tests {
             storage_config: StorageConfig {
                 output_path: None,
                 prune_redundant: false,
-                enable_ipfs_pinning: false,
-                ipfs_pin_base_url: None,
-                ipfs_pin_token: None,
+                ipfs_providers: vec![],
             },
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
@@ -310,9 +305,7 @@ mod tests {
             storage_config: StorageConfig {
                 output_path: Some("/tmp/test_backup".into()),
                 prune_redundant: false,
-                enable_ipfs_pinning: false,
-                ipfs_pin_base_url: None,
-                ipfs_pin_token: None,
+                ipfs_providers: vec![],
             },
             process_config: ProcessManagementConfig {
                 exit_on_error: false,

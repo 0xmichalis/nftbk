@@ -17,7 +17,7 @@ use tracing::debug;
 use crate::chain::common::{ContractTokenId, NFTAttribute};
 use crate::chain::ContractTokenInfo;
 use crate::content::{fetch_content, Options};
-use crate::ipfs::IpfsPinningClient;
+use crate::ipfs::IpfsPinningProvider;
 use crate::StorageConfig;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -153,28 +153,21 @@ where
 pub struct EvmChainProcessor {
     pub rpc: alloy::providers::RootProvider<Http<Client>>,
     pub output_path: Option<PathBuf>,
-    pub ipfs_client: Option<IpfsPinningClient>,
+    pub ipfs_providers: Vec<Box<dyn IpfsPinningProvider>>,
 }
 
 impl EvmChainProcessor {
     pub fn new(rpc_url: &str, storage_config: StorageConfig) -> anyhow::Result<Self> {
         let rpc = ProviderBuilder::new().on_http(rpc_url.parse()?);
-        let ipfs_client = if storage_config.enable_ipfs_pinning {
-            if let Some(base) = storage_config.ipfs_pin_base_url {
-                let token = storage_config.ipfs_pin_token;
-                Some(IpfsPinningClient::new(base, token))
-            } else {
-                return Err(anyhow::anyhow!(
-                    "IPFS pinning is enabled but no IPFS pinning service base URL is configured"
-                ));
-            }
-        } else {
-            None
-        };
+        let ipfs_providers: Vec<Box<dyn IpfsPinningProvider>> = storage_config
+            .ipfs_providers
+            .iter()
+            .map(|config| config.create_provider())
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             rpc,
             output_path: storage_config.output_path,
-            ipfs_client,
+            ipfs_providers,
         })
     }
 }
@@ -350,8 +343,8 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         Ok(uri)
     }
 
-    fn ipfs_client(&self) -> Option<&IpfsPinningClient> {
-        self.ipfs_client.as_ref()
+    fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
+        &self.ipfs_providers
     }
 
     fn output_path(&self) -> Option<&std::path::Path> {

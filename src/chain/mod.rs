@@ -6,7 +6,7 @@ use tracing::{debug, error, warn};
 
 use crate::content::extra::fetch_and_save_extra_content;
 use crate::content::{fetch_and_save_content, save_metadata, Options};
-use crate::ipfs::IpfsPinningClient;
+use crate::ipfs::{IpfsPinningProvider, PinRequest};
 use crate::url::extract_ipfs_cid;
 pub use common::ContractTokenInfo;
 
@@ -50,7 +50,7 @@ fn process<T>(
 }
 
 /// Protect a URL by pinning it to IPFS (if applicable) and downloading content locally
-/// Returns (pin_response, downloaded_file_path) where either can be None
+/// Returns (pin_responses, downloaded_file_path) where either can be empty/None
 async fn protect_url<C>(
     url: &str,
     opts: &Options,
@@ -58,34 +58,42 @@ async fn protect_url<C>(
     processor: &C,
     exit_on_error: bool,
     errors: &mut Vec<String>,
-) -> anyhow::Result<(
-    Option<crate::ipfs::PinStatusResponse>,
-    Option<std::path::PathBuf>,
-)>
+) -> anyhow::Result<(Vec<crate::ipfs::PinResponse>, Option<std::path::PathBuf>)>
 where
     C: NFTChainProcessor,
 {
-    let mut pin_response = None;
+    let mut pin_responses = Vec::new();
     let mut downloaded_path = None;
 
-    // If pinning mode is enabled and URL is IPFS, try pinning
-    if let Some(ipfs_client) = processor.ipfs_client() {
+    // If pinning mode is enabled and URL is IPFS, try pinning to all providers
+    let providers = processor.ipfs_providers();
+    if !providers.is_empty() {
         if let Some(cid) = extract_ipfs_cid(url) {
-            debug!("Pinning {} for {}", cid, token);
-            if let Some(response) = process(
-                ipfs_client
-                    .create_pin(&crate::ipfs::Pin {
-                        cid: cid.clone(),
-                        name: None,
-                        origins: Default::default(),
-                        meta: None,
-                    })
-                    .await,
-                format!("Failed to pin {cid} for {token}"),
-                exit_on_error,
-                errors,
-            )? {
-                pin_response = Some(response);
+            debug!(
+                "Pinning {} for {} to {} provider(s)",
+                cid,
+                token,
+                providers.len()
+            );
+
+            let pin_request = PinRequest {
+                cid: cid.clone(),
+                name: Some(format!("{token}:{cid}")),
+            };
+
+            // Pin to all providers
+            for provider in providers {
+                if let Some(response) = process(
+                    provider.create_pin(&pin_request).await,
+                    format!(
+                        "Failed to pin {cid} for {token} to provider {}",
+                        provider.provider_name()
+                    ),
+                    exit_on_error,
+                    errors,
+                )? {
+                    pin_responses.push(response);
+                }
             }
         }
     }
@@ -108,11 +116,11 @@ where
         }
     }
 
-    Ok((pin_response, downloaded_path))
+    Ok((pin_responses, downloaded_path))
 }
 
 /// Protect metadata by pinning the token URI to IPFS (if applicable) and saving metadata locally
-/// Returns (pin_response, saved_metadata_path) where either can be None
+/// Returns (pin_responses, saved_metadata_path) where either can be empty/None
 async fn protect_metadata<C>(
     token_uri: &str,
     token: &C::ContractTokenId,
@@ -120,35 +128,43 @@ async fn protect_metadata<C>(
     processor: &C,
     exit_on_error: bool,
     errors: &mut Vec<String>,
-) -> anyhow::Result<(
-    Option<crate::ipfs::PinStatusResponse>,
-    Option<std::path::PathBuf>,
-)>
+) -> anyhow::Result<(Vec<crate::ipfs::PinResponse>, Option<std::path::PathBuf>)>
 where
     C: NFTChainProcessor,
     C::Metadata: serde::Serialize,
 {
-    let mut pin_response = None;
+    let mut pin_responses = Vec::new();
     let mut saved_path = None;
 
-    // If pinning mode is enabled and token URI is IPFS, try pinning
-    if let Some(ipfs_client) = processor.ipfs_client() {
+    // If pinning mode is enabled and token URI is IPFS, try pinning to all providers
+    let providers = processor.ipfs_providers();
+    if !providers.is_empty() {
         if let Some(cid) = extract_ipfs_cid(token_uri) {
-            debug!("Pinning token URI {} for {}", cid, token);
-            if let Some(response) = process(
-                ipfs_client
-                    .create_pin(&crate::ipfs::Pin {
-                        cid: cid.clone(),
-                        name: None,
-                        origins: Default::default(),
-                        meta: None,
-                    })
-                    .await,
-                format!("Failed to pin token URI {cid} for {token}"),
-                exit_on_error,
-                errors,
-            )? {
-                pin_response = Some(response);
+            debug!(
+                "Pinning token URI {} for {} to {} provider(s)",
+                cid,
+                token,
+                providers.len()
+            );
+
+            let pin_request = PinRequest {
+                cid: cid.clone(),
+                name: Some(format!("{token}:{cid}")),
+            };
+
+            // Pin to all providers
+            for provider in providers {
+                if let Some(response) = process(
+                    provider.create_pin(&pin_request).await,
+                    format!(
+                        "Failed to pin token URI {cid} for {token} to provider {}",
+                        provider.provider_name()
+                    ),
+                    exit_on_error,
+                    errors,
+                )? {
+                    pin_responses.push(response);
+                }
             }
         }
     }
@@ -165,7 +181,7 @@ where
         }
     }
 
-    Ok((pin_response, saved_path))
+    Ok((pin_responses, saved_path))
 }
 
 /// Trait for NFT chain processors to enable shared logic for fetching metadata and collecting URLs.
@@ -188,8 +204,8 @@ pub trait NFTChainProcessor {
     /// Collect all URLs to download from the metadata.
     fn collect_urls(metadata: &Self::Metadata) -> Vec<(String, Options)>;
 
-    /// Optional IPFS pinning client available to the processor
-    fn ipfs_client(&self) -> Option<&IpfsPinningClient>;
+    /// Get all IPFS pinning providers available to the processor
+    fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>];
 
     /// Get the output path for local storage
     fn output_path(&self) -> Option<&std::path::Path>;
@@ -202,7 +218,7 @@ pub async fn process_nfts<C, FExtraUri>(
     get_extra_content_uri: FExtraUri,
 ) -> anyhow::Result<(
     Vec<std::path::PathBuf>,
-    Vec<crate::ipfs::PinStatusResponse>,
+    Vec<crate::ipfs::PinResponse>,
     Vec<String>,
 )>
 where
@@ -233,7 +249,7 @@ where
         let output_path = processor.output_path();
 
         // Protect metadata by pinning token URI and saving locally
-        let (pin_response, saved_metadata_path) = protect_metadata(
+        let (metadata_pin_responses, saved_metadata_path) = protect_metadata(
             &token_uri,
             &token,
             &metadata,
@@ -243,9 +259,7 @@ where
         )
         .await?;
 
-        if let Some(response) = pin_response {
-            pin_responses.push(response);
-        }
+        pin_responses.extend(metadata_pin_responses);
 
         if let Some(path) = saved_metadata_path {
             files.push(path);
@@ -266,7 +280,7 @@ where
             }
 
             // Protect the URL by pinning and downloading
-            let (pin_response, downloaded_path) = protect_url(
+            let (url_pin_responses, downloaded_path) = protect_url(
                 &url,
                 &opts,
                 &token,
@@ -276,9 +290,7 @@ where
             )
             .await?;
 
-            if let Some(response) = pin_response {
-                pin_responses.push(response);
-            }
+            pin_responses.extend(url_pin_responses);
 
             if let Some(path) = downloaded_path {
                 files.push(path);
@@ -469,7 +481,7 @@ mod process_nfts_tests {
     // Mock processor for testing
     struct MockProcessor {
         output_path: Option<std::path::PathBuf>,
-        ipfs_client: Option<IpfsPinningClient>,
+        ipfs_providers: Vec<Box<dyn IpfsPinningProvider>>,
         fetch_metadata_result: Result<(MockMetadata, String), anyhow::Error>,
         get_uri_result: Result<String, anyhow::Error>,
     }
@@ -478,7 +490,7 @@ mod process_nfts_tests {
         fn new() -> Self {
             Self {
                 output_path: None,
-                ipfs_client: None,
+                ipfs_providers: Vec::new(),
                 fetch_metadata_result: Ok((
                     MockMetadata {
                         name: "Test NFT".to_string(),
@@ -537,8 +549,8 @@ mod process_nfts_tests {
             urls
         }
 
-        fn ipfs_client(&self) -> Option<&IpfsPinningClient> {
-            self.ipfs_client.as_ref()
+        fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
+            &self.ipfs_providers
         }
 
         fn output_path(&self) -> Option<&std::path::Path> {
@@ -817,7 +829,7 @@ mod process_nfts_tests {
         // Create processor with IPFS URLs for testing IPFS pinning
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
-            ipfs_client: Some(ipfs_client),
+            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
             fetch_metadata_result: Ok((
                 MockMetadata {
                     name: "Test NFT".to_string(),
@@ -885,7 +897,7 @@ mod process_nfts_tests {
         // Create processor with IPFS URLs for testing IPFS pinning
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
-            ipfs_client: Some(ipfs_client),
+            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
             fetch_metadata_result: Ok((
                 MockMetadata {
                     name: "Test NFT".to_string(),
@@ -954,7 +966,7 @@ mod process_nfts_tests {
         // Create processor with IPFS URLs for testing IPFS pinning
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
-            ipfs_client: Some(ipfs_client),
+            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
             fetch_metadata_result: Ok((
                 MockMetadata {
                     name: "Test NFT".to_string(),
@@ -982,10 +994,10 @@ mod process_nfts_tests {
         // Verify the pins contain the expected request IDs
         // The mock server returns "test-request-id" as the request ID for all pins
         for pin_response in pins {
-            assert_eq!(pin_response.requestid, "test-request-id");
+            assert_eq!(pin_response.id, "test-request-id");
             assert!(matches!(
                 pin_response.status,
-                crate::ipfs::PinStatus::Pinned
+                crate::ipfs::PinResponseStatus::Pinned
             ));
         }
     }

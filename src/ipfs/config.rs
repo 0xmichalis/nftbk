@@ -1,0 +1,72 @@
+use anyhow::{Context, Result};
+use serde::Deserialize;
+
+use super::provider::IpfsPinningProvider;
+use super::{IpfsPinningClient, PinataClient};
+
+/// Configuration for a single IPFS pinning provider
+#[derive(Clone, Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum IpfsProviderConfig {
+    #[serde(rename = "pinning-service")]
+    IpfsPinningService {
+        base_url: String,
+        #[serde(default)]
+        bearer_token: Option<String>,
+        /// Name of environment variable containing the bearer token (takes precedence over bearer_token)
+        #[serde(default)]
+        bearer_token_env: Option<String>,
+    },
+    Pinata {
+        base_url: String,
+        #[serde(default)]
+        bearer_token: Option<String>,
+        /// Name of environment variable containing the bearer token (takes precedence over bearer_token)
+        #[serde(default)]
+        bearer_token_env: Option<String>,
+    },
+}
+
+impl IpfsProviderConfig {
+    /// Create a provider instance from this configuration
+    /// Returns an error if a referenced environment variable is not set
+    pub fn create_provider(&self) -> Result<Box<dyn IpfsPinningProvider>> {
+        match self {
+            IpfsProviderConfig::IpfsPinningService {
+                base_url,
+                bearer_token,
+                bearer_token_env,
+            } => {
+                let token = Self::resolve_token(bearer_token_env, bearer_token)?;
+                Ok(Box::new(IpfsPinningClient::new(base_url.clone(), token)))
+            }
+            IpfsProviderConfig::Pinata {
+                base_url,
+                bearer_token,
+                bearer_token_env,
+            } => {
+                let token = Self::resolve_token(bearer_token_env, bearer_token)?
+                    .context("Pinata requires a bearer token")?;
+                Ok(Box::new(PinataClient::new(base_url.clone(), token)))
+            }
+        }
+    }
+
+    /// Resolve the token from environment variable (if specified) or use the direct value
+    fn resolve_token(
+        env_var_name: &Option<String>,
+        direct_token: &Option<String>,
+    ) -> Result<Option<String>> {
+        if let Some(env_name) = env_var_name {
+            let token = std::env::var(env_name).with_context(|| {
+                format!(
+                    "Environment variable '{}' not set for IPFS provider token",
+                    env_name
+                )
+            })?;
+            Ok(Some(token))
+        } else {
+            Ok(direct_token.clone())
+        }
+    }
+}

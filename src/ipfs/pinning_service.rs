@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
+use async_trait::async_trait;
 use reqwest::Client;
 
 use crate::USER_AGENT;
 
+use super::provider::{IpfsPinningProvider, PinRequest, PinResponse, PinResponseStatus};
 use super::types::{Pin, PinStatusResponse, PinsListQuery, PinsListResponse};
 
 #[derive(Clone)]
@@ -35,39 +37,17 @@ impl IpfsPinningClient {
         }
     }
 
-    pub async fn create_pin(&self, pin: &Pin) -> Result<PinStatusResponse> {
-        let url = format!("{}/pins", self.base_url);
-        let req = self.http.post(url).json(pin);
-        let res = self.auth(req).send().await.context("POST /pins failed")?;
-        let status = res.error_for_status_ref().map(|_| ()).err();
-        let text = res.text().await.context("reading response body")?;
-        if let Some(err) = status {
-            return Err(anyhow::anyhow!("{}: {}", err, text));
+    /// Convert IPFS Pinning Service status to unified PinResponseStatus
+    fn convert_status(status: super::types::PinStatus) -> PinResponseStatus {
+        match status {
+            super::types::PinStatus::Queued => PinResponseStatus::Queued,
+            super::types::PinStatus::Pinning => PinResponseStatus::Pinning,
+            super::types::PinStatus::Pinned => PinResponseStatus::Pinned,
+            super::types::PinStatus::Failed => PinResponseStatus::Failed,
         }
-        let parsed: PinStatusResponse = serde_json::from_str(&text)
-            .with_context(|| format!("decoding PinStatusResponse: {text}"))?;
-        Ok(parsed)
     }
 
-    pub async fn get_pin(&self, request_id: &str) -> Result<PinStatusResponse> {
-        let url = format!("{}/pins/{}", self.base_url, request_id);
-        let req = self.http.get(url);
-        let res = self
-            .auth(req)
-            .send()
-            .await
-            .context("GET /pins/{id} failed")?;
-        let status = res.error_for_status_ref().map(|_| ()).err();
-        let text = res.text().await.context("reading response body")?;
-        if let Some(err) = status {
-            return Err(anyhow::anyhow!("{}: {}", err, text));
-        }
-        let parsed: PinStatusResponse = serde_json::from_str(&text)
-            .with_context(|| format!("decoding PinStatusResponse: {text}"))?;
-        Ok(parsed)
-    }
-
-    pub async fn list_pins(&self, query: &PinsListQuery) -> Result<PinsListResponse> {
+    async fn list_pins(&self, query: &PinsListQuery) -> Result<PinsListResponse> {
         let url = format!("{}/pins", self.base_url);
         let mut req = self.http.get(url);
         // Serialize query into query params according to spec
@@ -129,8 +109,85 @@ impl IpfsPinningClient {
             .with_context(|| format!("decoding PinStatusResponse: {text}"))?;
         Ok(parsed)
     }
+}
 
-    pub async fn delete_pin(&self, request_id: &str) -> Result<()> {
+#[async_trait]
+impl IpfsPinningProvider for IpfsPinningClient {
+    async fn create_pin(&self, request: &PinRequest) -> Result<PinResponse> {
+        let url = format!("{}/pins", self.base_url);
+        let pin = Pin {
+            cid: request.cid.clone(),
+            name: request.name.clone(),
+            origins: Default::default(),
+            meta: None,
+        };
+
+        let req = self.http.post(url).json(&pin);
+        let res = self.auth(req).send().await.context("POST /pins failed")?;
+        let status_err = res.error_for_status_ref().map(|_| ()).err();
+        let text = res.text().await.context("reading response body")?;
+
+        if let Some(err) = status_err {
+            return Err(anyhow::anyhow!("{}: {}", err, text));
+        }
+
+        let parsed: PinStatusResponse = serde_json::from_str(&text)
+            .with_context(|| format!("decoding PinStatusResponse: {text}"))?;
+
+        Ok(PinResponse {
+            id: parsed.requestid,
+            cid: parsed.pin.cid,
+            status: Self::convert_status(parsed.status),
+            provider: self.provider_name().to_string(),
+        })
+    }
+
+    async fn get_pin(&self, pin_id: &str) -> Result<PinResponse> {
+        // Call the inherent method directly
+        let url = format!("{}/pins/{}", self.base_url, pin_id);
+        let req = self.http.get(url);
+        let res = self
+            .auth(req)
+            .send()
+            .await
+            .context("GET /pins/{id} failed")?;
+        let status_code = res.error_for_status_ref().map(|_| ()).err();
+        let text = res.text().await.context("reading response body")?;
+        if let Some(err) = status_code {
+            return Err(anyhow::anyhow!("{}: {}", err, text));
+        }
+        let parsed: PinStatusResponse = serde_json::from_str(&text)
+            .with_context(|| format!("decoding PinStatusResponse: {text}"))?;
+
+        Ok(PinResponse {
+            id: parsed.requestid,
+            cid: parsed.pin.cid,
+            status: Self::convert_status(parsed.status),
+            provider: self.provider_name().to_string(),
+        })
+    }
+
+    async fn list_pins(&self) -> Result<Vec<PinResponse>> {
+        // Call the internal list_pins with default empty query
+        let query = PinsListQuery::default();
+        let response = self.list_pins(&query).await?;
+
+        // Convert all pins to unified PinResponse
+        let pins = response
+            .results
+            .into_iter()
+            .map(|pin_status| PinResponse {
+                id: pin_status.requestid,
+                cid: pin_status.pin.cid,
+                status: Self::convert_status(pin_status.status),
+                provider: self.provider_name().to_string(),
+            })
+            .collect();
+
+        Ok(pins)
+    }
+
+    async fn delete_pin(&self, request_id: &str) -> Result<()> {
         let url = format!("{}/pins/{}", self.base_url, request_id);
         let req = self.http.delete(url);
         let res = self
@@ -145,11 +202,18 @@ impl IpfsPinningClient {
         }
         Ok(())
     }
+
+    fn provider_name(&self) -> &str {
+        "pinning-service"
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::ipfs::{IpfsPinningClient, Pin, PinMeta, PinOrigins, PinStatus, PinsListQuery};
+    use crate::ipfs::{
+        IpfsPinningClient, IpfsPinningProvider, Pin, PinOrigins, PinResponseStatus, PinStatus,
+        PinsListQuery,
+    };
     use crate::USER_AGENT;
     use wiremock::matchers::{
         body_partial_json, header, header_exists, method, path, path_regex, query_param,
@@ -174,6 +238,8 @@ mod tests {
 
     #[tokio::test]
     async fn create_pin_posts_and_parses() {
+        use crate::ipfs::{IpfsPinningProvider, PinRequest, PinResponseStatus};
+
         let server = MockServer::start().await;
         let expected = example_pin_status_response();
 
@@ -183,8 +249,7 @@ mod tests {
             .and(header("authorization", "Bearer token123"))
             .and(body_partial_json(serde_json::json!({
                 "cid": "bafy...",
-                "name": "my",
-                "meta": {"app": "nftbk"}
+                "name": "my"
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(expected.clone()))
             .mount(&server)
@@ -192,19 +257,16 @@ mod tests {
 
         let base = server.uri();
         let client = IpfsPinningClient::new(base, Some("token123".into()));
-        let pin = Pin {
+        let request = PinRequest {
             cid: "bafy...".into(),
             name: Some("my".into()),
-            origins: PinOrigins::default(),
-            meta: Some(PinMeta(serde_json::Map::from_iter(vec![(
-                "app".into(),
-                serde_json::Value::String("nftbk".into()),
-            )]))),
         };
 
-        let res = client.create_pin(&pin).await.unwrap();
-        assert_eq!(res.requestid, "req-123");
-        assert!(matches!(res.status, PinStatus::Pinned));
+        let res = client.create_pin(&request).await.unwrap();
+        assert_eq!(res.id, "req-123");
+        assert_eq!(res.cid, "bafybeigdyrzt5v276s3jvq7j4q6vti7"); // CID from server response
+        assert!(matches!(res.status, PinResponseStatus::Pinned));
+        assert_eq!(res.provider, "pinning-service");
     }
 
     #[tokio::test]
@@ -221,8 +283,10 @@ mod tests {
 
         let client = IpfsPinningClient::new(server.uri(), None);
         let res = client.get_pin("req-123").await.unwrap();
-        assert_eq!(res.requestid, "req-123");
-        assert!(matches!(res.status, PinStatus::Pinned));
+        assert_eq!(res.id, "req-123");
+        assert_eq!(res.cid, "bafybeigdyrzt5v276s3jvq7j4q6vti7");
+        assert!(matches!(res.status, PinResponseStatus::Pinned));
+        assert_eq!(res.provider, "pinning-service");
     }
 
     #[tokio::test]
