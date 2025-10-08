@@ -1,6 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NFTAttribute {
+    pub trait_type: String,
+    pub value: serde_json::Value,
+}
+
 pub trait ContractTokenInfo {
     fn address(&self) -> &str;
     fn token_id(&self) -> &str;
@@ -87,10 +93,4 @@ mod tests {
             "ethereum contract 0x1234567890123456789012345678901234567890 (token ID 42)"
         );
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NFTAttribute {
-    pub trait_type: String,
-    pub value: serde_json::Value,
 }

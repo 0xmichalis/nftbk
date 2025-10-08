@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tokio::fs;
 use tracing::{debug, info, warn};
 
-use crate::content::stream_http_to_file;
+use crate::httpclient::stream::stream_http_to_file;
 
 pub async fn fetch_fisherman(
     output_path: &Path,

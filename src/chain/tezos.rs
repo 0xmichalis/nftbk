@@ -6,11 +6,10 @@ use tezos_contract::ContractFetcher;
 use tezos_core::types::number::Int;
 use tezos_michelson::michelson::data;
 use tezos_rpc::client::TezosRpc;
-use tezos_rpc::http::default::HttpClient;
+use tezos_rpc::http::default::HttpClient as TezosHttpClient;
 use tracing::debug;
 
 use crate::chain::common::ContractTokenId;
-use crate::content::fetch_content;
 use crate::content::Options;
 use crate::ipfs::IpfsPinningProvider;
 use crate::StorageConfig;
@@ -38,14 +37,15 @@ pub struct NFTFormat {
 }
 
 pub struct TezosChainProcessor {
-    pub rpc: TezosRpc<HttpClient>,
+    pub rpc: TezosRpc<TezosHttpClient>,
     pub output_path: Option<PathBuf>,
     pub ipfs_providers: Vec<Box<dyn IpfsPinningProvider>>,
+    pub http_client: crate::httpclient::HttpClient,
 }
 
 impl TezosChainProcessor {
     pub fn new(rpc_url: &str, storage_config: StorageConfig) -> anyhow::Result<Self> {
-        let rpc = TezosRpc::<HttpClient>::new(rpc_url.to_string());
+        let rpc = TezosRpc::<TezosHttpClient>::new(rpc_url.to_string());
         let ipfs_providers: Vec<Box<dyn IpfsPinningProvider>> = storage_config
             .ipfs_providers
             .iter()
@@ -55,6 +55,7 @@ impl TezosChainProcessor {
             rpc,
             output_path: storage_config.output_path,
             ipfs_providers,
+            http_client: crate::httpclient::HttpClient::new(),
         })
     }
 }
@@ -63,7 +64,7 @@ impl TezosChainProcessor {
 impl crate::chain::NFTChainProcessor for TezosChainProcessor {
     type Metadata = NFTMetadata;
     type ContractTokenId = ContractTokenId;
-    type RpcClient = tezos_rpc::client::TezosRpc<tezos_rpc::http::default::HttpClient>;
+    type RpcClient = tezos_rpc::client::TezosRpc<TezosHttpClient>;
 
     async fn fetch_metadata(
         &self,
@@ -71,7 +72,7 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
     ) -> anyhow::Result<(Self::Metadata, String)> {
         let token_uri = self.get_uri(token).await?;
         debug!("Fetching metadata from {} for {}", token_uri, token);
-        let bytes = fetch_content(&token_uri).await?;
+        let bytes = self.http_client.fetch(&token_uri).await?;
         let metadata: NFTMetadata = serde_json::from_slice(&bytes)?;
         Ok((metadata, token_uri))
     }
@@ -151,6 +152,10 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
 
     fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
         &self.ipfs_providers
+    }
+
+    fn http_client(&self) -> &crate::httpclient::HttpClient {
+        &self.http_client
     }
 
     fn output_path(&self) -> Option<&std::path::Path> {

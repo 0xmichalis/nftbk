@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use tokio::fs;
 use tracing::{debug, info};
 
-use crate::content::{stream_gzip_http_to_file, stream_http_to_file};
+use crate::httpclient::stream::{stream_gzip_http_to_file, stream_http_to_file};
 
 pub async fn fetch_croquet_challenge(
     output_path: &Path,

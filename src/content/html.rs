@@ -7,8 +7,8 @@ use tokio::fs;
 use tracing::{debug, info, warn};
 use url::Url;
 
-use crate::content::stream_http_to_file;
-use crate::url::get_url;
+use crate::httpclient::stream::stream_http_to_file;
+use crate::url::resolve_url;
 
 fn add_resource(
     resources: &mut Vec<(String, String, std::path::PathBuf)>,
@@ -32,11 +32,11 @@ fn add_resource(
         let base = Url::parse(base_url).ok();
         match base.and_then(|b| b.join(resource_url).ok()) {
             Some(url) => url.to_string(),
-            None => get_url(resource_url),
+            None => resolve_url(resource_url),
         }
     };
     if absolute_url.starts_with("ipfs://") {
-        absolute_url = get_url(&absolute_url);
+        absolute_url = resolve_url(&absolute_url);
     }
     let clean_resource_url = resource_url.split('?').next().unwrap_or(resource_url);
     let resource_path = dir_path.join(clean_resource_url);
@@ -211,7 +211,7 @@ pub async fn download_html_resources(
                 let base = Url::parse(base_url).ok();
                 match base.and_then(|b| b.join(&found_url).ok()) {
                     Some(url) => url.to_string(),
-                    None => get_url(&found_url),
+                    None => resolve_url(&found_url),
                 }
             };
             let clean_resource_url = found_url.split('?').next().unwrap_or(&found_url);

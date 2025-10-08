@@ -5,7 +5,6 @@ use alloy::{
     sol,
     transports::http::{Client, Http},
 };
-
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::future::Future;
@@ -16,7 +15,8 @@ use tracing::debug;
 
 use crate::chain::common::{ContractTokenId, NFTAttribute};
 use crate::chain::ContractTokenInfo;
-use crate::content::{fetch_content, Options};
+use crate::content::Options;
+use crate::httpclient::HttpClient;
 use crate::ipfs::IpfsPinningProvider;
 use crate::StorageConfig;
 
@@ -154,6 +154,7 @@ pub struct EvmChainProcessor {
     pub rpc: alloy::providers::RootProvider<Http<Client>>,
     pub output_path: Option<PathBuf>,
     pub ipfs_providers: Vec<Box<dyn IpfsPinningProvider>>,
+    pub http_client: HttpClient,
 }
 
 impl EvmChainProcessor {
@@ -168,6 +169,7 @@ impl EvmChainProcessor {
             rpc,
             output_path: storage_config.output_path,
             ipfs_providers,
+            http_client: HttpClient::new(),
         })
     }
 }
@@ -184,7 +186,7 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
     ) -> anyhow::Result<(Self::Metadata, String)> {
         let token_uri = self.get_uri(token).await?;
         debug!("Fetching metadata from {} for {}", token_uri, token);
-        let bytes = fetch_content(&token_uri).await?;
+        let bytes = self.http_client.fetch(&token_uri).await?;
         let metadata: NFTMetadata = serde_json::from_slice(&bytes)?;
         Ok((metadata, token_uri))
     }
@@ -345,6 +347,10 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
 
     fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
         &self.ipfs_providers
+    }
+
+    fn http_client(&self) -> &crate::httpclient::HttpClient {
+        &self.http_client
     }
 
     fn output_path(&self) -> Option<&std::path::Path> {

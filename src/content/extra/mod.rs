@@ -2,28 +2,26 @@ use anyhow::Result;
 use std::path::Path;
 use std::path::PathBuf;
 
-#[cfg(test)]
-use crate::chain::common::ContractTokenId;
 use crate::chain::common::ContractTokenInfo;
-use crate::url::get_url;
+use crate::url::resolve_url;
 
 pub mod croquet;
 pub mod fisherman;
 
 /// Extends content handling based on chain, contract address, and token ID.
 /// This function is called after the main content has been downloaded and saved.
-pub async fn fetch_and_save_extra_content(
+pub async fn fetch_and_write_extra(
     token: &impl ContractTokenInfo,
     output_path: &Path,
     artifact_url: Option<&str>,
 ) -> Result<Vec<PathBuf>> {
-    fetch_and_save_extra_content_with_base_url(token, output_path, artifact_url, None).await
+    fetch_and_write_extra_with_base_url(token, output_path, artifact_url, None).await
 }
 
 /// Extends content handling based on chain, contract address, and token ID.
 /// This function is called after the main content has been downloaded and saved.
 /// For testing purposes, accepts an optional base URL to override the default URLs.
-async fn fetch_and_save_extra_content_with_base_url(
+async fn fetch_and_write_extra_with_base_url(
     token: &impl ContractTokenInfo,
     output_path: &Path,
     artifact_url: Option<&str>,
@@ -44,7 +42,7 @@ async fn fetch_and_save_extra_content_with_base_url(
                 output_path,
                 token.address(),
                 token.token_id(),
-                &get_url(artifact_url.unwrap()),
+                &resolve_url(artifact_url.unwrap()),
             )
             .await
         }
@@ -56,6 +54,7 @@ async fn fetch_and_save_extra_content_with_base_url(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chain::common::ContractTokenId;
     use tempfile::TempDir;
 
     async fn setup_test_dir() -> TempDir {
@@ -63,7 +62,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_and_save_extra_content_unknown_chain() {
+    async fn test_fetch_and_write_extra_unknown_chain() {
         let temp_dir = setup_test_dir().await;
         let output_path = temp_dir.path();
 
@@ -72,7 +71,7 @@ mod tests {
             address: "0x2A86C5466f088caEbf94e071a77669BAe371CD87".to_string(),
             token_id: "123".to_string(),
         };
-        let result = fetch_and_save_extra_content(&token, output_path, None).await;
+        let result = fetch_and_write_extra(&token, output_path, None).await;
 
         assert!(result.is_ok());
         let files = result.unwrap();
@@ -80,7 +79,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_and_save_extra_content_unknown_contract() {
+    async fn test_fetch_and_write_extra_unknown_contract() {
         let temp_dir = setup_test_dir().await;
         let output_path = temp_dir.path();
 
@@ -89,7 +88,7 @@ mod tests {
             address: "0x1234567890123456789012345678901234567890".to_string(),
             token_id: "123".to_string(),
         };
-        let result = fetch_and_save_extra_content(&token, output_path, None).await;
+        let result = fetch_and_write_extra(&token, output_path, None).await;
 
         assert!(result.is_ok());
         let files = result.unwrap();
@@ -97,7 +96,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_and_save_extra_content_tezos_no_artifact_url() {
+    async fn test_fetch_and_write_extra_tezos_no_artifact_url() {
         let temp_dir = setup_test_dir().await;
         let output_path = temp_dir.path();
 
@@ -106,7 +105,7 @@ mod tests {
             address: "KT1UcASzQxiWprSmsvpStsxtAZzaRJWR78gz".to_string(),
             token_id: "4".to_string(),
         };
-        let result = fetch_and_save_extra_content(&token, output_path, None).await;
+        let result = fetch_and_write_extra(&token, output_path, None).await;
 
         assert!(result.is_ok());
         let files = result.unwrap();
