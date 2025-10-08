@@ -106,9 +106,9 @@ pub mod backup {
             cfg: BackupConfig,
         ) -> Result<(Vec<PathBuf>, Vec<crate::ipfs::PinResponse>, Vec<String>)> {
             info!(
-                "Protection requested: download to disk={}, pin to IPFS (providers={})",
+                "Protection requested: download to disk={}, pin to IPFS={}",
                 cfg.storage_config.output_path.is_some(),
-                cfg.storage_config.ipfs_providers.len(),
+                !cfg.storage_config.ipfs_providers.is_empty(),
             );
 
             if let Some(ref out) = cfg.storage_config.output_path {
