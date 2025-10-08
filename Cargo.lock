@@ -3196,7 +3196,6 @@ dependencies = [
  "hyper 1.6.0",
  "josekit",
  "libc",
- "once_cell",
  "prettytable",
  "rand 0.8.5",
  "regex",

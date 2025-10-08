@@ -4,8 +4,8 @@ use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 use tracing::{debug, error, info, warn};
 
-use crate::content::extra::fetch_and_save_extra_content;
-use crate::content::{fetch_and_save_content, save_metadata, Options};
+use crate::content::extra::fetch_and_write_extra;
+use crate::content::{write_metadata, Options};
 use crate::ipfs::{IpfsPinningProvider, PinRequest};
 use crate::url::extract_ipfs_cid;
 pub use common::ContractTokenInfo;
@@ -155,7 +155,10 @@ where
             .filter(|s| !s.is_empty())
             .unwrap_or("content");
         if let Some(path) = process(
-            fetch_and_save_content(url, token, output_path, opts.clone()).await,
+            processor
+                .http_client()
+                .fetch_and_write(url, token, output_path, opts.clone())
+                .await,
             format!("Failed to fetch {name_for_log} for {token}"),
             exit_on_error,
             errors,
@@ -199,11 +202,11 @@ where
         pin_responses.extend(responses);
     }
 
-    // If local storage is configured, save metadata
+    // If local storage is configured, write metadata
     if let Some(output_path) = processor.output_path() {
         if let Some(path) = process(
-            save_metadata(token_uri, token, output_path, metadata).await,
-            format!("Failed to save metadata for {token}"),
+            write_metadata(token_uri, token, output_path, metadata).await,
+            format!("Failed to write metadata for {token}"),
             exit_on_error,
             errors,
         )? {
@@ -239,6 +242,9 @@ pub trait NFTChainProcessor {
 
     /// Get the output path for local storage
     fn output_path(&self) -> Option<&std::path::Path>;
+
+    /// Get the HTTP client used for URL resolution and fetching
+    fn http_client(&self) -> &crate::httpclient::HttpClient;
 }
 
 pub async fn process_nfts<C, FExtraUri>(
@@ -278,7 +284,7 @@ where
         // Get output path once and reuse it
         let output_path = processor.output_path();
 
-        // Protect metadata by pinning token URI and saving locally
+        // Protect metadata by pinning token URI and writing locally
         let (metadata_pin_responses, saved_metadata_path) = protect_metadata(
             &token_uri,
             &token,
@@ -330,7 +336,7 @@ where
         // Fetch extra content if needed
         if let Some(out) = output_path {
             if let Some(extra_files) = process(
-                fetch_and_save_extra_content(&token, out, get_extra_content_uri(&metadata)).await,
+                fetch_and_write_extra(&token, out, get_extra_content_uri(&metadata)).await,
                 format!("Failed to fetch extra content for {token}"),
                 config.exit_on_error,
                 &mut errors,
@@ -514,6 +520,7 @@ mod process_nfts_tests {
         ipfs_providers: Vec<Box<dyn IpfsPinningProvider>>,
         fetch_metadata_result: Result<(MockMetadata, String), anyhow::Error>,
         get_uri_result: Result<String, anyhow::Error>,
+        http_client: crate::httpclient::HttpClient,
     }
 
     impl MockProcessor {
@@ -530,6 +537,7 @@ mod process_nfts_tests {
                     "data:application/json;base64,eyJuYW1lIjoiVGVzdCJ9".to_string(),
                 )),
                 get_uri_result: Ok("data:application/json;base64,eyJuYW1lIjoiVGVzdCJ9".to_string()),
+                http_client: crate::httpclient::HttpClient::new(),
             }
         }
 
@@ -585,6 +593,10 @@ mod process_nfts_tests {
 
         fn output_path(&self) -> Option<&std::path::Path> {
             self.output_path.as_deref()
+        }
+
+        fn http_client(&self) -> &crate::httpclient::HttpClient {
+            &self.http_client
         }
     }
 
@@ -824,12 +836,6 @@ mod process_nfts_tests {
         // Start wiremock server
         let mock_server = MockServer::start().await;
 
-        // Ensure gateway resolution uses only the mock server during this test (scoped override)
-        crate::url::set_ipfs_gateways_override(Some(vec![(
-            mock_server.uri(),
-            crate::url::IpfsGatewayType::Path,
-        )]));
-
         // Create temp directory
         let temp_dir = TempDir::new().unwrap();
 
@@ -875,6 +881,10 @@ mod process_nfts_tests {
                 "ipfs://QmTestMetadataHash".to_string(),
             )),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
+            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
+                mock_server.uri(),
+                crate::url::IpfsGatewayType::Path,
+            )]),
         });
 
         let tokens = vec![create_test_token()];
@@ -884,9 +894,6 @@ mod process_nfts_tests {
             process_nfts(processor, tokens, config, get_no_extra_content_uri)
                 .await
                 .unwrap();
-
-        // Restore default gateway configuration
-        crate::url::set_ipfs_gateways_override(None);
 
         // Verify results - files should still be created even if IPFS pinning fails
         assert_eq!(files.len(), 1); // Only metadata.json (content fetching fails for IPFS URLs)
@@ -903,12 +910,6 @@ mod process_nfts_tests {
     async fn test_process_nfts_with_ipfs_auth_required() {
         // Start wiremock server
         let mock_server = MockServer::start().await;
-
-        // Ensure gateway resolution uses only the mock server during this test (scoped override)
-        crate::url::set_ipfs_gateways_override(Some(vec![(
-            mock_server.uri(),
-            crate::url::IpfsGatewayType::Path,
-        )]));
 
         // Create temp directory
         let temp_dir = TempDir::new().unwrap();
@@ -952,6 +953,10 @@ mod process_nfts_tests {
                 "ipfs://QmTestMetadataHash".to_string(),
             )),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
+            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
+                mock_server.uri(),
+                crate::url::IpfsGatewayType::Path,
+            )]),
         });
 
         let tokens = vec![create_test_token()];
@@ -961,9 +966,6 @@ mod process_nfts_tests {
             process_nfts(processor, tokens, config, get_no_extra_content_uri)
                 .await
                 .unwrap();
-
-        // Restore default gateway configuration
-        crate::url::set_ipfs_gateways_override(None);
 
         // Verify results - files should still be created even if IPFS auth fails
         assert_eq!(files.len(), 1); // Only metadata.json (content fetching fails for IPFS URLs)
@@ -980,12 +982,6 @@ mod process_nfts_tests {
     async fn test_process_nfts_with_ipfs_pinning_success() {
         // Start wiremock server
         let mock_server = MockServer::start().await;
-
-        // Ensure gateway resolution uses only the mock server during this test (scoped override)
-        crate::url::set_ipfs_gateways_override(Some(vec![(
-            mock_server.uri(),
-            crate::url::IpfsGatewayType::Path,
-        )]));
 
         // Create temp directory
         let temp_dir = TempDir::new().unwrap();
@@ -1030,6 +1026,10 @@ mod process_nfts_tests {
                 "ipfs://QmTestMetadataHash".to_string(),
             )),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
+            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
+                mock_server.uri(),
+                crate::url::IpfsGatewayType::Path,
+            )]),
         });
 
         let tokens = vec![create_test_token()];
@@ -1039,9 +1039,6 @@ mod process_nfts_tests {
             process_nfts(processor, tokens, config, get_no_extra_content_uri)
                 .await
                 .unwrap();
-
-        // Restore default gateway configuration
-        crate::url::set_ipfs_gateways_override(None);
 
         // Verify results - IPFS pinning should work even if content fetching fails
         assert_eq!(files.len(), 1); // Only metadata.json (content fetching may fail for IPFS URLs)
@@ -1064,6 +1061,7 @@ mod process_nfts_tests {
 mod pin_cid_tests {
     use super::*;
     use crate::chain::common::ContractTokenId;
+    use wiremock::MockServer;
 
     struct MockProvider(&'static str);
 
@@ -1101,6 +1099,7 @@ mod pin_cid_tests {
 
     struct TestProcessor {
         providers: Vec<Box<dyn IpfsPinningProvider>>,
+        http_client: crate::httpclient::HttpClient,
     }
 
     #[async_trait]
@@ -1131,12 +1130,21 @@ mod pin_cid_tests {
         fn output_path(&self) -> Option<&std::path::Path> {
             None
         }
+
+        fn http_client(&self) -> &crate::httpclient::HttpClient {
+            &self.http_client
+        }
     }
 
     #[tokio::test]
     async fn test_pin_cid_sets_content_name() {
+        let mock_server = MockServer::start().await;
         let processor = TestProcessor {
             providers: vec![Box::new(MockProvider("p1"))],
+            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
+                mock_server.uri(),
+                crate::url::IpfsGatewayType::Path,
+            )]),
         };
         let token = ContractTokenId {
             address: "0xabc".into(),
@@ -1161,8 +1169,13 @@ mod pin_cid_tests {
 
     #[tokio::test]
     async fn test_pin_cid_sets_metadata_name() {
+        let mock_server = MockServer::start().await;
         let processor = TestProcessor {
             providers: vec![Box::new(MockProvider("p1"))],
+            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
+                mock_server.uri(),
+                crate::url::IpfsGatewayType::Path,
+            )]),
         };
         let token = ContractTokenId {
             address: "0xabc".into(),
@@ -1187,8 +1200,13 @@ mod pin_cid_tests {
 
     #[tokio::test]
     async fn test_pin_cid_multiple_providers() {
+        let mock_server = MockServer::start().await;
         let processor = TestProcessor {
             providers: vec![Box::new(MockProvider("p1")), Box::new(MockProvider("p2"))],
+            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
+                mock_server.uri(),
+                crate::url::IpfsGatewayType::Path,
+            )]),
         };
         let token = ContractTokenId {
             address: "0xabc".into(),
