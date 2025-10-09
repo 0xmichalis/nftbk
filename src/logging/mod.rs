@@ -118,3 +118,115 @@ where
         writeln!(writer)
     }
 }
+
+#[cfg(test)]
+mod from_loglevel_tests {
+    #[test]
+    fn maps_loglevel_to_tracing_level() {
+        assert_eq!(
+            tracing::Level::from(super::LogLevel::Debug),
+            tracing::Level::DEBUG
+        );
+        assert_eq!(
+            tracing::Level::from(super::LogLevel::Info),
+            tracing::Level::INFO
+        );
+        assert_eq!(
+            tracing::Level::from(super::LogLevel::Warn),
+            tracing::Level::WARN
+        );
+        assert_eq!(
+            tracing::Level::from(super::LogLevel::Error),
+            tracing::Level::ERROR
+        );
+    }
+}
+
+#[cfg(test)]
+mod custom_format_tests {
+    use std::io::{Result as IoResult, Write};
+    use std::sync::{Arc, Mutex};
+    use tracing::{info, Level as TracingLevel};
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone)]
+    struct SharedBufferWriter(Arc<Mutex<Vec<u8>>>);
+
+    impl<'a> MakeWriter<'a> for SharedBufferWriter {
+        type Writer = BufferGuard;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            BufferGuard(self.0.clone())
+        }
+    }
+
+    struct BufferGuard(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for BufferGuard {
+        fn write(&mut self, buf: &[u8]) -> IoResult<usize> {
+            let mut guard = self.0.lock().unwrap();
+            guard.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> IoResult<()> {
+            Ok(())
+        }
+    }
+
+    fn with_subscriber<F: FnOnce()>(ansi: bool, buf: &SharedBufferWriter, f: F) {
+        let subscriber = tracing_subscriber::fmt()
+            .with_level(true)
+            .with_ansi(ansi)
+            .with_max_level(TracingLevel::DEBUG)
+            .with_file(false)
+            .with_line_number(false)
+            .with_target(false)
+            .event_format(super::CustomFormat)
+            .with_writer(buf.clone())
+            .finish();
+
+        tracing::subscriber::with_default(subscriber, || {
+            f();
+        });
+    }
+
+    #[test]
+    fn formats_without_ansi() {
+        let buffer = SharedBufferWriter(Arc::new(Mutex::new(Vec::new())));
+        with_subscriber(false, &buffer, || {
+            let span = tracing::info_span!("span_name", user_id = 42, kind = "test");
+            let _entered = span.enter();
+            info!("hello world");
+        });
+        let output = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+
+        // Expect timestamp (YYYY-MM-DDTHH:MM:SS), level, message, and span fields without color codes
+        assert!(output.contains(" INFO "));
+        assert!(output.contains("hello world"));
+        assert!(output.contains("user_id=42"));
+        assert!(output.contains("kind=\"test\""));
+        // No ANSI escapes expected
+        assert!(!output.contains("\x1b["));
+    }
+
+    #[test]
+    fn formats_with_ansi() {
+        let buffer = SharedBufferWriter(Arc::new(Mutex::new(Vec::new())));
+        with_subscriber(true, &buffer, || {
+            let span = tracing::info_span!("span_name", user_id = 7, label = "x");
+            let _entered = span.enter();
+            info!("colored message");
+        });
+        let output = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+
+        // Expect ANSI colored timestamp (cyan), level (green for INFO), and colored span fields
+        assert!(output.contains("\x1b[96m")); // timestamp color
+        assert!(output.contains("\x1b[32m")); // has level color
+        assert!(output.contains(" INFO")); // right-justified level text has at least one leading space
+        assert!(output.contains("\x1b[0m")); // reset code present
+        assert!(output.contains("colored message"));
+        assert!(output.contains("\x1b[36muser_id\x1b[0m=\x1b[93m7\x1b[0m"));
+        assert!(output.contains("\x1b[36mlabel\x1b[0m=\x1b[93m\"x\"\x1b[0m"));
+    }
+}
