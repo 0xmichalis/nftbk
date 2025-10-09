@@ -293,8 +293,8 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
     let backup_result = backup_from_config(backup_cfg, Some(span)).await;
 
     // Check backup result
-    let (files_written, pin_requests, error_log) = match backup_result {
-        Ok((files, pin_requests, errors)) => (files, pin_requests, errors),
+    let (files_written, token_pin_mappings, error_log) = match backup_result {
+        Ok((files, token_pin_mappings, errors)) => (files, token_pin_mappings, errors),
         Err(e) => {
             let error_msg = e.to_string();
             if error_msg.contains("interrupted by shutdown signal") {
@@ -313,10 +313,13 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
         }
     };
 
-    // Persist pin requests, if any
-    if !pin_requests.is_empty() {
+    // Persist token-pin request mappings atomically, if any
+    if !token_pin_mappings.is_empty() {
         let req = job.requestor.as_deref().unwrap_or("");
-        let _ = state.db.insert_pin_requests(req, &pin_requests).await;
+        let _ = state
+            .db
+            .insert_pin_requests_with_tokens(req, &token_pin_mappings)
+            .await;
     }
 
     // Store non-fatal error log in DB if present

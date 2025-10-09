@@ -367,21 +367,46 @@ impl Db {
         Ok(recs)
     }
 
-    /// Insert pin request rows for a given requestor
-    pub async fn insert_pin_requests(
+    /// Insert pin requests and their associated tokens in a single atomic transaction
+    pub async fn insert_pin_requests_with_tokens(
         &self,
         requestor: &str,
-        pins: &[crate::ipfs::PinResponse],
+        token_pin_mappings: &[crate::TokenPinMapping],
     ) -> Result<(), sqlx::Error> {
-        if pins.is_empty() {
+        if token_pin_mappings.is_empty() {
             return Ok(());
         }
-        // Build a single multi-values INSERT for efficiency
+
+        // Collect all pin responses and prepare token data
+        let mut all_pin_responses = Vec::new();
+        let mut all_token_data = Vec::new(); // (index_in_pin_responses, chain, contract_address, token_id)
+
+        for mapping in token_pin_mappings {
+            for pin_response in &mapping.pin_responses {
+                let index = all_pin_responses.len();
+                all_pin_responses.push(pin_response);
+                all_token_data.push((
+                    index,
+                    mapping.chain.clone(),
+                    mapping.contract_address.clone(),
+                    mapping.token_id.clone(),
+                ));
+            }
+        }
+
+        if all_pin_responses.is_empty() {
+            return Ok(());
+        }
+
+        // Start a transaction for atomicity
+        let mut tx = self.pool.begin().await?;
+
+        // Insert pin requests and return generated IDs
         let mut query = String::from(
             "INSERT INTO pin_requests (provider, cid, request_id, status, requestor) VALUES ",
         );
         let mut bind_count = 0;
-        for i in 0..pins.len() {
+        for i in 0..all_pin_responses.len() {
             if i > 0 {
                 query.push_str(", ");
             }
@@ -394,24 +419,202 @@ impl Db {
             bind_count += 5;
             query.push_str(&format!("(${p1}, ${p2}, ${p3}, ${p4}, ${p5})"));
         }
+        query.push_str(" RETURNING id");
+
         let mut q = sqlx::query(&query);
-        for pin in pins {
+        for pin_response in &all_pin_responses {
             // Map status enum to lowercase string to satisfy CHECK constraint
-            let status = match pin.status {
+            let status = match pin_response.status {
                 crate::ipfs::PinResponseStatus::Queued => "queued",
                 crate::ipfs::PinResponseStatus::Pinning => "pinning",
                 crate::ipfs::PinResponseStatus::Pinned => "pinned",
                 crate::ipfs::PinResponseStatus::Failed => "failed",
             };
             q = q
-                .bind(&pin.provider)
-                .bind(&pin.cid)
-                .bind(&pin.id)
+                .bind(&pin_response.provider)
+                .bind(&pin_response.cid)
+                .bind(&pin_response.id)
                 .bind(status)
                 .bind(requestor);
         }
+        let rows = q.fetch_all(&mut *tx).await?;
 
-        q.execute(&self.pool).await?;
+        // Extract generated IDs
+        let pin_request_ids: Vec<i64> = rows.iter().map(|row| row.get("id")).collect();
+
+        // Insert pinned tokens using the generated pin_request_ids
+        if !all_token_data.is_empty() {
+            let mut query = String::from(
+                "INSERT INTO pinned_tokens (pin_request_id, chain, contract_address, token_id) VALUES ",
+            );
+            let mut bind_count = 0;
+            for i in 0..all_token_data.len() {
+                if i > 0 {
+                    query.push_str(", ");
+                }
+                // 4 bind params per row
+                let p1 = bind_count + 1;
+                let p2 = bind_count + 2;
+                let p3 = bind_count + 3;
+                let p4 = bind_count + 4;
+                bind_count += 4;
+                query.push_str(&format!("(${p1}, ${p2}, ${p3}, ${p4})"));
+            }
+            let mut q = sqlx::query(&query);
+            for (index, chain, contract_address, token_id) in &all_token_data {
+                q = q
+                    .bind(pin_request_ids[*index])
+                    .bind(chain)
+                    .bind(contract_address)
+                    .bind(token_id);
+            }
+            q.execute(&mut *tx).await?;
+        }
+
+        // Commit the transaction
+        tx.commit().await?;
         Ok(())
     }
+
+    /// Get all pinned tokens for a requestor
+    pub async fn get_pinned_tokens_by_requestor(
+        &self,
+        requestor: &str,
+    ) -> Result<Vec<TokenWithPins>, sqlx::Error> {
+        let query = r#"
+            SELECT pt.chain, pt.contract_address, pt.token_id,
+                   pr.cid, pr.provider, pr.status, pt.created_at
+            FROM pinned_tokens pt
+            JOIN pin_requests pr ON pr.id = pt.pin_request_id
+            WHERE pr.requestor = $1
+            ORDER BY pt.chain, pt.contract_address, pt.token_id, pt.created_at DESC
+        "#;
+
+        let rows = sqlx::query(query)
+            .bind(requestor)
+            .fetch_all(&self.pool)
+            .await?;
+
+        // Group pins by token
+        let mut token_map: std::collections::HashMap<(String, String, String), TokenWithPins> =
+            std::collections::HashMap::new();
+
+        for row in rows {
+            let chain: String = row.get("chain");
+            let contract_address: String = row.get("contract_address");
+            let token_id: String = row.get("token_id");
+            let cid: String = row.get("cid");
+            let provider: String = row.get("provider");
+            let status: String = row.get("status");
+            let created_at: DateTime<Utc> = row.get("created_at");
+
+            let key = (chain.clone(), contract_address.clone(), token_id.clone());
+
+            let pin_info = PinInfo {
+                cid,
+                provider,
+                status,
+                created_at,
+            };
+
+            token_map
+                .entry(key)
+                .or_insert_with(|| TokenWithPins {
+                    chain,
+                    contract_address,
+                    token_id,
+                    pins: Vec::new(),
+                })
+                .pins
+                .push(pin_info);
+        }
+
+        let mut result: Vec<TokenWithPins> = token_map.into_values().collect();
+        result.sort_by(|a, b| {
+            a.chain
+                .cmp(&b.chain)
+                .then(a.contract_address.cmp(&b.contract_address))
+                .then(a.token_id.cmp(&b.token_id))
+        });
+
+        Ok(result)
+    }
+
+    /// Get a specific pinned token for a requestor
+    pub async fn get_pinned_token_by_requestor(
+        &self,
+        requestor: &str,
+        chain: &str,
+        contract_address: &str,
+        token_id: &str,
+    ) -> Result<Option<TokenWithPins>, sqlx::Error> {
+        let query = r#"
+            SELECT pt.chain, pt.contract_address, pt.token_id,
+                   pr.cid, pr.provider, pr.status, pt.created_at
+            FROM pinned_tokens pt
+            JOIN pin_requests pr ON pr.id = pt.pin_request_id
+            WHERE pr.requestor = $1
+              AND pt.chain = $2
+              AND pt.contract_address = $3
+              AND pt.token_id = $4
+            ORDER BY pt.created_at DESC
+        "#;
+
+        let rows = sqlx::query(query)
+            .bind(requestor)
+            .bind(chain)
+            .bind(contract_address)
+            .bind(token_id)
+            .fetch_all(&self.pool)
+            .await?;
+
+        if rows.is_empty() {
+            return Ok(None);
+        }
+
+        let mut pins = Vec::new();
+        let mut token_chain = String::new();
+        let mut token_contract_address = String::new();
+        let mut token_token_id = String::new();
+
+        for row in rows {
+            token_chain = row.get("chain");
+            token_contract_address = row.get("contract_address");
+            token_token_id = row.get("token_id");
+            let cid: String = row.get("cid");
+            let provider: String = row.get("provider");
+            let status: String = row.get("status");
+            let created_at: DateTime<Utc> = row.get("created_at");
+
+            pins.push(PinInfo {
+                cid,
+                provider,
+                status,
+                created_at,
+            });
+        }
+
+        Ok(Some(TokenWithPins {
+            chain: token_chain,
+            contract_address: token_contract_address,
+            token_id: token_token_id,
+            pins,
+        }))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
+pub struct PinInfo {
+    pub cid: String,
+    pub provider: String,
+    pub status: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
+pub struct TokenWithPins {
+    pub chain: String,
+    pub contract_address: String,
+    pub token_id: String,
+    pub pins: Vec<PinInfo>,
 }

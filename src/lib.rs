@@ -26,6 +26,15 @@ pub mod url;
 
 pub const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
+/// Represents a token with its associated pin responses
+#[derive(Debug, Clone)]
+pub struct TokenPinMapping {
+    pub chain: String,
+    pub contract_address: String,
+    pub token_id: String,
+    pub pin_responses: Vec<crate::ipfs::PinResponse>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChainConfig(pub HashMap<String, String>);
 
@@ -87,17 +96,17 @@ pub mod backup {
     }
 
     /// Backup tokens from config
-    /// Returns all files saved, all pins created, and all errors encountered
+    /// Returns all files saved, token-pin mappings, and all errors encountered
     pub async fn backup_from_config(
         cfg: BackupConfig,
         span: Option<tracing::Span>,
-    ) -> Result<(Vec<PathBuf>, Vec<crate::ipfs::PinResponse>, Vec<String>)> {
+    ) -> Result<(Vec<PathBuf>, Vec<TokenPinMapping>, Vec<String>)> {
         // Validate backup configuration
         validate_backup_config(&cfg)?;
 
         async fn inner(
             cfg: BackupConfig,
-        ) -> Result<(Vec<PathBuf>, Vec<crate::ipfs::PinResponse>, Vec<String>)> {
+        ) -> Result<(Vec<PathBuf>, Vec<TokenPinMapping>, Vec<String>)> {
             info!(
                 "Protection requested: download to disk={}, pin to IPFS={}",
                 cfg.storage_config.output_path.is_some(),
@@ -113,7 +122,7 @@ pub mod backup {
 
             let start = Instant::now();
             let mut all_files = Vec::new();
-            let mut all_pin_responses: Vec<crate::ipfs::PinResponse> = Vec::new();
+            let mut all_token_pin_mappings: Vec<TokenPinMapping> = Vec::new();
             let mut all_errors = Vec::new();
             let mut nft_count = 0;
 
@@ -129,7 +138,7 @@ pub mod backup {
                 let tokens = ContractTokenId::parse_tokens(tokens, chain_name);
                 nft_count += tokens.len();
 
-                let (files, pin_responses, errors) = if chain_name == "tezos" {
+                let (files, token_pin_mappings, errors) = if chain_name == "tezos" {
                     let processor = Arc::new(TezosChainProcessor::new(
                         rpc_url,
                         cfg.storage_config.clone(),
@@ -147,7 +156,7 @@ pub mod backup {
                 };
                 all_files.extend(files);
                 all_errors.extend(errors);
-                all_pin_responses.extend(pin_responses);
+                all_token_pin_mappings.extend(token_pin_mappings);
             }
 
             if cfg.storage_config.prune_redundant {
@@ -166,14 +175,19 @@ pub mod backup {
                 info!("{} files saved in {}.", all_files.len(), out.display(),);
             }
             if !cfg.storage_config.ipfs_providers.is_empty() {
+                let total_pins: usize = all_token_pin_mappings
+                    .iter()
+                    .map(|mapping| mapping.pin_responses.len())
+                    .sum();
                 info!(
-                    "{} CID pins were requested across {} provider(s).",
-                    all_pin_responses.len(),
-                    cfg.storage_config.ipfs_providers.len()
+                    "{} CID pins were requested across {} provider(s) for {} tokens.",
+                    total_pins,
+                    cfg.storage_config.ipfs_providers.len(),
+                    all_token_pin_mappings.len()
                 );
             }
 
-            Ok((all_files, all_pin_responses, all_errors))
+            Ok((all_files, all_token_pin_mappings, all_errors))
         }
 
         match span {
