@@ -13,8 +13,16 @@ use crate::server::hashing::compute_task_id;
 use crate::server::{AppState, BackupJob, BackupJobOrShutdown};
 
 fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), String> {
+    validate_backup_request_impl(&state.chain_config, state.ipfs_providers.len(), req)
+}
+
+fn validate_backup_request_impl(
+    chain_config: &crate::backup::ChainConfig,
+    ipfs_providers_len: usize,
+    req: &BackupRequest,
+) -> Result<(), String> {
     // Validate requested chains
-    let configured_chains: HashSet<_> = state.chain_config.0.keys().cloned().collect();
+    let configured_chains: HashSet<_> = chain_config.0.keys().cloned().collect();
     let mut unknown_chains = Vec::new();
     for entry in &req.tokens {
         if !configured_chains.contains(&entry.chain) {
@@ -26,7 +34,7 @@ fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), 
         return Err(msg);
     }
     // Validate IPFS pinning configuration
-    if req.pin_on_ipfs && state.ipfs_providers.is_empty() {
+    if req.pin_on_ipfs && ipfs_providers_len == 0 {
         return Err("pin_on_ipfs requested but no IPFS provider configured".to_string());
     }
     Ok(())
@@ -161,4 +169,82 @@ pub async fn handle_backup(
         archive_format
     );
     (StatusCode::CREATED, Json(BackupResponse { task_id })).into_response()
+}
+
+#[cfg(test)]
+mod validate_backup_request_impl_tests {
+    use super::validate_backup_request_impl;
+    use crate::backup::ChainConfig;
+    use crate::server::api::{BackupRequest, Tokens};
+    use std::collections::HashMap;
+
+    fn make_chain_config(chains: &[&str]) -> ChainConfig {
+        let mut map = HashMap::new();
+        for &c in chains {
+            map.insert(c.to_string(), "rpc://dummy".to_string());
+        }
+        ChainConfig(map)
+    }
+
+    #[test]
+    fn rejects_unknown_chains() {
+        let chain_config = make_chain_config(&["ethereum", "tezos"]);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "polygon".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+        };
+        let result = validate_backup_request_impl(&chain_config, 1, &req);
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(err.contains("Unknown chains requested"));
+    }
+
+    #[test]
+    fn rejects_pin_without_ipfs_providers() {
+        let chain_config = make_chain_config(&["ethereum"]);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: true,
+        };
+        let result = validate_backup_request_impl(&chain_config, 0, &req);
+        assert!(result.is_err());
+        assert_eq!(
+            result.err().unwrap(),
+            "pin_on_ipfs requested but no IPFS provider configured"
+        );
+    }
+
+    #[test]
+    fn accepts_valid_request_with_ipfs() {
+        let chain_config = make_chain_config(&["ethereum"]);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: true,
+        };
+        let result = validate_backup_request_impl(&chain_config, 2, &req);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn accepts_valid_request_without_ipfs() {
+        let chain_config = make_chain_config(&["tezos"]);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "tezos".to_string(),
+                tokens: vec!["KT1abc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+        };
+        let result = validate_backup_request_impl(&chain_config, 0, &req);
+        assert!(result.is_ok());
+    }
 }
