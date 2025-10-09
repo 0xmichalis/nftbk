@@ -12,6 +12,7 @@ use crate::chain::common::ContractTokenId;
 use crate::chain::evm::EvmChainProcessor;
 use crate::chain::process_nfts;
 use crate::chain::tezos::TezosChainProcessor;
+use crate::envvar::resolve_env_placeholders;
 
 pub mod chain;
 pub mod content;
@@ -32,18 +33,10 @@ impl ChainConfig {
     /// Resolves environment variable references in the form ${VAR_NAME} in all values.
     /// Returns an error if any referenced environment variable is not set.
     pub fn resolve_env_vars(&mut self) -> Result<()> {
-        let re = regex::Regex::new(r"\$\{([A-Z0-9_]+)\}").unwrap();
         for (key, value) in self.0.iter_mut() {
-            let mut resolved = value.clone();
-            for caps in re.captures_iter(value) {
-                let var_name = &caps[1];
-                let env_val = std::env::var(var_name).with_context(|| {
-                    format!(
-                        "Environment variable '{var_name}' referenced in '{value}' for chain '{key}' is not set",
-                    )
-                })?;
-                resolved = resolved.replace(&format!("${{{var_name}}}"), &env_val);
-            }
+            let resolved = resolve_env_placeholders(value).with_context(|| {
+                format!("Failed resolving env vars referenced in '{value}' for chain '{key}'")
+            })?;
             *value = resolved;
         }
         Ok(())
