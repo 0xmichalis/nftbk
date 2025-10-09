@@ -1,34 +1,7 @@
 use base64::Engine;
 use url::Url;
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum IpfsGatewayType {
-    Path,
-    Subdomain,
-}
-
-#[derive(Debug, Clone)]
-pub struct IpfsGatewayConfig {
-    pub url: &'static str,
-    pub gateway_type: IpfsGatewayType,
-}
-
-// A list of public IPFS gateways can be found here:
-// https://ipfs.github.io/public-gateway-checker/
-pub const IPFS_GATEWAYS: &[IpfsGatewayConfig] = &[
-    IpfsGatewayConfig {
-        url: "https://ipfs.io",
-        gateway_type: IpfsGatewayType::Path,
-    },
-    IpfsGatewayConfig {
-        url: "https://4everland.io",
-        gateway_type: IpfsGatewayType::Subdomain,
-    },
-    IpfsGatewayConfig {
-        url: "https://gateway.pinata.cloud",
-        gateway_type: IpfsGatewayType::Path,
-    },
-];
+use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType, IPFS_GATEWAYS};
 
 pub fn is_data_url(url: &str) -> bool {
     url.starts_with("data:") || is_svg_content(url) || is_json_content(url)
@@ -234,7 +207,7 @@ pub fn get_ipfs_gateway_urls_with_gateways(
     vec![url.to_string()]
 }
 
-/// Convenience wrapper using default `IPFS_GATEWAYS`.
+/// Convenience wrapper that builds IPFS gateway URLs using default `IPFS_GATEWAYS`.
 pub fn get_ipfs_gateway_urls(url: &str) -> Vec<String> {
     get_ipfs_gateway_urls_with_gateways(url, IPFS_GATEWAYS)
 }

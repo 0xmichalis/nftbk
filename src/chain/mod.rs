@@ -883,7 +883,7 @@ mod process_nfts_tests {
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
             http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
                 mock_server.uri(),
-                crate::url::IpfsGatewayType::Path,
+                crate::ipfs::config::IpfsGatewayType::Path,
             )]),
         });
 
@@ -955,7 +955,7 @@ mod process_nfts_tests {
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
             http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
                 mock_server.uri(),
-                crate::url::IpfsGatewayType::Path,
+                crate::ipfs::config::IpfsGatewayType::Path,
             )]),
         });
 
@@ -1028,7 +1028,7 @@ mod process_nfts_tests {
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
             http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
                 mock_server.uri(),
-                crate::url::IpfsGatewayType::Path,
+                crate::ipfs::config::IpfsGatewayType::Path,
             )]),
         });
 
@@ -1143,7 +1143,7 @@ mod pin_cid_tests {
             providers: vec![Box::new(MockProvider("p1"))],
             http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
                 mock_server.uri(),
-                crate::url::IpfsGatewayType::Path,
+                crate::ipfs::config::IpfsGatewayType::Path,
             )]),
         };
         let token = ContractTokenId {
@@ -1174,7 +1174,7 @@ mod pin_cid_tests {
             providers: vec![Box::new(MockProvider("p1"))],
             http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
                 mock_server.uri(),
-                crate::url::IpfsGatewayType::Path,
+                crate::ipfs::config::IpfsGatewayType::Path,
             )]),
         };
         let token = ContractTokenId {
@@ -1205,7 +1205,7 @@ mod pin_cid_tests {
             providers: vec![Box::new(MockProvider("p1")), Box::new(MockProvider("p2"))],
             http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
                 mock_server.uri(),
-                crate::url::IpfsGatewayType::Path,
+                crate::ipfs::config::IpfsGatewayType::Path,
             )]),
         };
         let token = ContractTokenId {

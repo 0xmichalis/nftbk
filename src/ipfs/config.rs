@@ -4,6 +4,35 @@ use serde::Deserialize;
 use super::provider::IpfsPinningProvider;
 use super::{IpfsPinningClient, PinataClient};
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum IpfsGatewayType {
+    Path,
+    Subdomain,
+}
+
+#[derive(Debug, Clone)]
+pub struct IpfsGatewayConfig {
+    pub url: &'static str,
+    pub gateway_type: IpfsGatewayType,
+}
+
+// A list of public IPFS gateways can be found here:
+// https://ipfs.github.io/public-gateway-checker/
+pub const IPFS_GATEWAYS: &[IpfsGatewayConfig] = &[
+    IpfsGatewayConfig {
+        url: "https://ipfs.io",
+        gateway_type: IpfsGatewayType::Path,
+    },
+    IpfsGatewayConfig {
+        url: "https://4everland.io",
+        gateway_type: IpfsGatewayType::Subdomain,
+    },
+    IpfsGatewayConfig {
+        url: "https://gateway.pinata.cloud",
+        gateway_type: IpfsGatewayType::Path,
+    },
+];
+
 /// Configuration for a single IPFS pinning provider
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]

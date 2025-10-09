@@ -6,8 +6,8 @@ use crate::content::{extensions, try_exists, write_and_postprocess_file, Options
 use crate::httpclient::fetch::try_fetch_response;
 use crate::httpclient::retry::{retry_operation, should_retry};
 use crate::httpclient::stream::stream_http_to_file;
+use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType, IPFS_GATEWAYS};
 use crate::url::{get_data_url, is_data_url, resolve_url_with_gateways};
-use crate::url::{IpfsGatewayConfig, IpfsGatewayType, IPFS_GATEWAYS};
 
 pub mod fetch;
 pub mod retry;

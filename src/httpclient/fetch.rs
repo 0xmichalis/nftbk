@@ -1,6 +1,7 @@
 use tracing::{info, warn};
 
-use crate::url::{all_ipfs_gateway_urls_with_gateways, IpfsGatewayConfig};
+use crate::ipfs::config::IpfsGatewayConfig;
+use crate::url::all_ipfs_gateway_urls_with_gateways;
 
 pub(crate) async fn fetch_url(url: &str) -> anyhow::Result<reqwest::Response> {
     let client = reqwest::Client::builder()
@@ -111,7 +112,7 @@ mod try_fetch_response_tests {
         Mock, MockServer, ResponseTemplate,
     };
 
-    use crate::url::{IpfsGatewayConfig, IpfsGatewayType};
+    use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType};
 
     fn leak_str(s: String) -> &'static str {
         Box::leak(s.into_boxed_str())
@@ -220,7 +221,7 @@ mod retry_with_gateways_tests {
         Mock, MockServer, ResponseTemplate,
     };
 
-    use crate::url::{IpfsGatewayConfig, IpfsGatewayType};
+    use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType};
 
     // Helper to leak a String into a 'static str for IpfsGatewayConfig
     fn leak_str(s: String) -> &'static str {
