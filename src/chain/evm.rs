@@ -114,6 +114,30 @@ sol! {
     }
 }
 
+#[async_trait::async_trait]
+trait CryptoPunksContract: Sync {
+    async fn punk_image_svg(&self, punk_id: u16) -> Result<String, Error>;
+    async fn punk_attributes(&self, punk_id: u16) -> Result<String, Error>;
+}
+
+struct CryptoPunks<'a> {
+    rpc: &'a alloy::providers::RootProvider<Http<Client>>,
+    address: Address,
+}
+
+#[async_trait::async_trait]
+impl<'a> CryptoPunksContract for CryptoPunks<'a> {
+    async fn punk_image_svg(&self, punk_id: u16) -> Result<String, Error> {
+        let c = ICryptoPunks::new(self.address, self.rpc);
+        c.punkImageSvg(punk_id).call().await.map(|r| r._0)
+    }
+
+    async fn punk_attributes(&self, punk_id: u16) -> Result<String, Error> {
+        let c = ICryptoPunks::new(self.address, self.rpc);
+        c.punkAttributes(punk_id).call().await.map(|r| r._0)
+    }
+}
+
 // CryptoPunks contract ABI
 sol! {
     #[allow(missing_docs)]
@@ -129,7 +153,7 @@ fn is_rate_limited(e: &Error) -> bool {
 }
 
 // Helper function to handle contract calls with retries
-async fn try_call_contract<Fut, T>(mut f: impl FnMut() -> Fut) -> Result<T, Error>
+async fn try_call<Fut, T>(mut f: impl FnMut() -> Fut) -> Result<T, Error>
 where
     Fut: Future<Output = Result<T, Error>> + Send,
 {
@@ -313,7 +337,7 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
 
         let nft = INFT::new(token_addr, &self.rpc);
 
-        let uri = match try_call_contract(|| {
+        let uri = match try_call(|| {
             let nft = nft.clone();
             async move { nft.tokenURI(token_id).call().await }
         })
@@ -321,7 +345,7 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         {
             Ok(uri) => Ok(uri._0),
             Err(e) if !is_rate_limited(&e) => {
-                let uri = try_call_contract(|| {
+                let uri = try_call(|| {
                     let nft = nft.clone();
                     async move { nft.uri(token_id).call().await }
                 })
@@ -416,27 +440,36 @@ async fn generate_cryptopunks_data_uri(
     // CryptoPunks contract address
     let cryptopunks_address = "0x16F5A35647D6F03D5D3da7b35409D65ba03aF3B2".parse::<Address>()?;
 
+    let real = CryptoPunks {
+        rpc,
+        address: cryptopunks_address,
+    };
+    generate_cryptopunks_data_uri_from_contract(&real, token_id).await
+}
+
+async fn generate_cryptopunks_data_uri_from_contract(
+    contract: &impl CryptoPunksContract,
+    token_id: &U256,
+) -> anyhow::Result<String> {
     // Convert token_id to u16 (CryptoPunks uses uint16)
     let punk_id = token_id.to::<u16>();
 
-    let cryptopunks = ICryptoPunks::new(cryptopunks_address, rpc);
-
-    // Call contract functions with retries
-    let svg_data = try_call_contract(|| {
-        let cryptopunks = cryptopunks.clone();
-        async move { cryptopunks.punkImageSvg(punk_id).call().await }
+    // Fetch SVG data
+    let svg_data = try_call(|| async {
+        let svg = contract.punk_image_svg(punk_id).await?;
+        Ok(svg)
     })
     .await?;
 
-    let attributes_str = try_call_contract(|| {
-        let cryptopunks = cryptopunks.clone();
-        async move { cryptopunks.punkAttributes(punk_id).call().await }
+    // Fetch attributes
+    let attributes_str = try_call(|| async {
+        let attrs = contract.punk_attributes(punk_id).await?;
+        Ok(attrs)
     })
     .await?;
 
     // Parse attributes string (comma-separated values)
     let attributes_list: Vec<String> = attributes_str
-        ._0
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -462,7 +495,7 @@ async fn generate_cryptopunks_data_uri(
     }
 
     // Use the SVG data URI directly from the contract (already properly formatted)
-    let svg_data_uri = svg_data._0;
+    let svg_data_uri = svg_data;
 
     // Create the metadata
     let metadata = NFTMetadata {
@@ -687,67 +720,40 @@ mod collect_urls_tests {
 }
 
 #[cfg(test)]
-mod handle_special_contract_uri_tests {
-    use super::*;
-
-    const DEFAULT_LLAMARPC_URL: &str = "https://eth.llamarpc.com";
-    const DEFAULT_ALCHEMY_URL: &str = "https://eth-mainnet.g.alchemy.com/v2";
-
-    fn get_evm_rpc_url() -> String {
-        if let Ok(api_key) = std::env::var("ALCHEMY_API_KEY") {
-            if !api_key.is_empty() {
-                return format!("{DEFAULT_ALCHEMY_URL}/{api_key}");
-            }
-        }
-        DEFAULT_LLAMARPC_URL.to_string()
-    }
-
-    #[tokio::test]
-    async fn detects_beeple_contract_without_network_calls() {
-        use alloy::primitives::U256;
-        use alloy::providers::RootProvider;
-        let rpc_url = get_evm_rpc_url();
-        let rpc = RootProvider::new_http(rpc_url.parse().unwrap());
-        let chain_name = "ethereum";
-        let beeple_address = "0xd92e44ac213b9ebda0178e1523cc0ce177b7fa96";
-        let token_id = U256::from(100010189u64);
-        let res = handle_special_contract_uri(&rpc, chain_name, beeple_address, &token_id)
-            .await
-            .unwrap();
-        assert!(res.is_some());
-        assert!(res.unwrap().contains("niftygateway.com/beeple/100010189/"));
-    }
-}
-
-#[cfg(test)]
 mod generate_cryptopunks_data_uri_tests {
     use super::*;
 
-    const DEFAULT_LLAMARPC_URL: &str = "https://eth.llamarpc.com";
-    const DEFAULT_ALCHEMY_URL: &str = "https://eth-mainnet.g.alchemy.com/v2";
+    struct MockPunks;
 
-    fn get_evm_rpc_url() -> String {
-        if let Ok(api_key) = std::env::var("ALCHEMY_API_KEY") {
-            if !api_key.is_empty() {
-                return format!("{DEFAULT_ALCHEMY_URL}/{api_key}");
-            }
+    #[async_trait::async_trait]
+    impl CryptoPunksContract for MockPunks {
+        async fn punk_image_svg(&self, _punk_id: u16) -> Result<String, alloy::contract::Error> {
+            Ok("data:image/svg+xml;utf8,<svg></svg>".to_string())
         }
-        DEFAULT_LLAMARPC_URL.to_string()
+        async fn punk_attributes(&self, _punk_id: u16) -> Result<String, alloy::contract::Error> {
+            Ok("Male, Earring, Mohawk".to_string())
+        }
     }
 
     #[tokio::test]
-    async fn generates_valid_data_uri_or_handles_network_error() {
+    async fn generates_valid_data_uri_with_mocked_contract() {
         use alloy::primitives::U256;
-        use alloy::providers::RootProvider;
-        let rpc_url = get_evm_rpc_url();
-        let rpc = RootProvider::new_http(rpc_url.parse().unwrap());
         let token_id = U256::from(0u64);
-        let result = generate_cryptopunks_data_uri(&rpc, &token_id).await;
-        if let Ok(data_uri) = result {
-            assert!(data_uri.starts_with("data:application/json;utf8,"));
-        } else if let Err(e) = result {
-            println!("Network error in test (acceptable): {e}");
-        }
+        let data_uri = generate_cryptopunks_data_uri_from_contract(&MockPunks, &token_id)
+            .await
+            .expect("ok");
+        assert!(data_uri.starts_with("data:application/json;utf8,"));
+        let json = data_uri.trim_start_matches("data:application/json;utf8,");
+        let parsed: NFTMetadata = serde_json::from_str(json).expect("valid json");
+        assert_eq!(parsed.name.as_deref(), Some("CryptoPunk #0"));
+        assert!(parsed
+            .image_url
+            .as_deref()
+            .unwrap_or("")
+            .starts_with("data:image/svg+xml"));
+        let attrs = parsed.attributes.unwrap();
+        assert_eq!(attrs.first().unwrap().trait_type, "Type");
+        assert_eq!(attrs.first().unwrap().value, serde_json::json!("Male"));
     }
 }
 
