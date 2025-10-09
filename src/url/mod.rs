@@ -1,7 +1,8 @@
 use base64::Engine;
 use url::Url;
 
-use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType, IPFS_GATEWAYS};
+use crate::ipfs::config::{IpfsGatewayConfig, IPFS_GATEWAYS};
+use crate::ipfs::url::get_ipfs_gateway_urls_with_gateways;
 
 pub fn is_data_url(url: &str) -> bool {
     url.starts_with("data:") || is_svg_content(url) || is_json_content(url)
@@ -70,148 +71,6 @@ pub fn is_json_content(s: &str) -> bool {
     trimmed.starts_with('{') || trimmed.starts_with('[')
 }
 
-/// Constructs a gateway URL for the given IPFS content and gateway configuration
-pub(crate) fn construct_gateway_url(ipfs_content: &str, gateway: &IpfsGatewayConfig) -> String {
-    match gateway.gateway_type {
-        IpfsGatewayType::Path => {
-            format!(
-                "{}/ipfs/{}",
-                gateway.url.trim_end_matches('/'),
-                ipfs_content
-            )
-        }
-        IpfsGatewayType::Subdomain => {
-            // For subdomain gateways, extract the hash part and create subdomain URL
-            let hash = ipfs_content.split('/').next().unwrap_or(ipfs_content);
-            let path_part = if ipfs_content.contains('/') {
-                format!("/{}", ipfs_content.split_once('/').unwrap().1)
-            } else {
-                String::new()
-            };
-            let base_domain = gateway.url.trim_start_matches("https://");
-            format!("https://{hash}.ipfs.{base_domain}{path_part}")
-        }
-    }
-}
-
-/// Returns all possible gateway URLs for the given IPFS gateway URL, or None if the URL is not an IPFS gateway URL.
-/// TODO: Should probably collapse this into get_ipfs_gateway_urls
-pub fn all_ipfs_gateway_urls_with_gateways(
-    url: &str,
-    gateways: &[IpfsGatewayConfig],
-) -> Option<Vec<String>> {
-    extract_ipfs_content_from_gateway_url(url).map(|ipfs_content| {
-        gateways
-            .iter()
-            .map(|gw| construct_gateway_url(&ipfs_content, gw))
-            .collect()
-    })
-}
-
-/// Extracts IPFS content (hash + path) from a gateway URL
-pub(crate) fn extract_ipfs_content_from_gateway_url(url: &str) -> Option<String> {
-    let lower = url.to_ascii_lowercase();
-
-    // Check for path-based gateway URLs (e.g., https://ipfs.io/ipfs/QmHash/path)
-    if let Some(idx) = lower.find("/ipfs/") {
-        let path = &url[idx..];
-        let end = path.find(&['?', '#'][..]).unwrap_or(path.len());
-        let ipfs_path = &path[..end];
-        let ipfs_content = ipfs_path.trim_start_matches("/ipfs/");
-        Some(ipfs_content.to_string())
-    } else if lower.contains(".ipfs.") {
-        // Check for subdomain gateway URLs (e.g., https://QmHash.ipfs.gateway.com/path)
-        // Extract the hash and path from the subdomain URL
-        if let Some(domain_start) = lower.find(".ipfs.") {
-            let hash_part = &url[8..domain_start]; // Skip "https://"
-            let domain_end = url[domain_start..]
-                .find('/')
-                .unwrap_or(url[domain_start..].len());
-            let path_part = if domain_end < url[domain_start..].len() {
-                let full_path = &url[domain_start + domain_end..];
-                // Remove query parameters and fragments
-                let end = full_path.find(&['?', '#'][..]).unwrap_or(full_path.len());
-                &full_path[..end]
-            } else {
-                ""
-            };
-
-            let ipfs_content = if path_part.is_empty() {
-                hash_part.to_string()
-            } else {
-                format!("{hash_part}{path_part}")
-            };
-
-            Some(ipfs_content)
-        } else {
-            None
-        }
-    } else {
-        None
-    }
-}
-
-/// Checks if a URL is an IPFS gateway URL by looking for /ipfs/ path
-pub fn is_ipfs_gateway_url(url: &str) -> bool {
-    let lower = url.to_ascii_lowercase();
-    lower.contains("/ipfs/")
-}
-
-/// Extract a CID from various IPFS URL forms (ipfs://, gateway URLs, or raw CID)
-pub fn extract_ipfs_cid(url: &str) -> Option<String> {
-    extract_ipfs_content(url).map(|s| s.split('/').next().unwrap_or("").to_string())
-}
-
-/// Extract the IPFS content path (CID plus optional suffix path) from various forms.
-/// Returns None if the URL is not IPFS-related.
-pub fn extract_ipfs_content(url: &str) -> Option<String> {
-    if url.starts_with("ipfs://ipfs/") {
-        return Some(url.trim_start_matches("ipfs://ipfs/").to_string());
-    }
-    if url.starts_with("ipfs://") {
-        return Some(url.trim_start_matches("ipfs://").to_string());
-    }
-    if (url.starts_with("Qm") && url.len() == 46) || url.starts_with("bafy") {
-        return Some(url.to_string());
-    }
-    if let Some(content) = extract_ipfs_content_from_gateway_url(url) {
-        return Some(content);
-    }
-    None
-}
-
-/// Given a list of URLs, return only those that are IPFS-specific (ipfs://, raw CID, or gateway URLs)
-pub fn filter_ipfs_urls(urls: &[String]) -> Vec<String> {
-    urls.iter()
-        .filter(|u| {
-            u.starts_with("ipfs://")
-                || is_ipfs_gateway_url(u)
-                || (u.starts_with("Qm") && u.len() == 46)
-                || u.starts_with("bafy")
-        })
-        .cloned()
-        .collect()
-}
-
-/// Build all gateway URLs for an IPFS url/cid using provided gateways.
-pub fn get_ipfs_gateway_urls_with_gateways(
-    url: &str,
-    gateways: &[IpfsGatewayConfig],
-) -> Vec<String> {
-    if let Some(ipfs_path) = extract_ipfs_content(url) {
-        return gateways
-            .iter()
-            .map(|gw| construct_gateway_url(&ipfs_path, gw))
-            .collect();
-    }
-    vec![url.to_string()]
-}
-
-/// Convenience wrapper that builds IPFS gateway URLs using default `IPFS_GATEWAYS`.
-pub fn get_ipfs_gateway_urls(url: &str) -> Vec<String> {
-    get_ipfs_gateway_urls_with_gateways(url, IPFS_GATEWAYS)
-}
-
 pub fn get_last_path_segment(url: &str, fallback: &str) -> String {
     Url::parse(url)
         .ok()
@@ -241,71 +100,7 @@ pub fn resolve_url(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_extract_ipfs_content_and_cid() {
-        // ipfs:// form
-        let p = extract_ipfs_content("ipfs://QmHash/path/to").unwrap();
-        assert_eq!(p, "QmHash/path/to");
-        assert_eq!(
-            extract_ipfs_cid("ipfs://QmHash/path/to").as_deref(),
-            Some("QmHash")
-        );
-
-        // ipfs://ipfs/ form
-        let p2 = extract_ipfs_content("ipfs://ipfs/QmHash/dir/file").unwrap();
-        assert_eq!(p2, "QmHash/dir/file");
-        assert_eq!(
-            extract_ipfs_cid("ipfs://ipfs/QmHash/dir/file").as_deref(),
-            Some("QmHash")
-        );
-
-        // raw Qm cid
-        let raw = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
-        assert_eq!(extract_ipfs_content(raw).as_deref(), Some(raw));
-        assert_eq!(extract_ipfs_cid(raw).as_deref(), Some(raw));
-
-        // raw bafy cid
-        let bafy = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
-        assert_eq!(extract_ipfs_content(bafy).as_deref(), Some(bafy));
-        assert_eq!(extract_ipfs_cid(bafy).as_deref(), Some(bafy));
-
-        // gateway path-based
-        let gw = "https://ipfs.io/ipfs/QmHash/foo?bar=baz#frag";
-        assert_eq!(extract_ipfs_content(gw).as_deref(), Some("QmHash/foo"));
-        assert_eq!(extract_ipfs_cid(gw).as_deref(), Some("QmHash"));
-
-        // gateway subdomain
-        let sub = "https://QmHash.ipfs.4everland.io/path/file";
-        assert_eq!(
-            extract_ipfs_content(sub).as_deref(),
-            Some("QmHash/path/file")
-        );
-        assert_eq!(extract_ipfs_cid(sub).as_deref(), Some("QmHash"));
-
-        // non-ipfs URL returns None
-        assert!(extract_ipfs_content("https://example.com").is_none());
-        assert!(extract_ipfs_cid("https://example.com").is_none());
-    }
-
-    #[test]
-    fn test_filter_ipfs_urls() {
-        let urls = vec![
-            "https://example.com/file.png".to_string(),
-            "ipfs://QmHash".to_string(),
-            "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco".to_string(),
-            "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string(),
-            "https://ipfs.io/ipfs/QmHash".to_string(),
-        ];
-        let filtered = filter_ipfs_urls(&urls);
-        assert_eq!(filtered.len(), 4);
-        assert!(filtered.iter().any(|u| u.starts_with("ipfs://")));
-        assert!(filtered.iter().any(|u| u.starts_with("QmXoypizj")));
-        assert!(filtered.iter().any(|u| u.starts_with("bafy")));
-        assert!(filtered
-            .iter()
-            .any(|u| u.contains("/ipfs/") && u.starts_with("https://")));
-    }
+    use crate::ipfs::config::IPFS_GATEWAYS;
 
     #[test]
     fn test_get_data_url_json() {
@@ -440,22 +235,21 @@ mod tests {
     }
 
     #[test]
-    fn test_resolve_url_arweave_and_passthrough() {
+    fn test_resolve_url_arweave() {
         let ar_url = "ar://zXX4PCmJoOgFmLsObREHHwNBqnNCwoVNXylCbStZmno";
-        let resolved = resolve_url(ar_url);
+        let resolved = resolve_url_with_gateways(ar_url, &[]);
         assert_eq!(
             resolved,
             "https://arweave.net/zXX4PCmJoOgFmLsObREHHwNBqnNCwoVNXylCbStZmno"
         );
 
         let normal = "https://arweave.net/zXX4PCmJoOgFmLsObREHHwNBqnNCwoVNXylCbStZmno";
-        assert_eq!(resolve_url(normal), normal);
+        assert_eq!(resolve_url_with_gateways(normal, &[]), normal);
     }
-
     #[test]
-    fn test_resolve_url_ipfs_uses_gateways() {
+    fn test_resolve_url_ipfs() {
         let ipfs_url = "ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
-        let resolved = resolve_url(ipfs_url);
+        let resolved = resolve_url_with_gateways(ipfs_url, IPFS_GATEWAYS);
         assert!(resolved.contains("/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco"));
     }
 
@@ -493,81 +287,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_ipfs_gateway_urls_variants() {
-        let valid_qm = "bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m";
-        let expected: Vec<String> = vec![
-            // Path-based gateway (ipfs.io)
-            "https://ipfs.io/ipfs/bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m".to_string(),
-            // Subdomain gateway (4everland.io)
-            "https://bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m.ipfs.4everland.io".to_string(),
-            // Path-based gateway (gateway.pinata.cloud)
-            "https://gateway.pinata.cloud/ipfs/bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m"
-                .to_string(),
-        ];
-
-        let ipfs_url = &format!("ipfs://{valid_qm}");
-        let urls = get_ipfs_gateway_urls(ipfs_url);
-        assert_eq!(urls, expected);
-
-        let ipfs_url2 = &format!("ipfs://ipfs/{valid_qm}");
-        let urls2 = get_ipfs_gateway_urls(ipfs_url2);
-        assert_eq!(urls2, expected);
-
-        let raw_hash = valid_qm;
-        let urls3 = get_ipfs_gateway_urls(raw_hash);
-        assert_eq!(urls3, expected);
-
-        let bafy_hash = "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi";
-        let expected_bafy: Vec<String> = vec![
-            // Path-based gateway (ipfs.io)
-            "https://ipfs.io/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string(),
-            // Subdomain gateway (4everland.io)
-            "https://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi.ipfs.4everland.io".to_string(),
-            // Path-based gateway (gateway.pinata.cloud)
-            "https://gateway.pinata.cloud/ipfs/bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi".to_string(),
-        ];
-        let urls4 = get_ipfs_gateway_urls(bafy_hash);
-        assert_eq!(urls4, expected_bafy);
-
-        let http_url = "https://example.com/file.png";
-        let urls5 = get_ipfs_gateway_urls(http_url);
-        assert_eq!(urls5, vec![http_url.to_string()]);
-    }
-
-    #[test]
-    fn test_all_ipfs_gateway_urls() {
-        let url = "https://foo.com/ipfs/QmHash/123?foo=bar";
-        let urls = all_ipfs_gateway_urls_with_gateways(url, IPFS_GATEWAYS).unwrap();
-
-        // Verify we have the expected number of gateways
-        assert_eq!(urls.len(), IPFS_GATEWAYS.len());
-
-        // Check specific expected URLs for both path and subdomain gateways
-        let expected_urls = vec![
-            // Path-based gateway (ipfs.io)
-            "https://ipfs.io/ipfs/QmHash/123".to_string(),
-            // Subdomain gateway (4everland.io)
-            "https://QmHash.ipfs.4everland.io/123".to_string(),
-            // Path-based gateway (gateway.pinata.cloud)
-            "https://gateway.pinata.cloud/ipfs/QmHash/123".to_string(),
-        ];
-
-        for expected_url in &expected_urls {
-            assert!(
-                urls.contains(expected_url),
-                "Missing expected URL: {expected_url}"
-            );
-        }
-
-        assert!(all_ipfs_gateway_urls_with_gateways(
-            "https://foo.com/notipfs/QmHash",
-            IPFS_GATEWAYS
-        )
-        .is_none());
-        assert!(all_ipfs_gateway_urls_with_gateways("", IPFS_GATEWAYS).is_none());
-    }
-
-    #[test]
     fn test_get_data_url_inline_svg() {
         let svg = "<svg xmlns='http://www.w3.org/2000/svg'></svg>";
         let content = get_data_url(svg).unwrap();
@@ -583,163 +302,5 @@ mod tests {
         assert!(content_str.starts_with("<svg width='512' height='512'"));
         assert!(content_str.contains("xmlns='http://www.w3.org/2000/svg'"));
         assert!(content_str.ends_with("</svg>"));
-    }
-
-    #[test]
-    fn test_is_ipfs_gateway_url() {
-        // Test IPFS gateway URLs (any URL with /ipfs/ path)
-        assert!(is_ipfs_gateway_url("https://ipfs.io/ipfs/QmHash"));
-        assert!(is_ipfs_gateway_url(
-            "https://gateway.pinata.cloud/ipfs/QmHash"
-        ));
-        assert!(is_ipfs_gateway_url("https://nftstorage.link/ipfs/QmHash"));
-
-        // Test case insensitivity
-        assert!(is_ipfs_gateway_url("https://IPFS.IO/ipfs/QmHash"));
-
-        // Test other IPFS gateways (not in our predefined list)
-        assert!(is_ipfs_gateway_url(
-            "https://custom-gateway.com/ipfs/QmHash"
-        ));
-        assert!(is_ipfs_gateway_url("https://example.com/ipfs/QmHash"));
-        assert!(is_ipfs_gateway_url(
-            "https://ipfs.io.example.com/ipfs/QmHash"
-        ));
-
-        // Test non-IPFS URLs
-        assert!(!is_ipfs_gateway_url("https://example.com/image.png"));
-        assert!(!is_ipfs_gateway_url("https://ipfs.io/image.png")); // no /ipfs/ path
-        assert!(!is_ipfs_gateway_url("https://example.com/ipfs")); // no trailing slash
-    }
-
-    #[test]
-    fn test_ipfs_gateway_rotation() {
-        // Test that IPFS gateway URLs can be detected and rotated
-        let ipfs_url = "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
-
-        // Verify that all_ipfs_gateway_urls returns the expected gateways
-        if let Some(gateway_urls) = all_ipfs_gateway_urls_with_gateways(ipfs_url, IPFS_GATEWAYS) {
-            assert!(!gateway_urls.is_empty());
-
-            // Check that our predefined gateways are included
-            let gateway_strings: Vec<&str> = gateway_urls.iter().map(|s| s.as_str()).collect();
-
-            // Check for path-based gateways
-            assert!(gateway_strings.iter().any(|url| url.contains("ipfs.io")));
-            assert!(gateway_strings
-                .iter()
-                .any(|url| url.contains("gateway.pinata.cloud")));
-
-            // Check for subdomain gateway
-            assert!(gateway_strings.iter().any(|url| url
-                .contains("QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco.ipfs.4everland.io")));
-        } else {
-            panic!("all_ipfs_gateway_urls should return Some for IPFS URLs");
-        }
-    }
-
-    #[test]
-    fn test_subdomain_gateway_with_path() {
-        // Test subdomain gateway with a path component
-        let ipfs_url = "ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png";
-        let urls = get_ipfs_gateway_urls(ipfs_url);
-
-        let expected_subdomain = "https://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco.ipfs.4everland.io/images/logo.png";
-        assert!(
-            urls.contains(&expected_subdomain.to_string()),
-            "URLs should contain subdomain gateway with path: {expected_subdomain}"
-        );
-
-        let expected_path =
-            "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png";
-        assert!(
-            urls.contains(&expected_path.to_string()),
-            "URLs should contain path-based gateway: {expected_path}"
-        );
-    }
-
-    #[test]
-    fn test_get_ipfs_gateway_urls() {
-        // Test all_ipfs_gateway_urls with a path component
-        let url = "https://foo.com/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png?v=1";
-        let urls = get_ipfs_gateway_urls(url);
-
-        let expected_subdomain = "https://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco.ipfs.4everland.io/images/logo.png";
-        assert!(
-            urls.contains(&expected_subdomain.to_string()),
-            "URLs should contain subdomain gateway with path: {expected_subdomain}"
-        );
-
-        let expected_path =
-            "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png";
-        assert!(
-            urls.contains(&expected_path.to_string()),
-            "URLs should contain path-based gateway: {expected_path}"
-        );
-    }
-
-    #[test]
-    fn test_gateway_types() {
-        // Test that we have the expected gateway types
-        assert_eq!(IPFS_GATEWAYS.len(), 3);
-
-        // Check ipfs.io is path-based
-        let ipfs_io = IPFS_GATEWAYS
-            .iter()
-            .find(|gw| gw.url == "https://ipfs.io")
-            .unwrap();
-        assert_eq!(ipfs_io.gateway_type, IpfsGatewayType::Path);
-
-        // Check 4everland.io is subdomain-based
-        let everland = IPFS_GATEWAYS
-            .iter()
-            .find(|gw| gw.url == "https://4everland.io")
-            .unwrap();
-        assert_eq!(everland.gateway_type, IpfsGatewayType::Subdomain);
-
-        // Check gateway.pinata.cloud is path-based
-        let pinata = IPFS_GATEWAYS
-            .iter()
-            .find(|gw| gw.url == "https://gateway.pinata.cloud")
-            .unwrap();
-        assert_eq!(pinata.gateway_type, IpfsGatewayType::Path);
-    }
-
-    #[test]
-    fn test_all_ipfs_gateway_urls_subdomain() {
-        // Test subdomain gateway URL from the decoded JSON
-        let subdomain_url = "https://bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya.ipfs.nftstorage.link/1080P%20NFT/012_placeholder_minted_UnisocksRedemptionGoesLive.mp4?id=12";
-        let urls = all_ipfs_gateway_urls_with_gateways(subdomain_url, IPFS_GATEWAYS).unwrap();
-
-        // Verify we have the expected number of gateways
-        assert_eq!(urls.len(), IPFS_GATEWAYS.len());
-
-        // Check specific expected URLs for both path and subdomain gateways
-        let expected_urls = vec![
-            // Path-based gateway (ipfs.io)
-            "https://ipfs.io/ipfs/bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya/1080P%20NFT/012_placeholder_minted_UnisocksRedemptionGoesLive.mp4".to_string(),
-            // Subdomain gateway (4everland.io)
-            "https://bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya.ipfs.4everland.io/1080P%20NFT/012_placeholder_minted_UnisocksRedemptionGoesLive.mp4".to_string(),
-            // Path-based gateway (gateway.pinata.cloud)
-            "https://gateway.pinata.cloud/ipfs/bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya/1080P%20NFT/012_placeholder_minted_UnisocksRedemptionGoesLive.mp4".to_string(),
-        ];
-
-        for expected_url in &expected_urls {
-            assert!(
-                urls.contains(expected_url),
-                "Missing expected URL: {expected_url}"
-            );
-        }
-
-        // Test subdomain URL without path
-        let subdomain_url_no_path = "https://bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya.ipfs.nftstorage.link";
-        let urls_no_path =
-            all_ipfs_gateway_urls_with_gateways(subdomain_url_no_path, IPFS_GATEWAYS).unwrap();
-        assert_eq!(urls_no_path.len(), IPFS_GATEWAYS.len());
-
-        // Check that it generates the correct subdomain URL for 4everland
-        let expected_subdomain =
-            "https://bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya.ipfs.4everland.io";
-        assert!(urls_no_path.contains(&expected_subdomain.to_string()));
     }
 }

@@ -3,6 +3,7 @@ pub mod pinata;
 pub mod pinning_service;
 pub mod provider;
 pub mod types;
+pub mod url;
 
 pub use config::IpfsProviderConfig;
 pub use pinata::{PinataClient, PinataListData, PinataListPinsResponse, PinataPinJob};

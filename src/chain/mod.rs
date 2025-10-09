@@ -6,8 +6,8 @@ use tracing::{debug, error, info, warn};
 
 use crate::content::extra::fetch_and_write_extra;
 use crate::content::{write_metadata, Options};
+use crate::ipfs::url::extract_ipfs_cid;
 use crate::ipfs::{IpfsPinningProvider, PinRequest};
-use crate::url::extract_ipfs_cid;
 pub use common::ContractTokenInfo;
 
 pub mod common;

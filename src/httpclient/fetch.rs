@@ -1,7 +1,7 @@
 use tracing::{info, warn};
 
 use crate::ipfs::config::IpfsGatewayConfig;
-use crate::url::all_ipfs_gateway_urls_with_gateways;
+use crate::ipfs::url::all_ipfs_gateway_urls_with_gateways;
 
 pub(crate) async fn fetch_url(url: &str) -> anyhow::Result<reqwest::Response> {
     let client = reqwest::Client::builder()
