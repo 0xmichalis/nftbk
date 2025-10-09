@@ -236,3 +236,206 @@ fn get_uri_from_token_metadata(json_value: &serde_json::Value) -> Option<String>
         std::cmp::Ordering::Less => None,
     }
 }
+
+#[cfg(test)]
+mod get_uri_from_token_metadata_tests {
+    use super::get_uri_from_token_metadata;
+    use base64::Engine;
+
+    #[test]
+    fn extracts_single_item_bytes_uri() {
+        // Michelson-like JSON structure with a single seq element containing bytes
+        // bytes hex decodes to "ipfs://QmFoo"
+        let json = serde_json::json!({
+            "args": [
+                { "prim": "pair" },
+                [
+                    {
+                        "args": [ {"int": "0"}, {"bytes": "697066733a2f2f516d466f6f"} ]
+                    }
+                ]
+            ]
+        });
+
+        let uri = get_uri_from_token_metadata(&json);
+        assert_eq!(uri.as_deref(), Some("ipfs://QmFoo"));
+    }
+
+    #[test]
+    fn builds_base64_data_uri_from_multiple_items() {
+        // Two kv pairs: name => "Hello", attributes => JSON array
+        // value bytes are hex-encoded strings
+        let name_hex = hex::encode("Hello");
+        let attrs_json = serde_json::json!([
+            {"trait_type": "A", "value": "B"}
+        ]);
+        let attrs_hex = hex::encode(attrs_json.to_string());
+
+        let json = serde_json::json!({
+            "args": [
+                { "prim": "pair" },
+                [
+                    { "args": [ {"string": "name"}, {"bytes": name_hex} ] },
+                    { "args": [ {"string": "attributes"}, {"bytes": attrs_hex} ] }
+                ]
+            ]
+        });
+
+        let data_uri = get_uri_from_token_metadata(&json).expect("expected data uri");
+        assert!(data_uri.starts_with("data:application/json;base64,"));
+        let b64 = &data_uri["data:application/json;base64,".len()..];
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("valid base64");
+        let decoded_json: serde_json::Value = serde_json::from_slice(&decoded).expect("json");
+
+        assert_eq!(
+            decoded_json.get("name").and_then(|v| v.as_str()),
+            Some("Hello")
+        );
+        let attrs = decoded_json
+            .get("attributes")
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(attrs.len(), 1);
+        assert_eq!(attrs[0]["trait_type"], "A");
+        assert_eq!(attrs[0]["value"], "B");
+    }
+}
+
+#[cfg(test)]
+mod collect_urls_tests {
+    use super::{NFTFormat, NFTMetadata, TezosChainProcessor};
+
+    #[test]
+    fn collects_urls_with_filenames_and_deduplicates() {
+        let metadata = NFTMetadata {
+            name: Some("MyNFT".to_string()),
+            description: None,
+            image: Some("ipfs://image-cid".to_string()),
+            tags: None,
+            artifact_uri: Some("ipfs://artifact-cid".to_string()),
+            display_uri: Some("ipfs://display-cid".to_string()),
+            thumbnail_uri: Some("ipfs://thumb-cid".to_string()),
+            formats: Some(vec![
+                NFTFormat {
+                    uri: "ipfs://artifact-cid".to_string(),
+                    file_name: "".to_string(),
+                },
+                NFTFormat {
+                    uri: "ipfs://extra-cid".to_string(),
+                    file_name: "file.mp4".to_string(),
+                },
+            ]),
+        };
+
+        let urls =
+            <TezosChainProcessor as crate::chain::NFTChainProcessor>::collect_urls(&metadata);
+
+        // Expect unique entries and proper filenames assigned
+        // We don't assert order; collect into map for checks
+        let mut map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for (u, opts) in urls {
+            map.insert(u, opts.fallback_filename.unwrap());
+        }
+
+        assert_eq!(
+            map.get("ipfs://image-cid").map(|s| s.as_str()),
+            Some("image")
+        );
+        assert_eq!(
+            map.get("ipfs://artifact-cid").map(|s| s.as_str()),
+            Some("MyNFT")
+        );
+        assert_eq!(
+            map.get("ipfs://display-cid").map(|s| s.as_str()),
+            Some("display")
+        );
+        assert_eq!(
+            map.get("ipfs://thumb-cid").map(|s| s.as_str()),
+            Some("thumbnail")
+        );
+        assert_eq!(
+            map.get("ipfs://extra-cid").map(|s| s.as_str()),
+            Some("file.mp4")
+        );
+    }
+}
+
+#[cfg(test)]
+mod new_tests {
+    use super::*;
+    use crate::chain::NFTChainProcessor;
+
+    #[test]
+    fn constructs_with_valid_rpc_and_storage_config() {
+        let storage = crate::StorageConfig {
+            output_path: Some(std::path::PathBuf::from("/tmp")),
+            prune_redundant: false,
+            ipfs_providers: vec![],
+        };
+        let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
+            .expect("new ok");
+        let _ = proc.http_client();
+        let _ = proc.ipfs_providers();
+        assert!(proc.output_path().is_some());
+    }
+}
+
+#[cfg(test)]
+mod ipfs_providers_tests {
+    use super::*;
+    use crate::chain::NFTChainProcessor;
+
+    #[test]
+    fn returns_configured_providers() {
+        let storage = crate::StorageConfig {
+            output_path: None,
+            prune_redundant: false,
+            ipfs_providers: vec![crate::ipfs::IpfsProviderConfig::IpfsPinningService {
+                base_url: "http://example.com".to_string(),
+                bearer_token: None,
+                bearer_token_env: None,
+            }],
+        };
+        let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
+            .expect("new ok");
+        assert_eq!(proc.ipfs_providers().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod http_client_tests {
+    use super::*;
+    use crate::chain::NFTChainProcessor;
+
+    #[test]
+    fn returns_http_client_reference() {
+        let storage = crate::StorageConfig {
+            output_path: None,
+            prune_redundant: false,
+            ipfs_providers: vec![],
+        };
+        let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
+            .expect("new ok");
+        let _client_ref = proc.http_client();
+    }
+}
+
+#[cfg(test)]
+mod output_path_tests {
+    use super::*;
+    use crate::chain::NFTChainProcessor;
+
+    #[test]
+    fn returns_configured_output_path() {
+        let storage = crate::StorageConfig {
+            output_path: Some(std::path::PathBuf::from("/tmp")),
+            prune_redundant: false,
+            ipfs_providers: vec![],
+        };
+        let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
+            .expect("new ok");
+        assert_eq!(proc.output_path().unwrap().to_str().unwrap(), "/tmp");
+    }
+}

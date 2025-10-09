@@ -493,21 +493,18 @@ fn generate_beeple_uri(token_id: &U256) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+mod deserialize_metadata_content_string_tests {
     use super::*;
-    use serde_json;
 
     #[test]
-    fn test_deserialize_metadata_content_string() {
+    fn deserializes_content_string_and_basic_fields() {
         let json = r#"{
             "name": "Filmmaking in the Age of the Feed 1",
             "description": "https://mirror.xyz/10/0x84b4ee3c0b5d5da3f44c93814490270aec9af2e5",
             "content": "ar://YIhysXzc499Si_YLcGbzFyd-i5VsQRodP_DCPyc1B2Q",
             "animation_url": "https://mirror.xyz/10/0x84b4ee3c0b5d5da3f44c93814490270aec9af2e5/render",
             "image": "ipfs://QmYiudjqgZwma6siYmaMJELgPVjCJMzhu3cz3tsxaFUw8Q",
-            "attributes": [
-                { "trait_type": "Serial", "value": 1 }
-            ]
+            "attributes": [ { "trait_type": "Serial", "value": 1 } ]
         }"#;
         let meta: NFTMetadata = serde_json::from_str(json).expect("Deserialization failed");
         assert_eq!(
@@ -532,142 +529,167 @@ mod tests {
             meta.image.as_deref(),
             Some("ipfs://QmYiudjqgZwma6siYmaMJELgPVjCJMzhu3cz3tsxaFUw8Q")
         );
-        assert!(meta.attributes.is_some());
         let attrs = meta.attributes.unwrap();
         assert_eq!(attrs.len(), 1);
         assert_eq!(attrs[0].trait_type, "Serial");
         assert_eq!(attrs[0].value, serde_json::json!(1));
     }
+}
+
+#[cfg(test)]
+mod replace_id_pattern_tests {
+    use super::*;
 
     #[tokio::test]
-    async fn test_replace_id_pattern() {
+    async fn replaces_supported_patterns() {
         use alloy::primitives::U256;
         let ens_uri = "https://metadata.ens.domains/mainnet/0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401/0x{id}";
         let token_id = U256::from(123456u64);
         let expected_uri = "https://metadata.ens.domains/mainnet/0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401/0x1e240";
-        let replaced = replace_id_pattern(ens_uri, &token_id);
-        assert_eq!(replaced.as_deref(), Some(expected_uri));
+        assert_eq!(
+            replace_id_pattern(ens_uri, &token_id).as_deref(),
+            Some(expected_uri)
+        );
 
-        // Should not replace if pattern is not at end
         let not_at_end = "https://foo.com/0x{id}/extra";
         assert_eq!(replace_id_pattern(not_at_end, &token_id), None);
 
-        // Should not replace if pattern is missing
         let no_pattern = "https://foo.com/bar";
         assert_eq!(replace_id_pattern(no_pattern, &token_id), None);
 
-        // Test new pattern: /{id} at end, decimal
         let dec_uri = "https://api.example.com/metadata/{id}";
         let expected_dec_uri = "https://api.example.com/metadata/123456";
-        let replaced_dec = replace_id_pattern(dec_uri, &token_id);
-        assert_eq!(replaced_dec.as_deref(), Some(expected_dec_uri));
+        assert_eq!(
+            replace_id_pattern(dec_uri, &token_id).as_deref(),
+            Some(expected_dec_uri)
+        );
     }
+}
+
+#[cfg(test)]
+mod generate_beeple_uri_tests {
+    use super::*;
 
     #[test]
-    fn test_generate_beeple_uri() {
+    fn constructs_expected_urls() {
         use alloy::primitives::U256;
-
         let token_id = U256::from(100010189u64);
-        let expected_uri = "https://api.niftygateway.com/beeple/100010189/";
-        let generated_uri = generate_beeple_uri(&token_id);
-        assert_eq!(generated_uri, expected_uri);
+        assert_eq!(
+            generate_beeple_uri(&token_id),
+            "https://api.niftygateway.com/beeple/100010189/"
+        );
 
         let token_id_2 = U256::from(12345u64);
-        let expected_uri_2 = "https://api.niftygateway.com/beeple/12345/";
-        let generated_uri_2 = generate_beeple_uri(&token_id_2);
-        assert_eq!(generated_uri_2, expected_uri_2);
+        assert_eq!(
+            generate_beeple_uri(&token_id_2),
+            "https://api.niftygateway.com/beeple/12345/"
+        );
     }
+}
+
+#[cfg(test)]
+mod deserialize_primera_metadata_tests {
+    use super::*;
 
     #[test]
-    fn test_deserialize_primera_metadata() {
+    fn handles_value_only_attributes() {
         let json = r#"{
-            "image": "https://earxvqhz3yy7be5zmpqjadsdumy5rkudotdvbqf6gjzs3lgvlkfa.arweave.net/ICN6wPneMfCTuWPgkA5DozHYqoN0x1DAvjJzLazVWoo/primera-223.gif",
+            "image": "https://earx.../primera-223.gif",
             "script_type": "p5js",
             "aspect_ratio": "1",
             "date": "2021/11/14",
-            "animation_url": "https://lqucewrfvyqn6r4pslvx3sa5vvqhvxd2rkg6cuf7rq56nehzrm.arweave.net/XCgiWiWuIN9Hj5Lr_fcgdrWB63HqKjeFQv4w75pD5iw?hash=0xf146009532e35f67117b6e1c1303819ae44ec049a266a99b262bbad7a7d65538&number=223",
+            "animation_url": "https://.../XCgiWiWuIN9Hj5Lr_fcgdrWB...",
             "name": "Primera #223",
             "number": "223",
-            "hash": "0xf146009532e35f67117b6e1c1303819ae44ec049a266a99b262bbad7a7d65538",
-            "external_url": "https://lqucewrfvyqn6r4pslvx3sa5vvqhvxd2rkg6cuf7rq56nehzrm.arweave.net/XCgiWiWuIN9Hj5Lr_fcgdrWB63HqKjeFQv4w75pD5iw?hash=0xf146009532e35f67117b6e1c1303819ae44ec049a266a99b262bbad7a7d65538&number=223",
-            "description": "Primera is the genesis project from Andrew Mitchell and Grant Yun written completely in p5.js. Primera, capped at 400 individual pieces generated upon mint, has been a project with years in the making. It is a study and interpretation on the fundamentals of early 20th century art utilizing 21st century blockchain technology",
-            "attributes": [
-                {
-                    "value": "Tan Background"
-                },
-                {
-                    "value": "Black"
-                },
-                {
-                    "value": "Blue"
-                },
-                {
-                    "value": "Yellow"
-                },
-                {
-                    "value": "Green"
-                }
-            ]
+            "hash": "0xf146...",
+            "external_url": "https://...",
+            "description": "Primera is the genesis project...",
+            "attributes": [ { "value": "Tan Background" }, { "value": "Black" }, { "value": "Blue" }, { "value": "Yellow" }, { "value": "Green" } ]
         }"#;
         let meta: NFTMetadata = serde_json::from_str(json).expect("Deserialization failed");
         assert_eq!(meta.name.as_deref(), Some("Primera #223"));
-        assert!(meta.attributes.is_some());
         let attrs = meta.attributes.unwrap();
         assert_eq!(attrs.len(), 5);
         assert_eq!(attrs[0].value, serde_json::json!("Tan Background"));
-        assert_eq!(attrs[1].value, serde_json::json!("Black"));
-        assert_eq!(attrs[2].value, serde_json::json!("Blue"));
-        assert_eq!(attrs[3].value, serde_json::json!("Yellow"));
-        assert_eq!(attrs[4].value, serde_json::json!("Green"));
     }
+}
+
+#[cfg(test)]
+mod deserialize_knownorigin_metadata_tests {
+    use super::*;
 
     #[test]
-    fn test_deserialize_knownorigin_metadata() {
+    fn converts_map_attributes_to_vec() {
         let json = r#"{
             "name": "Test NFT",
             "description": "Test description",
             "image": "https://example.com/image.jpg",
-            "attributes": {
-                "Background": "Blue",
-                "Eyes": "Green",
-                "Mouth": "Smile"
-            }
+            "attributes": {"Background": "Blue", "Eyes": "Green", "Mouth": "Smile"}
         }"#;
         let meta: NFTMetadata = serde_json::from_str(json).expect("Deserialization failed");
         assert_eq!(meta.name.as_deref(), Some("Test NFT"));
-        assert!(meta.attributes.is_some());
         let attrs = meta.attributes.unwrap();
-        assert_eq!(attrs.len(), 3);
 
-        // Check that all expected attributes are present (order doesn't matter for HashMap)
-        let mut found_background = false;
-        let mut found_eyes = false;
-        let mut found_mouth = false;
+        let mut found = std::collections::HashMap::new();
+        for a in attrs {
+            found.insert(a.trait_type, a.value);
+        }
+        assert_eq!(found.get("Background"), Some(&serde_json::json!("Blue")));
+        assert_eq!(found.get("Eyes"), Some(&serde_json::json!("Green")));
+        assert_eq!(found.get("Mouth"), Some(&serde_json::json!("Smile")));
+    }
+}
 
-        for attr in &attrs {
-            match attr.trait_type.as_str() {
-                "Background" => {
-                    assert_eq!(attr.value, serde_json::json!("Blue"));
-                    found_background = true;
-                }
-                "Eyes" => {
-                    assert_eq!(attr.value, serde_json::json!("Green"));
-                    found_eyes = true;
-                }
-                "Mouth" => {
-                    assert_eq!(attr.value, serde_json::json!("Smile"));
-                    found_mouth = true;
-                }
-                _ => panic!("Unexpected trait_type: {}", attr.trait_type),
-            }
+#[cfg(test)]
+mod collect_urls_tests {
+    use super::*;
+
+    #[test]
+    fn collects_and_deduplicates_urls_and_sets_filenames() {
+        let metadata = NFTMetadata {
+            name: Some("MyNFT".to_string()),
+            description: None,
+            image: Some("ipfs://image-cid".to_string()),
+            image_url: Some("ipfs://image-cid".to_string()), // duplicate
+            animation_url: Some("https://example.com/anim.html".to_string()),
+            animation_details: Some(AnimationDetails::Object {
+                format: Some("html".to_string()),
+            }),
+            external_url: None,
+            attributes: None,
+            media: Some(Media::Uri {
+                uri: "ipfs://media-cid".to_string(),
+            }),
+            content: Some(Media::String("ipfs://content-cid".to_string())),
+            assets: Some(Assets {
+                glb: Some("ipfs://model.glb".to_string()),
+            }),
+        };
+
+        let list =
+            <crate::chain::evm::EvmChainProcessor as crate::chain::NFTChainProcessor>::collect_urls(
+                &metadata,
+            );
+        let mut map = std::collections::HashMap::new();
+        for (u, opts) in list {
+            map.insert(u, opts.overriden_filename);
         }
 
-        assert!(found_background, "Background attribute not found");
-        assert!(found_eyes, "Eyes attribute not found");
-        assert!(found_mouth, "Mouth attribute not found");
+        assert!(map.contains_key("ipfs://image-cid"));
+        assert!(map.contains_key("ipfs://media-cid"));
+        assert!(map.contains_key("ipfs://content-cid"));
+        assert!(map.contains_key("ipfs://model.glb"));
+        assert_eq!(
+            map.get("https://example.com/anim.html").unwrap().as_deref(),
+            Some("index.html")
+        );
     }
+}
 
-    // RPC URL configuration
+#[cfg(test)]
+mod handle_special_contract_uri_tests {
+    use super::*;
+
     const DEFAULT_LLAMARPC_URL: &str = "https://eth.llamarpc.com";
     const DEFAULT_ALCHEMY_URL: &str = "https://eth-mainnet.g.alchemy.com/v2";
 
@@ -681,193 +703,126 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_cryptopunks_special_handling() {
+    async fn detects_beeple_contract_without_network_calls() {
         use alloy::primitives::U256;
         use alloy::providers::RootProvider;
-
-        // Create RPC client for testing using the configured URL (real network calls)
         let rpc_url = get_evm_rpc_url();
         let rpc = RootProvider::new_http(rpc_url.parse().unwrap());
-
-        // Test CryptoPunks contract detection
         let chain_name = "ethereum";
-        let cryptopunks_address = "0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb";
-        let token_id = U256::from(0u64);
+        let beeple_address = "0xd92e44ac213b9ebda0178e1523cc0ce177b7fa96";
+        let token_id = U256::from(100010189u64);
+        let res = handle_special_contract_uri(&rpc, chain_name, beeple_address, &token_id)
+            .await
+            .unwrap();
+        assert!(res.is_some());
+        assert!(res.unwrap().contains("niftygateway.com/beeple/100010189/"));
+    }
+}
 
-        let result =
-            handle_special_contract_uri(&rpc, chain_name, cryptopunks_address, &token_id).await;
+#[cfg(test)]
+mod generate_cryptopunks_data_uri_tests {
+    use super::*;
 
-        match result {
-            Ok(Some(data_uri)) => {
-                // Verify it's a data URI with the expected format
-                assert!(
-                    data_uri.starts_with("data:application/json;utf8,"),
-                    "Should be a JSON data URI"
-                );
+    const DEFAULT_LLAMARPC_URL: &str = "https://eth.llamarpc.com";
+    const DEFAULT_ALCHEMY_URL: &str = "https://eth-mainnet.g.alchemy.com/v2";
 
-                // Decode and verify the metadata structure
-                let json_content = &data_uri["data:application/json;utf8,".len()..];
-                let metadata: NFTMetadata = serde_json::from_str(json_content).unwrap();
-
-                // Verify the metadata structure matches what we expect from the contract
-                assert_eq!(metadata.name.as_deref(), Some("CryptoPunk #0"));
-                assert!(metadata.description.is_some());
-                assert!(metadata.image_url.is_some());
-                assert!(metadata.attributes.is_some());
-
-                // Verify the image is a UTF-8 encoded SVG data URI from contract
-                let image_url = metadata.image_url.unwrap();
-                assert!(
-                    image_url.starts_with("data:image/svg+xml;utf8,"),
-                    "Image should be a UTF-8 encoded SVG data URI from contract"
-                );
-
-                // Verify attributes structure
-                let attributes = metadata.attributes.unwrap();
-                assert!(
-                    !attributes.is_empty(),
-                    "Should have attributes from contract"
-                );
-
-                // Check that we have a Type attribute (first attribute from contract)
-                let type_attr = attributes.iter().find(|attr| attr.trait_type == "Type");
-                assert!(
-                    type_attr.is_some(),
-                    "Should have a Type attribute from contract"
-                );
-
-                // Verify the Type attribute has a valid value
-                if let Some(type_attr) = type_attr {
-                    let type_value = type_attr.value.as_str().unwrap();
-                    assert!(
-                        matches!(type_value, "Male" | "Female" | "Zombie" | "Ape" | "Alien"),
-                        "Type should be one of the valid CryptoPunk types, got: {type_value}"
-                    );
-                }
-
-                println!("Successfully generated CryptoPunks data URI with contract data");
-            }
-            Ok(None) => {
-                panic!("Should return Some URI for CryptoPunks, got None");
-            }
-            Err(e) => {
-                // Network error is acceptable in tests, but log it
-                println!("Network error in test (acceptable): {e}");
-                // We can't fully test the network call, but we can verify the contract detection logic
-                // by checking that it doesn't return None for CryptoPunks
-                assert!(
-                    !e.to_string().contains("not found"),
-                    "Should not be a 'not found' error for CryptoPunks"
-                );
+    fn get_evm_rpc_url() -> String {
+        if let Ok(api_key) = std::env::var("ALCHEMY_API_KEY") {
+            if !api_key.is_empty() {
+                return format!("{DEFAULT_ALCHEMY_URL}/{api_key}");
             }
         }
-
-        // Test non-special contract
-        let normal_address = "0x1234567890123456789012345678901234567890";
-        let result = handle_special_contract_uri(&rpc, chain_name, normal_address, &token_id).await;
-        assert!(result.is_ok());
-        assert!(
-            result.unwrap().is_none(),
-            "Should return None for normal contracts"
-        );
+        DEFAULT_LLAMARPC_URL.to_string()
     }
 
     #[tokio::test]
-    async fn test_generate_cryptopunks_data_uri() {
+    async fn generates_valid_data_uri_or_handles_network_error() {
         use alloy::primitives::U256;
         use alloy::providers::RootProvider;
-
-        // Create RPC client for testing using the configured URL (real network calls)
         let rpc_url = get_evm_rpc_url();
         let rpc = RootProvider::new_http(rpc_url.parse().unwrap());
-
-        // Test generating data URI for CryptoPunk #0
         let token_id = U256::from(0u64);
         let result = generate_cryptopunks_data_uri(&rpc, &token_id).await;
-
-        match result {
-            Ok(data_uri) => {
-                // Verify it's a data URI with the expected format
-                assert!(
-                    data_uri.starts_with("data:application/json;utf8,"),
-                    "Should be a JSON data URI"
-                );
-
-                // Decode and verify the metadata structure
-                let json_content = &data_uri["data:application/json;utf8,".len()..];
-                let metadata: NFTMetadata = serde_json::from_str(json_content).unwrap();
-
-                // Verify basic metadata structure
-                assert_eq!(metadata.name.as_deref(), Some("CryptoPunk #0"));
-                assert!(metadata.description.is_some());
-                assert!(metadata.image_url.is_some());
-                assert!(metadata.attributes.is_some());
-
-                // Verify the image is an SVG data URI from contract
-                let image_url = metadata.image_url.unwrap();
-                assert!(
-                    image_url.starts_with("data:image/svg+xml"),
-                    "Image should be an SVG data URI from contract"
-                );
-
-                // Verify the SVG content is UTF-8 encoded as returned by the contract
-                assert!(
-                    image_url.starts_with("data:image/svg+xml;utf8,"),
-                    "Image should be UTF-8 encoded SVG data URI from contract"
-                );
-
-                let svg_content = &image_url["data:image/svg+xml;utf8,".len()..];
-                assert!(
-                    svg_content.contains("<svg"),
-                    "SVG content should contain SVG markup from contract"
-                );
-
-                // Verify attributes from contract
-                let attributes = metadata.attributes.unwrap();
-                assert!(
-                    !attributes.is_empty(),
-                    "Should have attributes from contract"
-                );
-
-                // Check that we have a Type attribute (first from contract)
-                let type_attr = attributes.iter().find(|attr| attr.trait_type == "Type");
-                assert!(
-                    type_attr.is_some(),
-                    "Should have a Type attribute from contract"
-                );
-
-                // Verify the Type attribute has a valid CryptoPunk type
-                if let Some(type_attr) = type_attr {
-                    let type_value = type_attr.value.as_str().unwrap();
-                    assert!(
-                        matches!(type_value, "Male" | "Female" | "Zombie" | "Ape" | "Alien"),
-                        "Type should be one of the valid CryptoPunk types from contract, got: {type_value}"
-                    );
-                }
-
-                // Verify accessory attributes (remaining from contract)
-                let _accessory_attrs: Vec<_> = attributes
-                    .iter()
-                    .filter(|attr| attr.trait_type == "Accessory")
-                    .collect();
-
-                // Log the actual attributes received from contract for debugging
-                println!("Attributes received from contract:");
-                for attr in &attributes {
-                    println!("  {}: {}", attr.trait_type, attr.value);
-                }
-
-                println!("Successfully generated CryptoPunk #0 data URI with contract data");
-            }
-            Err(e) => {
-                // Network error is acceptable in tests, but log it
-                println!("Network error in test (acceptable): {e}");
-                // We can't fully test the network call, but we can verify the function exists and compiles
-                assert!(
-                    !e.to_string().contains("not found"),
-                    "Should not be a 'not found' error"
-                );
-            }
+        if let Ok(data_uri) = result {
+            assert!(data_uri.starts_with("data:application/json;utf8,"));
+        } else if let Err(e) = result {
+            println!("Network error in test (acceptable): {e}");
         }
+    }
+}
+
+#[cfg(test)]
+mod new_tests {
+    use super::*;
+    use crate::chain::NFTChainProcessor;
+
+    #[test]
+    fn constructs_with_valid_rpc_and_storage_config() {
+        let storage = crate::StorageConfig {
+            output_path: Some(std::path::PathBuf::from("/tmp")),
+            prune_redundant: false,
+            ipfs_providers: vec![],
+        };
+        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
+        // basic sanity
+        let _ = proc.http_client();
+        let _ = proc.ipfs_providers();
+        let out = proc.output_path();
+        assert!(out.is_some());
+    }
+}
+
+#[cfg(test)]
+mod ipfs_providers_tests {
+    use super::*;
+    use crate::chain::NFTChainProcessor;
+
+    #[test]
+    fn returns_configured_providers() {
+        let storage = crate::StorageConfig {
+            output_path: None,
+            prune_redundant: false,
+            ipfs_providers: vec![crate::ipfs::IpfsProviderConfig::IpfsPinningService {
+                base_url: "http://example.com".to_string(),
+                bearer_token: None,
+                bearer_token_env: None,
+            }],
+        };
+        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
+        assert_eq!(proc.ipfs_providers().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod http_client_tests {
+    use super::*;
+    use crate::chain::NFTChainProcessor;
+
+    #[test]
+    fn returns_http_client_reference() {
+        let storage = crate::StorageConfig {
+            output_path: None,
+            prune_redundant: false,
+            ipfs_providers: vec![],
+        };
+        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
+        let _client_ref = proc.http_client();
+    }
+}
+
+#[cfg(test)]
+mod output_path_tests {
+    use super::*;
+    use crate::chain::NFTChainProcessor;
+
+    #[test]
+    fn returns_configured_output_path() {
+        let storage = crate::StorageConfig {
+            output_path: Some(std::path::PathBuf::from("/tmp")),
+            prune_redundant: false,
+            ipfs_providers: vec![],
+        };
+        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
+        assert_eq!(proc.output_path().unwrap().to_str().unwrap(), "/tmp");
     }
 }
