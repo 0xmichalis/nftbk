@@ -64,13 +64,14 @@ pub(crate) async fn retry_with_gateways(
     original_error: anyhow::Error,
     gateways: &[IpfsGatewayConfig],
 ) -> anyhow::Result<reqwest::Response> {
-    warn!(
-        "IPFS gateway error for {}, retrying with other gateways: {}",
-        url, original_error
-    );
-
     let gateway_urls = match all_ipfs_gateway_urls_with_gateways(url, gateways) {
-        Some(urls) => urls,
+        Some(urls) => {
+            warn!(
+                "IPFS gateway error for {}, retrying with other gateways: {}",
+                url, original_error
+            );
+            urls
+        }
         None => return Err(original_error),
     };
 
@@ -382,5 +383,23 @@ mod retry_with_gateways_tests {
         assert!(res.is_err());
         let err = res.err().unwrap().to_string();
         assert!(err.contains("502"));
+    }
+
+    #[tokio::test]
+    async fn non_ipfs_url_returns_original_error_without_warning() {
+        // Test that non-IPFS URLs return the original error without logging IPFS gateway warnings
+        let non_ipfs_url =
+            "https://mirror.xyz/10/0xceda033195af537e16d203a4d7fbfe1c5f0eb843/render";
+        let original_error_msg = "HTTP error: status 429 Too Many Requests";
+        let original_error = anyhow::anyhow!(original_error_msg);
+        let gateways = vec![gw("https://ipfs.io")];
+
+        // Act
+        let res = super::retry_with_gateways(non_ipfs_url, original_error, &gateways).await;
+
+        // Assert: should return the original error without trying IPFS gateways
+        assert!(res.is_err());
+        let err = res.err().unwrap();
+        assert_eq!(err.to_string(), original_error_msg);
     }
 }
