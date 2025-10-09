@@ -9,6 +9,7 @@ use tracing::{debug, error, info};
 
 use crate::server::api::{BackupRequest, BackupResponse};
 use crate::server::archive::archive_format_from_user_agent;
+use crate::server::db::Db;
 use crate::server::hashing::compute_task_id;
 use crate::server::{AppState, BackupJob, BackupJobOrShutdown};
 
@@ -59,7 +60,7 @@ pub async fn handle_backup(
     Extension(requestor): Extension<Option<String>>,
     headers: HeaderMap,
     Json(req): Json<BackupRequest>,
-) -> impl IntoResponse {
+) -> axum::response::Response {
     if let Err(msg) = validate_backup_request(&state, &req) {
         return (
             StatusCode::BAD_REQUEST,
@@ -67,10 +68,89 @@ pub async fn handle_backup(
         )
             .into_response();
     }
+    let response = handle_backup_core(
+        &*state.db,
+        &state.backup_job_sender,
+        requestor,
+        &headers,
+        req,
+        state.pruner_retention_days,
+    )
+    .await;
+    response
+}
 
+// A minimal trait to enable mocking DB calls for unit tests of this handler
+pub trait BackupDb {
+    fn get_backup_status<'a>(
+        &'a self,
+        task_id: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<String>, sqlx::Error>> + Send + 'a>,
+    >;
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_backup_metadata<'a>(
+        &'a self,
+        task_id: &'a str,
+        requestor: &'a str,
+        archive_format: &'a str,
+        nft_count: i32,
+        tokens: &'a serde_json::Value,
+        retention_days: Option<u64>,
+        pin_on_ipfs: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>;
+}
+
+impl BackupDb for Db {
+    fn get_backup_status<'a>(
+        &'a self,
+        task_id: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Option<String>, sqlx::Error>> + Send + 'a>,
+    > {
+        Box::pin(async move { Db::get_backup_status(self, task_id).await })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn insert_backup_metadata<'a>(
+        &'a self,
+        task_id: &'a str,
+        requestor: &'a str,
+        archive_format: &'a str,
+        nft_count: i32,
+        tokens: &'a serde_json::Value,
+        retention_days: Option<u64>,
+        pin_on_ipfs: bool,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            Db::insert_backup_metadata(
+                self,
+                task_id,
+                requestor,
+                archive_format,
+                nft_count,
+                tokens,
+                retention_days,
+                pin_on_ipfs,
+            )
+            .await
+        })
+    }
+}
+
+async fn handle_backup_core<DB: BackupDb + ?Sized>(
+    db: &DB,
+    backup_job_sender: &tokio::sync::mpsc::Sender<BackupJobOrShutdown>,
+    requestor: Option<String>,
+    headers: &HeaderMap,
+    req: BackupRequest,
+    pruner_retention_days: u64,
+) -> axum::response::Response {
     let task_id = compute_task_id(&req.tokens, requestor.as_deref());
 
-    if let Ok(Some(status)) = state.db.get_backup_status(&task_id).await {
+    if let Ok(Some(status)) = db.get_backup_status(&task_id).await {
         match status.as_str() {
             "in_progress" => {
                 debug!(
@@ -118,18 +198,17 @@ pub async fn handle_backup(
         .map(archive_format_from_user_agent)
         .unwrap_or_else(|| "zip".to_string());
 
-    // Write metadata to Postgres
+    // Write metadata to DB
     let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum::<usize>() as i32;
     let tokens_json = serde_json::to_value(&req.tokens).unwrap();
-    if let Err(e) = state
-        .db
+    if let Err(e) = db
         .insert_backup_metadata(
             &task_id,
             requestor.as_deref().unwrap_or(""),
             &archive_format,
             nft_count,
             &tokens_json,
-            Some(state.pruner_retention_days),
+            Some(pruner_retention_days),
             req.pin_on_ipfs,
         )
         .await
@@ -148,8 +227,7 @@ pub async fn handle_backup(
         archive_format: archive_format.clone(),
         requestor: requestor.clone(),
     };
-    if let Err(e) = state
-        .backup_job_sender
+    if let Err(e) = backup_job_sender
         .send(BackupJobOrShutdown::Job(backup_job))
         .await
     {
@@ -176,10 +254,9 @@ mod validate_backup_request_impl_tests {
     use super::validate_backup_request_impl;
     use crate::backup::ChainConfig;
     use crate::server::api::{BackupRequest, Tokens};
-    use std::collections::HashMap;
 
     fn make_chain_config(chains: &[&str]) -> ChainConfig {
-        let mut map = HashMap::new();
+        let mut map = std::collections::HashMap::new();
         for &c in chains {
             map.insert(c.to_string(), "rpc://dummy".to_string());
         }
@@ -246,5 +323,184 @@ mod validate_backup_request_impl_tests {
         };
         let result = validate_backup_request_impl(&chain_config, 0, &req);
         assert!(result.is_ok());
+    }
+}
+
+#[cfg(test)]
+mod handle_backup_endpoint_tests {
+    use super::handle_backup;
+    use axum::http::StatusCode;
+    use axum::{routing::post, Extension, Router};
+    use hyper::Request;
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::{mpsc, Mutex};
+    use tower::Service;
+
+    use crate::ipfs::IpfsProviderConfig;
+    use crate::server::db::Db;
+    use crate::server::AppState;
+
+    fn make_state(ipfs_providers: Vec<IpfsProviderConfig>) -> AppState {
+        let mut chains = HashMap::new();
+        chains.insert("ethereum".to_string(), "rpc://dummy".to_string());
+        let chain_config = crate::backup::ChainConfig(chains);
+        let (tx, _rx) = mpsc::channel(1);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://user:pass@localhost/db")
+            .unwrap();
+        let db = Arc::new(Db { pool });
+        AppState {
+            chain_config: Arc::new(chain_config),
+            base_dir: Arc::new("/tmp".to_string()),
+            unsafe_skip_checksum_check: true,
+            auth_token: None,
+            pruner_enabled: false,
+            pruner_retention_days: 7,
+            download_tokens: Arc::new(Mutex::new(HashMap::new())),
+            backup_job_sender: tx,
+            db,
+            shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ipfs_providers,
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_400_for_unknown_chain() {
+        let state = make_state(Vec::new());
+        let app = Router::new()
+            .route("/backup", post(handle_backup))
+            .with_state(state)
+            .layer(Extension::<Option<String>>(None));
+
+        let req_body = json!({
+            "tokens": [ { "chain": "polygon", "tokens": ["0xabc:1"] } ]
+        });
+        let request = Request::builder()
+            .method("POST")
+            .uri("/backup")
+            .header("content-type", "application/json")
+            .header("user-agent", "Linux")
+            .body(axum::body::Body::from(req_body.to_string()))
+            .unwrap();
+
+        let mut app = app;
+        let response = app.call(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn returns_400_for_pin_without_ipfs_providers() {
+        let state = make_state(Vec::new());
+        let app = Router::new()
+            .route("/backup", post(handle_backup))
+            .with_state(state)
+            .layer(Extension::<Option<String>>(None));
+
+        let req = crate::server::api::BackupRequest {
+            tokens: vec![crate::server::api::Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: true,
+        };
+        let request = Request::builder()
+            .method("POST")
+            .uri("/backup")
+            .header("content-type", "application/json")
+            .header("user-agent", "Linux")
+            .body(axum::body::Body::from(serde_json::to_string(&req).unwrap()))
+            .unwrap();
+
+        let mut app = app;
+        let response = app.call(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+}
+
+#[cfg(test)]
+mod handle_backup_core_mockdb_tests {
+    use super::BackupDb;
+    use crate::server::api::{BackupRequest, Tokens};
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::response::IntoResponse;
+    use tokio::sync::mpsc;
+
+    #[derive(Clone, Default)]
+    struct MockDb {
+        status: Option<String>,
+        inserted: std::sync::Arc<std::sync::Mutex<bool>>,
+    }
+
+    impl BackupDb for MockDb {
+        fn get_backup_status<'a>(
+            &'a self,
+            _task_id: &'a str,
+        ) -> std::pin::Pin<
+            Box<dyn std::future::Future<Output = Result<Option<String>, sqlx::Error>> + Send + 'a>,
+        > {
+            let status = self.status.clone();
+            Box::pin(async move { Ok(status) })
+        }
+        fn insert_backup_metadata<'a>(
+            &'a self,
+            _task_id: &'a str,
+            _requestor: &'a str,
+            _archive_format: &'a str,
+            _nft_count: i32,
+            _tokens: &'a serde_json::Value,
+            _retention_days: Option<u64>,
+            _pin_on_ipfs: bool,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
+        {
+            let flag = self.inserted.clone();
+            Box::pin(async move {
+                *flag.lock().unwrap() = true;
+                Ok(())
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_201_and_enqueues_on_new_task() {
+        let db = MockDb::default();
+        let (tx, mut rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+        };
+        let headers = HeaderMap::new();
+        let resp = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+        // Ensure job enqueued
+        let msg = rx.try_recv();
+        assert!(msg.is_ok());
+    }
+
+    #[tokio::test]
+    async fn returns_200_when_in_progress() {
+        let db = MockDb {
+            status: Some("in_progress".to_string()),
+            inserted: Default::default(),
+        };
+        let (tx, _rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+        };
+        let headers = HeaderMap::new();
+        let resp = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 }
