@@ -21,6 +21,7 @@ services:
     volumes:
       - ./data:/app/data
       - ./config_privy.toml:/app/privy/config.toml:ro
+      - ./config_ipfs.toml:/app/config_ipfs.toml:ro
     user: "65532:65532"
     command: [
       "/app/nftbk-server",
@@ -28,6 +29,7 @@ services:
       "--unsafe-skip-checksum-check", "true",
       "--base-dir", "/app/data",
       "--privy-config", "/app/privy/config.toml",
+      "--ipfs-config", "/app/config_ipfs.toml",
       "--no-color", "true"
     ]
     restart: unless-stopped

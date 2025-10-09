@@ -15,9 +15,10 @@ A library, server, and CLI tool for protecting NFTs. The following networks are 
 
 ## Configuration
 
-Two configuration files are used:
+Three configuration files are used:
 - `config_chains.toml`: Contains RPC URLs for different chains
 - `config_tokens.toml`: Contains the NFT tokens to back up
+- `config_ipfs.toml`: Contains info about connecting to multiple IPFS providers (optional; for IPFS pinning support)
 
 Currently `config_chains.toml` includes a few prepopulated RPCs. Alchemy RPCs are used for EVM chains with an API key that can be configured as `ALCHEMY_API_KEY` inside an `.env` file. You can also choose to use different RPCs altogether. For `config_tokens.toml`, there is an `example_config_tokens.toml` that you can update as needed with the tokens to backup.
 
