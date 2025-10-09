@@ -370,7 +370,7 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
         let req = job.requestor.as_deref().unwrap_or("");
         let _ = state
             .db
-            .insert_pin_requests_with_tokens(req, &token_pin_mappings)
+            .insert_pin_requests_with_tokens(&job.task_id, req, &token_pin_mappings)
             .await;
     }
 

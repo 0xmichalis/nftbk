@@ -40,6 +40,17 @@ pub struct ProtectionJobWithBackup {
     pub expires_at: Option<DateTime<Utc>>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PinRequestRow {
+    pub id: i64,
+    pub task_id: String,
+    pub provider: String,
+    pub cid: String,
+    pub request_id: String,
+    pub status: String,
+    pub requestor: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct ExpiredBackup {
     pub task_id: String,
@@ -449,6 +460,7 @@ impl Db {
     /// Insert pin requests and their associated tokens in a single atomic transaction
     pub async fn insert_pin_requests_with_tokens(
         &self,
+        task_id: &str,
         requestor: &str,
         token_pin_mappings: &[crate::TokenPinMapping],
     ) -> Result<(), sqlx::Error> {
@@ -482,21 +494,22 @@ impl Db {
 
         // Insert pin requests and return generated IDs
         let mut query = String::from(
-            "INSERT INTO pin_requests (provider, cid, request_id, status, requestor) VALUES ",
+            "INSERT INTO pin_requests (task_id, provider, cid, request_id, status, requestor) VALUES ",
         );
         let mut bind_count = 0;
         for i in 0..all_pin_responses.len() {
             if i > 0 {
                 query.push_str(", ");
             }
-            // 5 bind params per row
+            // 6 bind params per row
             let p1 = bind_count + 1;
             let p2 = bind_count + 2;
             let p3 = bind_count + 3;
             let p4 = bind_count + 4;
             let p5 = bind_count + 5;
-            bind_count += 5;
-            query.push_str(&format!("(${p1}, ${p2}, ${p3}, ${p4}, ${p5})"));
+            let p6 = bind_count + 6;
+            bind_count += 6;
+            query.push_str(&format!("(${p1}, ${p2}, ${p3}, ${p4}, ${p5}, ${p6})"));
         }
         query.push_str(" RETURNING id");
 
@@ -510,6 +523,7 @@ impl Db {
                 crate::ipfs::PinResponseStatus::Failed => "failed",
             };
             q = q
+                .bind(task_id)
                 .bind(&pin_response.provider)
                 .bind(&pin_response.cid)
                 .bind(&pin_response.id)
@@ -553,6 +567,27 @@ impl Db {
         // Commit the transaction
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Get all pin requests for a specific protection job
+    pub async fn get_pin_requests_by_task_id(
+        &self,
+        task_id: &str,
+    ) -> Result<Vec<PinRequestRow>, sqlx::Error> {
+        let rows = sqlx::query_as!(
+            PinRequestRow,
+            r#"
+            SELECT id, task_id, provider, cid, request_id, status, requestor
+            FROM pin_requests
+            WHERE task_id = $1
+            ORDER BY id
+            "#,
+            task_id
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
     }
 
     /// Get all pinned tokens for a requestor
