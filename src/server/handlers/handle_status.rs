@@ -26,7 +26,7 @@ pub async fn handle_status(
     AxumPath(task_id): AxumPath<String>,
 ) -> Result<Json<StatusResponse>, AxumStatusCode> {
     // Fetch metadata from DB
-    let meta = match state.db.get_backup_metadata(&task_id).await {
+    let meta = match state.db.get_protection_job(&task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => return Err(AxumStatusCode::NOT_FOUND),
         Err(_) => return Err(AxumStatusCode::INTERNAL_SERVER_ERROR),

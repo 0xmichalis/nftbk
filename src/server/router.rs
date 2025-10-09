@@ -22,6 +22,9 @@ use crate::server::handlers::handle_backup_retry::{
 };
 use crate::server::handlers::handle_backups::BackupsQuery;
 use crate::server::handlers::handle_backups::{__path_handle_backups, handle_backups};
+use crate::server::handlers::handle_create_pins::{
+    __path_handle_create_pins, handle_create_pins, PinRequest,
+};
 use crate::server::handlers::handle_download::{DownloadQuery, DownloadTokenResponse};
 use crate::server::handlers::handle_download::{
     __path_handle_download, __path_handle_download_token, handle_download, handle_download_token,
@@ -42,11 +45,12 @@ use crate::server::AppState;
         handle_backup_retry,
         handle_backup_delete,
         handle_backups,
+        handle_create_pins,
         handle_pins,
         handle_pin,
     ),
     components(
-        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinsResponse, PinResponse)
+        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinRequest, PinsResponse, PinResponse)
     ),
     tags(
         (name = "backup", description = "NFT Backup API endpoints")
@@ -175,7 +179,7 @@ pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -
         .route("/backup/:task_id/retry", post(handle_backup_retry))
         .route("/backup/:task_id", delete(handle_backup_delete))
         .route("/backups", get(handle_backups))
-        .route("/pins", get(handle_pins))
+        .route("/pins", get(handle_pins).post(handle_create_pins))
         .route("/pin/:chain/:contract_address/:token_id", get(handle_pin))
         .with_state(state.clone());
 

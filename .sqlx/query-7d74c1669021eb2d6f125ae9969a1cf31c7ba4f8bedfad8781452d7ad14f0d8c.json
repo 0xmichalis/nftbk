@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE protection_jobs\n            SET status = 'error', fatal_error = $2, updated_at = NOW()\n            WHERE task_id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7d74c1669021eb2d6f125ae9969a1cf31c7ba4f8bedfad8781452d7ad14f0d8c"
+}

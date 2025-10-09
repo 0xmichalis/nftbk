@@ -45,7 +45,7 @@ pub async fn handle_backup_delete(
     };
 
     // Read metadata from DB and check requestor
-    let meta = match state.db.get_backup_metadata(&task_id).await {
+    let meta = match state.db.get_protection_job(&task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
             return (
@@ -79,23 +79,28 @@ pub async fn handle_backup_delete(
 
     let mut errors = Vec::new();
     let mut deleted_anything = false;
-    let (archive_path, archive_checksum_path) =
-        get_zipped_backup_paths(&state.base_dir, &task_id, &meta.archive_format);
-    for path in [&archive_path, &archive_checksum_path] {
-        match tokio::fs::remove_file(path).await {
-            Ok(_) => {
-                deleted_anything = true;
-            }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    // not found is fine
-                } else {
-                    warn!("Failed to delete file {}: {}", path.display(), e);
-                    errors.push(format!("Failed to delete file {}: {}", path.display(), e));
+
+    // Only delete archive if this is a filesystem-based job
+    if let Some(archive_format) = &meta.archive_format {
+        let (archive_path, archive_checksum_path) =
+            get_zipped_backup_paths(&state.base_dir, &task_id, archive_format);
+        for path in [&archive_path, &archive_checksum_path] {
+            match tokio::fs::remove_file(path).await {
+                Ok(_) => {
+                    deleted_anything = true;
+                }
+                Err(e) => {
+                    if e.kind() == std::io::ErrorKind::NotFound {
+                        // not found is fine
+                    } else {
+                        warn!("Failed to delete file {}: {}", path.display(), e);
+                        errors.push(format!("Failed to delete file {}: {}", path.display(), e));
+                    }
                 }
             }
         }
     }
+
     let backup_dir = format!("{}/nftbk-{}", state.base_dir, &task_id);
     match tokio::fs::remove_dir_all(&backup_dir).await {
         Ok(_) => {
@@ -112,7 +117,7 @@ pub async fn handle_backup_delete(
     }
 
     // Delete metadata from DB
-    if let Err(e) = state.db.delete_backup_metadata(&task_id).await {
+    if let Err(e) = state.db.delete_protection_job(&task_id).await {
         errors.push(format!("Failed to delete metadata from DB: {e}"));
     } else {
         deleted_anything = true;

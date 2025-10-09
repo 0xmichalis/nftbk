@@ -36,7 +36,7 @@ pub async fn handle_backup_retry(
     Extension(requestor): Extension<Option<String>>,
 ) -> impl IntoResponse {
     // Fetch metadata from DB once
-    let meta = match state.db.get_backup_metadata(&task_id).await {
+    let meta = match state.db.get_protection_job(&task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
             return (
@@ -81,13 +81,21 @@ pub async fn handle_backup_retry(
 
     // Re-run backup job
     let tokens: Vec<Tokens> = serde_json::from_value(meta.tokens.clone()).unwrap_or_default();
+    let storage_mode = meta
+        .storage_mode
+        .parse()
+        .unwrap_or(crate::server::StorageMode::Both);
+    let pin_on_ipfs = storage_mode == crate::server::StorageMode::Ipfs
+        || storage_mode == crate::server::StorageMode::Both;
+
     let backup_job = BackupJob {
         task_id: task_id.clone(),
         request: BackupRequest {
             tokens,
-            pin_on_ipfs: meta.pin_on_ipfs,
+            pin_on_ipfs,
         },
         force: true,
+        storage_mode,
         archive_format: meta.archive_format.clone(),
         requestor: requestor.clone(),
     };

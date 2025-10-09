@@ -11,7 +11,7 @@ use crate::server::api::{BackupRequest, BackupResponse};
 use crate::server::archive::archive_format_from_user_agent;
 use crate::server::db::Db;
 use crate::server::hashing::compute_task_id;
-use crate::server::{AppState, BackupJob, BackupJobOrShutdown};
+use crate::server::{AppState, BackupJob, BackupJobOrShutdown, StorageMode};
 
 fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), String> {
     validate_backup_request_impl(&state.chain_config, state.ipfs_providers.len(), req)
@@ -90,15 +90,15 @@ pub trait BackupDb {
     >;
 
     #[allow(clippy::too_many_arguments)]
-    fn insert_backup_metadata<'a>(
+    fn insert_protection_job<'a>(
         &'a self,
         task_id: &'a str,
         requestor: &'a str,
-        archive_format: &'a str,
         nft_count: i32,
         tokens: &'a serde_json::Value,
+        storage_mode: &'a str,
+        archive_format: Option<&'a str>,
         retention_days: Option<u64>,
-        pin_on_ipfs: bool,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>;
 }
 
@@ -113,27 +113,27 @@ impl BackupDb for Db {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn insert_backup_metadata<'a>(
+    fn insert_protection_job<'a>(
         &'a self,
         task_id: &'a str,
         requestor: &'a str,
-        archive_format: &'a str,
         nft_count: i32,
         tokens: &'a serde_json::Value,
+        storage_mode: &'a str,
+        archive_format: Option<&'a str>,
         retention_days: Option<u64>,
-        pin_on_ipfs: bool,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
     {
         Box::pin(async move {
-            Db::insert_backup_metadata(
+            Db::insert_protection_job(
                 self,
                 task_id,
                 requestor,
-                archive_format,
                 nft_count,
                 tokens,
+                storage_mode,
+                archive_format,
                 retention_days,
-                pin_on_ipfs,
             )
             .await
         })
@@ -191,6 +191,13 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         }
     }
 
+    // Determine storage mode based on pin_on_ipfs flag
+    let storage_mode = if req.pin_on_ipfs {
+        StorageMode::Both
+    } else {
+        StorageMode::Filesystem
+    };
+
     // Select archive format based on user-agent
     let archive_format = headers
         .get("user-agent")
@@ -202,14 +209,14 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
     let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum::<usize>() as i32;
     let tokens_json = serde_json::to_value(&req.tokens).unwrap();
     if let Err(e) = db
-        .insert_backup_metadata(
+        .insert_protection_job(
             &task_id,
             requestor.as_deref().unwrap_or(""),
-            &archive_format,
             nft_count,
             &tokens_json,
+            storage_mode.as_str(),
+            Some(&archive_format),
             Some(pruner_retention_days),
-            req.pin_on_ipfs,
         )
         .await
     {
@@ -224,7 +231,8 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         task_id: task_id.clone(),
         request: req.clone(),
         force: false,
-        archive_format: archive_format.clone(),
+        storage_mode,
+        archive_format: Some(archive_format.clone()),
         requestor: requestor.clone(),
     };
     if let Err(e) = backup_job_sender
@@ -443,15 +451,15 @@ mod handle_backup_core_mockdb_tests {
             let status = self.status.clone();
             Box::pin(async move { Ok(status) })
         }
-        fn insert_backup_metadata<'a>(
+        fn insert_protection_job<'a>(
             &'a self,
             _task_id: &'a str,
             _requestor: &'a str,
-            _archive_format: &'a str,
             _nft_count: i32,
             _tokens: &'a serde_json::Value,
+            _storage_mode: &'a str,
+            _archive_format: Option<&'a str>,
             _retention_days: Option<u64>,
-            _pin_on_ipfs: bool,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
         {
             let flag = self.inserted.clone();

@@ -102,7 +102,7 @@ pub async fn handle_download(
 
 async fn serve_zip_file_for_token(state: &AppState, task_id: &str) -> Response {
     // Read archive_format and status from the database
-    let meta = match state.db.get_backup_metadata(task_id).await {
+    let meta = match state.db.get_protection_job(task_id).await {
         Ok(Some(m)) => m,
         _ => {
             return (StatusCode::NOT_FOUND, Body::from("Task not found")).into_response();
@@ -111,7 +111,20 @@ async fn serve_zip_file_for_token(state: &AppState, task_id: &str) -> Response {
     if meta.status != "done" {
         return (StatusCode::ACCEPTED, Body::from("Task not completed yet")).into_response();
     }
-    let archive_format = &meta.archive_format;
+
+    // Check if this job has a filesystem backup
+    let archive_format = match &meta.archive_format {
+        Some(fmt) => fmt,
+        None => {
+            // IPFS-only job - no download available
+            return (
+                StatusCode::BAD_REQUEST,
+                Body::from("This protection job is IPFS-only and has no downloadable archive"),
+            )
+                .into_response();
+        }
+    };
+
     // If backup exists on disk, serve it
     if let Some(zip_path) = check_backup_on_disk(
         &state.base_dir,

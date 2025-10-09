@@ -2,6 +2,7 @@ use futures_util::FutureExt;
 use std::collections::{HashMap, HashSet};
 use std::panic::AssertUnwindSafe;
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
@@ -61,12 +62,43 @@ pub enum BackupJobOrShutdown {
     Shutdown,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StorageMode {
+    Filesystem,
+    Ipfs,
+    Both,
+}
+
+impl StorageMode {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            StorageMode::Filesystem => "filesystem",
+            StorageMode::Ipfs => "ipfs",
+            StorageMode::Both => "both",
+        }
+    }
+}
+
+impl FromStr for StorageMode {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "filesystem" => Ok(StorageMode::Filesystem),
+            "ipfs" => Ok(StorageMode::Ipfs),
+            "both" => Ok(StorageMode::Both),
+            _ => Err(format!("Unknown storage mode: {}", s)),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BackupJob {
     pub task_id: String,
     pub request: BackupRequest,
     pub force: bool,
-    pub archive_format: String,
+    pub storage_mode: StorageMode,
+    pub archive_format: Option<String>,
     pub requestor: Option<String>,
 }
 
@@ -176,18 +208,18 @@ pub async fn check_backup_on_disk(
 pub async fn recover_incomplete_jobs(
     state: &AppState,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    debug!("Recovering incomplete backup jobs from database...");
+    debug!("Recovering incomplete protection jobs from database...");
 
-    let incomplete_jobs = state.db.get_incomplete_backup_jobs().await?;
+    let incomplete_jobs = state.db.get_incomplete_protection_jobs().await?;
     let job_count = incomplete_jobs.len();
 
     if job_count == 0 {
-        debug!("No incomplete backup jobs found");
+        debug!("No incomplete protection jobs found");
         return Ok(0);
     }
 
     debug!(
-        "Found {} incomplete backup jobs, re-queueing for processing",
+        "Found {} incomplete protection jobs, re-queueing for processing",
         job_count
     );
 
@@ -212,13 +244,17 @@ pub async fn recover_incomplete_jobs(
             }
         };
 
+        let storage_mode = job_meta.storage_mode.parse().unwrap_or(StorageMode::Both);
+        let pin_on_ipfs = storage_mode == StorageMode::Ipfs || storage_mode == StorageMode::Both;
+
         let backup_job = BackupJob {
             task_id: job_meta.task_id.clone(),
             request: BackupRequest {
                 tokens,
-                pin_on_ipfs: job_meta.pin_on_ipfs,
+                pin_on_ipfs,
             },
             force: true, // Force recovery to ensure backup actually runs
+            storage_mode,
             archive_format: job_meta.archive_format,
             requestor: Some(job_meta.requestor),
         };
@@ -253,8 +289,12 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
     let task_id = job.task_id.clone();
     let tokens = job.request.tokens.clone();
     let force = job.force;
-    let archive_format = job.archive_format.clone();
-    info!("Running backup job for task {}", task_id);
+    let storage_mode = job.storage_mode.clone();
+    info!(
+        "Running protection job for task {} (storage_mode: {})",
+        task_id,
+        storage_mode.as_str()
+    );
 
     // If force is set, clean up the error log if it exists
     if force {
@@ -268,28 +308,40 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
         token_map.insert(entry.chain, entry.tokens);
     }
     let token_config = TokenConfig { chains: token_map };
-    let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
-    let out_path = std::path::PathBuf::from(&out_dir);
+
+    // Determine output path and IPFS settings based on storage mode
+    let (output_path, ipfs_providers) = match storage_mode {
+        StorageMode::Filesystem => {
+            // Filesystem only: permanent directory, no IPFS
+            let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
+            (Some(PathBuf::from(out_dir)), Vec::new())
+        }
+        StorageMode::Ipfs => {
+            // IPFS only: no downloads, just pin existing CIDs
+            (None, state.ipfs_providers.clone())
+        }
+        StorageMode::Both => {
+            // Both: permanent directory and IPFS pinning
+            let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
+            (Some(PathBuf::from(out_dir)), state.ipfs_providers.clone())
+        }
+    };
 
     // Run backup
     let backup_cfg = BackupConfig {
         chain_config: (*state.chain_config).clone(),
         token_config,
         storage_config: StorageConfig {
-            output_path: Some(out_path.clone()),
+            output_path: output_path.clone(),
             prune_redundant: false,
-            ipfs_providers: if job.request.pin_on_ipfs {
-                state.ipfs_providers.clone()
-            } else {
-                Vec::new()
-            },
+            ipfs_providers,
         },
         process_config: ProcessManagementConfig {
             exit_on_error: false,
             shutdown_flag: shutdown_flag.clone(),
         },
     };
-    let span = tracing::info_span!("backup", task_id = %task_id);
+    let span = tracing::info_span!("protection_job", task_id = %task_id);
     let backup_result = backup_from_config(backup_cfg, Some(span)).await;
 
     // Check backup result
@@ -327,81 +379,98 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
         let log_str = error_log.join("\n");
         let _ = state
             .db
-            .update_backup_metadata_error_log(&task_id, &log_str)
+            .update_protection_job_error_log(&task_id, &log_str)
             .await;
     }
 
-    // Sync all files and directories to disk before archiving
-    info!("Syncing {} to disk before archiving", out_path.display());
-    let files_written_clone = files_written.clone();
-    tokio::task::spawn_blocking(move || {
-        sync_files(&files_written_clone);
-    })
-    .await
-    .unwrap();
-    info!(
-        "Synced {} to disk before archiving ({} files)",
-        out_path.display(),
-        files_written.len()
-    );
+    // Handle archiving based on storage mode
+    match storage_mode {
+        StorageMode::Filesystem | StorageMode::Both => {
+            // We have a filesystem output path
+            let out_path = output_path.as_ref().unwrap();
 
-    // Archive the output dir
-    let (zip_pathbuf, checksum_path) =
-        get_zipped_backup_paths(&state.base_dir, &task_id, &archive_format);
-    info!("Archiving backup to {}", zip_pathbuf.display());
-    let start_time = Instant::now();
-    let out_path_clone = out_path.clone();
-    let zip_pathbuf_clone = zip_pathbuf.clone();
-    let archive_format_clone = archive_format.clone();
-    let shutdown_flag_clone = shutdown_flag.clone();
-    let zip_result = tokio::task::spawn_blocking(move || {
-        zip_backup(
-            &out_path_clone,
-            &zip_pathbuf_clone,
-            archive_format_clone,
-            shutdown_flag_clone,
-        )
-    })
-    .await
-    .unwrap();
-
-    // Check archive result
-    match zip_result {
-        Ok(checksum) => {
+            // Sync all files and directories to disk before archiving
+            info!("Syncing {} to disk before archiving", out_path.display());
+            let files_written_clone = files_written.clone();
+            tokio::task::spawn_blocking(move || {
+                sync_files(&files_written_clone);
+            })
+            .await
+            .unwrap();
             info!(
-                "Archived backup at {} in {:?}s",
-                zip_pathbuf.display(),
-                start_time.elapsed().as_secs()
+                "Synced {} to disk before archiving ({} files)",
+                out_path.display(),
+                files_written.len()
             );
-            if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
-                let error_msg = format!("Failed to write archive checksum file: {e}");
-                error!("{error_msg}");
-                let _ = state.db.set_backup_error(&task_id, &error_msg).await;
-                return;
+
+            // Archive the output dir
+            let archive_fmt = job.archive_format.as_deref().unwrap_or("zip");
+            let (zip_pathbuf, checksum_path) =
+                get_zipped_backup_paths(&state.base_dir, &task_id, archive_fmt);
+            info!("Archiving backup to {}", zip_pathbuf.display());
+            let start_time = Instant::now();
+            let out_path_clone = out_path.clone();
+            let zip_pathbuf_clone = zip_pathbuf.clone();
+            let archive_format_clone = archive_fmt.to_string();
+            let shutdown_flag_clone = shutdown_flag.clone();
+            let zip_result = tokio::task::spawn_blocking(move || {
+                zip_backup(
+                    &out_path_clone,
+                    &zip_pathbuf_clone,
+                    archive_format_clone,
+                    shutdown_flag_clone,
+                )
+            })
+            .await
+            .unwrap();
+
+            // Check archive result
+            match zip_result {
+                Ok(checksum) => {
+                    info!(
+                        "Archived backup at {} in {:?}s",
+                        zip_pathbuf.display(),
+                        start_time.elapsed().as_secs()
+                    );
+                    if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
+                        let error_msg = format!("Failed to write archive checksum file: {e}");
+                        error!("{error_msg}");
+                        let _ = state.db.set_backup_error(&task_id, &error_msg).await;
+                        return;
+                    }
+                    let _ = state
+                        .db
+                        .update_protection_job_status(&task_id, "done")
+                        .await;
+                }
+                Err(e) => {
+                    let err_str = e.to_string();
+                    if err_str.contains(ARCHIVE_INTERRUPTED_BY_SHUTDOWN) {
+                        info!(
+                            "Archiving for backup {} was gracefully interrupted by shutdown signal",
+                            task_id
+                        );
+                        let _ = std::fs::remove_file(&zip_pathbuf);
+                        return;
+                    }
+                    let error_msg = format!("Failed to archive backup: {e}");
+                    error!("{error_msg}");
+                    let _ = state.db.set_backup_error(&task_id, &error_msg).await;
+                    return;
+                }
             }
+
+            info!("Backup {} ready", task_id);
+        }
+        StorageMode::Ipfs => {
+            // IPFS-only mode: no filesystem operations needed
             let _ = state
                 .db
-                .update_backup_metadata_status(&task_id, "done")
+                .update_protection_job_status(&task_id, "done")
                 .await;
-        }
-        Err(e) => {
-            let err_str = e.to_string();
-            if err_str.contains(ARCHIVE_INTERRUPTED_BY_SHUTDOWN) {
-                info!(
-                    "Archiving for backup {} was gracefully interrupted by shutdown signal",
-                    task_id
-                );
-                let _ = std::fs::remove_file(&zip_pathbuf);
-                return;
-            }
-            let error_msg = format!("Failed to archive backup: {e}");
-            error!("{error_msg}");
-            let _ = state.db.set_backup_error(&task_id, &error_msg).await;
-            return;
+            info!("IPFS pinning for {} complete", task_id);
         }
     }
-
-    info!("Backup {} ready", task_id);
 }
 
 pub async fn run_backup_job(state: AppState, job: BackupJob) {

@@ -3,19 +3,41 @@ use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct BackupMetadataRow {
+pub struct ProtectionJobRow {
     pub task_id: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub requestor: String,
-    pub archive_format: String,
     pub nft_count: i32,
     pub tokens: serde_json::Value,
     pub status: String,
-    pub expires_at: Option<DateTime<Utc>>,
     pub error_log: Option<String>,
     pub fatal_error: Option<String>,
-    pub pin_on_ipfs: bool,
+    pub storage_mode: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct BackupRequestRow {
+    pub task_id: String,
+    pub archive_format: String,
+    pub expires_at: Option<DateTime<Utc>>,
+}
+
+/// Combined view of protection_jobs + backup_requests for backwards compatibility
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct ProtectionJobWithBackup {
+    pub task_id: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub requestor: String,
+    pub nft_count: i32,
+    pub tokens: serde_json::Value,
+    pub status: String,
+    pub error_log: Option<String>,
+    pub fatal_error: Option<String>,
+    pub storage_mode: String,
+    pub archive_format: Option<String>,
+    pub expires_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,78 +68,99 @@ impl Db {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn insert_backup_metadata(
+    pub async fn insert_protection_job(
         &self,
         task_id: &str,
         requestor: &str,
-        archive_format: &str,
         nft_count: i32,
         tokens: &serde_json::Value,
+        storage_mode: &str,
+        archive_format: Option<&str>,
         retention_days: Option<u64>,
-        pin_on_ipfs: bool,
     ) -> Result<(), sqlx::Error> {
-        let (expires_at_sql, expires_at_arg) = if let Some(days) = retention_days {
-            ("NOW() + ($6 || ' days')::interval", Some(days as i64))
-        } else {
-            ("NULL", None)
-        };
-        let query = format!(
+        let mut tx = self.pool.begin().await?;
+
+        // Insert into protection_jobs
+        sqlx::query(
             r#"
-            INSERT INTO backup_metadata (
-                task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, expires_at, pin_on_ipfs
+            INSERT INTO protection_jobs (
+                task_id, created_at, updated_at, requestor, nft_count, tokens, storage_mode
             ) VALUES (
-                $1, NOW(), NOW(), $2, $3, $4, $5, {expires_at_sql}, $7
+                $1, NOW(), NOW(), $2, $3, $4, $5
             )
             ON CONFLICT (task_id) DO UPDATE SET
                 updated_at = NOW(),
                 status = EXCLUDED.status,
-                archive_format = EXCLUDED.archive_format,
                 nft_count = EXCLUDED.nft_count,
                 tokens = EXCLUDED.tokens,
-                expires_at = {expires_at_sql},
+                storage_mode = EXCLUDED.storage_mode,
                 error_log = EXCLUDED.error_log
             "#,
-        );
-        if let Some(days) = expires_at_arg {
-            sqlx::query(&query)
+        )
+        .bind(task_id)
+        .bind(requestor)
+        .bind(nft_count)
+        .bind(tokens)
+        .bind(storage_mode)
+        .execute(&mut *tx)
+        .await?;
+
+        // Insert into backup_requests if storage mode includes filesystem
+        if storage_mode == "filesystem" || storage_mode == "both" {
+            let archive_fmt = archive_format.unwrap_or("zip");
+
+            if let Some(days) = retention_days {
+                sqlx::query(
+                    r#"
+                    INSERT INTO backup_requests (task_id, archive_format, expires_at)
+                    VALUES ($1, $2, NOW() + ($3 || ' days')::interval)
+                    ON CONFLICT (task_id) DO UPDATE SET
+                        archive_format = EXCLUDED.archive_format,
+                        expires_at = EXCLUDED.expires_at
+                    "#,
+                )
                 .bind(task_id)
-                .bind(requestor)
-                .bind(archive_format)
-                .bind(nft_count)
-                .bind(tokens)
-                .bind(days)
-                .bind(pin_on_ipfs)
-                .execute(&self.pool)
+                .bind(archive_fmt)
+                .bind(days as i64)
+                .execute(&mut *tx)
                 .await?;
-        } else {
-            sqlx::query(&query)
+            } else {
+                sqlx::query(
+                    r#"
+                    INSERT INTO backup_requests (task_id, archive_format, expires_at)
+                    VALUES ($1, $2, NULL)
+                    ON CONFLICT (task_id) DO UPDATE SET
+                        archive_format = EXCLUDED.archive_format,
+                        expires_at = EXCLUDED.expires_at
+                    "#,
+                )
                 .bind(task_id)
-                .bind(requestor)
-                .bind(archive_format)
-                .bind(nft_count)
-                .bind(tokens)
-                .bind(pin_on_ipfs)
-                .execute(&self.pool)
+                .bind(archive_fmt)
+                .execute(&mut *tx)
                 .await?;
+            }
         }
+
+        tx.commit().await?;
         Ok(())
     }
 
-    pub async fn delete_backup_metadata(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query!("DELETE FROM backup_metadata WHERE task_id = $1", task_id)
+    pub async fn delete_protection_job(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        // CASCADE will delete associated backup_requests row if it exists
+        sqlx::query!("DELETE FROM protection_jobs WHERE task_id = $1", task_id)
             .execute(&self.pool)
             .await?;
         Ok(())
     }
 
-    pub async fn update_backup_metadata_error_log(
+    pub async fn update_protection_job_error_log(
         &self,
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
-            UPDATE backup_metadata
+            UPDATE protection_jobs
             SET error_log = $2, updated_at = NOW()
             WHERE task_id = $1
             "#,
@@ -129,14 +172,14 @@ impl Db {
         Ok(())
     }
 
-    pub async fn update_backup_metadata_status(
+    pub async fn update_protection_job_status(
         &self,
         task_id: &str,
         status: &str,
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
-            UPDATE backup_metadata
+            UPDATE protection_jobs
             SET status = $2, updated_at = NOW()
             WHERE task_id = $1
             "#,
@@ -153,17 +196,34 @@ impl Db {
         task_id: &str,
         retention_days: u64,
     ) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        // Update protection job
         sqlx::query!(
             r#"
-            UPDATE backup_metadata
-            SET status = 'in_progress', updated_at = NOW(), expires_at = NOW() + ($2 || ' days')::interval, error_log = NULL, fatal_error = NULL
+            UPDATE protection_jobs
+            SET status = 'in_progress', updated_at = NOW(), error_log = NULL, fatal_error = NULL
+            WHERE task_id = $1
+            "#,
+            task_id
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        // Update backup_requests expires_at if it exists
+        sqlx::query!(
+            r#"
+            UPDATE backup_requests
+            SET expires_at = NOW() + ($2 || ' days')::interval
             WHERE task_id = $1
             "#,
             task_id,
             retention_days as i64
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -178,7 +238,7 @@ impl Db {
         }
         // Build the query with a dynamic number of parameters
         let mut query = String::from(
-            "UPDATE backup_metadata SET status = $1, updated_at = NOW() WHERE task_id IN (",
+            "UPDATE protection_jobs SET status = $1, updated_at = NOW() WHERE task_id IN (",
         );
         for (i, _) in task_ids.iter().enumerate() {
             if i > 0 {
@@ -198,7 +258,7 @@ impl Db {
     pub async fn clear_backup_errors(&self, task_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
-            UPDATE backup_metadata
+            UPDATE protection_jobs
             SET error_log = NULL, fatal_error = NULL
             WHERE task_id = $1
             "#,
@@ -216,7 +276,7 @@ impl Db {
     ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
-            UPDATE backup_metadata
+            UPDATE protection_jobs
             SET status = 'error', fatal_error = $2, updated_at = NOW()
             WHERE task_id = $1
             "#,
@@ -228,48 +288,58 @@ impl Db {
         Ok(())
     }
 
-    pub async fn get_backup_metadata(
+    pub async fn get_protection_job(
         &self,
         task_id: &str,
-    ) -> Result<Option<BackupMetadataRow>, sqlx::Error> {
+    ) -> Result<Option<ProtectionJobWithBackup>, sqlx::Error> {
         let row = sqlx::query(
             r#"
-            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, status, expires_at, error_log, fatal_error, pin_on_ipfs
-            FROM backup_metadata WHERE task_id = $1
+            SELECT 
+                pj.task_id, pj.created_at, pj.updated_at, pj.requestor, pj.nft_count, 
+                pj.tokens, pj.status, pj.error_log, pj.fatal_error, pj.storage_mode,
+                br.archive_format, br.expires_at
+            FROM protection_jobs pj
+            LEFT JOIN backup_requests br ON pj.task_id = br.task_id
+            WHERE pj.task_id = $1
             "#,
         )
         .bind(task_id)
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.map(|row| BackupMetadataRow {
+        Ok(row.map(|row| ProtectionJobWithBackup {
             task_id: row.get("task_id"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
             requestor: row.get("requestor"),
-            archive_format: row.get("archive_format"),
             nft_count: row.get("nft_count"),
             tokens: row.get("tokens"),
             status: row.get("status"),
-            expires_at: row.get("expires_at"),
             error_log: row.get("error_log"),
             fatal_error: row.get("fatal_error"),
-            pin_on_ipfs: row.get("pin_on_ipfs"),
+            storage_mode: row.get("storage_mode"),
+            archive_format: row.get("archive_format"),
+            expires_at: row.get("expires_at"),
         }))
     }
 
-    pub async fn list_requestor_backups(
+    pub async fn list_requestor_protection_jobs(
         &self,
         requestor: &str,
         include_tokens: bool,
-    ) -> Result<Vec<BackupMetadataRow>, sqlx::Error> {
-        let tokens_field = if include_tokens { "tokens," } else { "" };
+    ) -> Result<Vec<ProtectionJobWithBackup>, sqlx::Error> {
+        let tokens_field = if include_tokens { "pj.tokens," } else { "" };
 
         let query = format!(
             r#"
-            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, {tokens_field} status, expires_at, error_log, fatal_error, pin_on_ipfs
-            FROM backup_metadata WHERE requestor = $1
-            ORDER BY created_at DESC
+            SELECT 
+                pj.task_id, pj.created_at, pj.updated_at, pj.requestor, pj.nft_count, 
+                {tokens_field} pj.status, pj.error_log, pj.fatal_error, pj.storage_mode,
+                br.archive_format, br.expires_at
+            FROM protection_jobs pj
+            LEFT JOIN backup_requests br ON pj.task_id = br.task_id
+            WHERE pj.requestor = $1
+            ORDER BY pj.created_at DESC
             "#,
         );
 
@@ -288,19 +358,19 @@ impl Db {
                     serde_json::Value::Null
                 };
 
-                BackupMetadataRow {
+                ProtectionJobWithBackup {
                     task_id: row.get("task_id"),
                     created_at: row.get("created_at"),
                     updated_at: row.get("updated_at"),
                     requestor: row.get("requestor"),
-                    archive_format: row.get("archive_format"),
                     nft_count: row.get("nft_count"),
                     tokens,
                     status: row.get("status"),
-                    expires_at: row.get("expires_at"),
                     error_log: row.get("error_log"),
                     fatal_error: row.get("fatal_error"),
-                    pin_on_ipfs: row.get("pin_on_ipfs"),
+                    storage_mode: row.get("storage_mode"),
+                    archive_format: row.get("archive_format"),
+                    expires_at: row.get("expires_at"),
                 }
             })
             .collect();
@@ -314,7 +384,10 @@ impl Db {
         let recs = sqlx::query_as!(
             ExpiredBackup,
             r#"
-            SELECT task_id, archive_format FROM backup_metadata WHERE expires_at IS NOT NULL AND expires_at < NOW() AND status != 'expired'
+            SELECT pj.task_id, br.archive_format 
+            FROM protection_jobs pj
+            JOIN backup_requests br ON pj.task_id = br.task_id
+            WHERE br.expires_at IS NOT NULL AND br.expires_at < NOW() AND pj.status != 'expired'
             "#
         )
         .fetch_all(&self.pool)
@@ -324,7 +397,7 @@ impl Db {
 
     pub async fn get_backup_status(&self, task_id: &str) -> Result<Option<String>, sqlx::Error> {
         let rec = sqlx::query!(
-            r#"SELECT status FROM backup_metadata WHERE task_id = $1"#,
+            r#"SELECT status FROM protection_jobs WHERE task_id = $1"#,
             task_id
         )
         .fetch_optional(&self.pool)
@@ -332,15 +405,21 @@ impl Db {
         Ok(rec.map(|r| r.status))
     }
 
-    /// Retrieve all backup jobs that are in 'in_progress' status
+    /// Retrieve all protection jobs that are in 'in_progress' status
     /// This is used to recover incomplete jobs on server restart
-    pub async fn get_incomplete_backup_jobs(&self) -> Result<Vec<BackupMetadataRow>, sqlx::Error> {
+    pub async fn get_incomplete_protection_jobs(
+        &self,
+    ) -> Result<Vec<ProtectionJobWithBackup>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, status, expires_at, error_log, fatal_error, pin_on_ipfs
-            FROM backup_metadata 
-            WHERE status = 'in_progress'
-            ORDER BY created_at ASC
+            SELECT 
+                pj.task_id, pj.created_at, pj.updated_at, pj.requestor, pj.nft_count, 
+                pj.tokens, pj.status, pj.error_log, pj.fatal_error, pj.storage_mode,
+                br.archive_format, br.expires_at
+            FROM protection_jobs pj
+            LEFT JOIN backup_requests br ON pj.task_id = br.task_id
+            WHERE pj.status = 'in_progress'
+            ORDER BY pj.created_at ASC
             "#,
         )
         .fetch_all(&self.pool)
@@ -348,19 +427,19 @@ impl Db {
 
         let recs = rows
             .into_iter()
-            .map(|row| BackupMetadataRow {
+            .map(|row| ProtectionJobWithBackup {
                 task_id: row.get("task_id"),
                 created_at: row.get("created_at"),
                 updated_at: row.get("updated_at"),
                 requestor: row.get("requestor"),
-                archive_format: row.get("archive_format"),
                 nft_count: row.get("nft_count"),
                 tokens: row.get("tokens"),
                 status: row.get("status"),
-                expires_at: row.get("expires_at"),
                 error_log: row.get("error_log"),
                 fatal_error: row.get("fatal_error"),
-                pin_on_ipfs: row.get("pin_on_ipfs"),
+                storage_mode: row.get("storage_mode"),
+                archive_format: row.get("archive_format"),
+                expires_at: row.get("expires_at"),
             })
             .collect();
 

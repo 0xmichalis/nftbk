@@ -45,7 +45,7 @@ pub async fn handle_backups(
     let mut results = Vec::new();
     match state
         .db
-        .list_requestor_backups(&user_did, query.include_tokens)
+        .list_requestor_protection_jobs(&user_did, query.include_tokens)
         .await
     {
         Ok(b) => {
