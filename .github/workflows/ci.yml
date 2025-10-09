@@ -58,7 +58,7 @@ jobs:
 
     - name: Install cargo-tarpaulin
       run: |
-        if ! command -v cargo tarpaulin > /dev/null; then
+        if ! cargo tarpaulin --version > /dev/null 2>&1; then
           cargo install cargo-tarpaulin
         fi
 
