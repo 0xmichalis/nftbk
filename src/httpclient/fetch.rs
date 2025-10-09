@@ -111,6 +111,19 @@ mod try_fetch_response_tests {
         Mock, MockServer, ResponseTemplate,
     };
 
+    use crate::url::{IpfsGatewayConfig, IpfsGatewayType};
+
+    fn leak_str(s: String) -> &'static str {
+        Box::leak(s.into_boxed_str())
+    }
+
+    fn gw(base: &str) -> IpfsGatewayConfig {
+        IpfsGatewayConfig {
+            url: leak_str(base.to_string()),
+            gateway_type: IpfsGatewayType::Path,
+        }
+    }
+
     #[tokio::test]
     async fn test_http_200_success() {
         let mock_server = MockServer::start().await;
@@ -122,7 +135,9 @@ mod try_fetch_response_tests {
             .mount(&mock_server)
             .await;
 
-        let (res, _status) = super::try_fetch_response(&url, crate::url::IPFS_GATEWAYS).await;
+        let (res, status) = super::try_fetch_response(&url, &[]).await;
+        assert!(status.is_some());
+        assert_eq!(status.unwrap(), reqwest::StatusCode::OK);
         assert!(res.is_ok());
         let body = res.unwrap().bytes().await.unwrap();
         assert_eq!(body.as_ref(), b"Hello, World!");
@@ -140,7 +155,9 @@ mod try_fetch_response_tests {
             .mount(&mock_server)
             .await;
 
-        let (res, _status) = super::try_fetch_response(&url, crate::url::IPFS_GATEWAYS).await;
+        let (res, status) = super::try_fetch_response(&url, &[]).await;
+        assert!(status.is_some());
+        assert_eq!(status.unwrap(), reqwest::StatusCode::NOT_FOUND);
         assert!(res.is_err());
         let err = res.err().unwrap().to_string();
         assert!(err.contains("HTTP error: status 404"));
@@ -158,10 +175,41 @@ mod try_fetch_response_tests {
             .mount(&mock_server)
             .await;
 
-        let (res, _status) = super::try_fetch_response(&url, crate::url::IPFS_GATEWAYS).await;
+        let (res, status) = super::try_fetch_response(&url, &[]).await;
+        assert!(status.is_some());
+        assert_eq!(status.unwrap(), reqwest::StatusCode::INTERNAL_SERVER_ERROR);
         assert!(res.is_err());
         let err = res.err().unwrap().to_string();
         assert!(err.contains("HTTP error: status 500"));
+    }
+
+    #[tokio::test]
+    async fn test_initial_error_then_alternative_gateway_succeeds() {
+        // Arrange: original gateway is a dead socket, alternative returns 200
+        let server_b = MockServer::start().await;
+        let dead_gateway_base = "http://127.0.0.1:9"; // simulate connect error
+
+        let content_path = "QmHashRetry/ok";
+        let original_url = format!("{}/ipfs/{}", dead_gateway_base, content_path);
+
+        // B returns 200 for the same IPFS path
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", content_path)))
+            .respond_with(ResponseTemplate::new(200).set_body_string("ALT OK"))
+            .mount(&server_b)
+            .await;
+
+        // Gateways: first the dead one (original), then the working mock
+        let gateways = vec![gw(dead_gateway_base), gw(&server_b.uri())];
+
+        // Act
+        let (res, status) = super::try_fetch_response(&original_url, &gateways).await;
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(status, Some(reqwest::StatusCode::OK));
+        let body = res.unwrap().bytes().await.unwrap();
+        assert_eq!(body.as_ref(), b"ALT OK");
     }
 }
 
