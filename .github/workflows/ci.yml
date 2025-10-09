@@ -58,7 +58,7 @@ jobs:
 
     - name: Install cargo-tarpaulin
       run: |
-        if ! command -v cargo-tarpaulin > /dev/null; then
+        if ! command -v cargo tarpaulin > /dev/null; then
           cargo install cargo-tarpaulin
         fi
 
@@ -69,6 +69,7 @@ jobs:
           --all-features \
           --ignore-tests \
           --engine llvm \
+          --skip-clean \
           --timeout 120 \
           --out Lcov \
           --output-dir . \
