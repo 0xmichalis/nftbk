@@ -56,15 +56,23 @@ jobs:
         fi
         cargo sqlx prepare --check
 
-    - name: Install cargo-llvm-cov
+    - name: Install cargo-tarpaulin
       run: |
-        if ! command -v cargo-llvm-cov > /dev/null; then
-          cargo install cargo-llvm-cov
+        if ! command -v cargo-tarpaulin > /dev/null; then
+          cargo install cargo-tarpaulin
         fi
 
     - name: Run tests with coverage
       run: |
-        cargo llvm-cov --verbose --lcov --output-path lcov.info
+        cargo tarpaulin \
+          --workspace \
+          --all-features \
+          --ignore-tests \
+          --engine llvm \
+          --timeout 120 \
+          --out Lcov \
+          --output-dir . \
+          --output-files lcov.info
 
     - name: Upload coverage to Coveralls
       uses: coverallsapp/github-action@v2

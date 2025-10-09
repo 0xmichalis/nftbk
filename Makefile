@@ -27,10 +27,32 @@ sqlxprepare:
 
 .PHONY: cover
 cover:
-	@if ! cargo-llvm-cov --version >/dev/null 2>&1; then \
-		cargo install cargo-llvm-cov; \
+	@if ! cargo-tarpaulin --version >/dev/null 2>&1; then \
+		cargo install cargo-tarpaulin; \
 	fi
-	cargo llvm-cov --verbose --html
+	@SQLX_OFFLINE=true cargo tarpaulin \
+		--workspace \
+		--all-features \
+		--ignore-tests \
+		--engine llvm \
+		--timeout 120 \
+		--out Html \
+		--output-dir target/coverage
+	@echo "HTML coverage report written under target/coverage (open target/coverage/tarpaulin-report.html)"
+
+.PHONY: cover-lcov
+cover-lcov:
+	@if ! cargo-tarpaulin --version >/dev/null 2>&1; then \
+		cargo install cargo-tarpaulin; \
+	fi
+	@SQLX_OFFLINE=true cargo tarpaulin \
+		--workspace \
+		--all-features \
+		--ignore-tests \
+		--engine llvm \
+		--timeout 120 \
+		--out Lcov \
+		--output-dir .
 
 .PHONY: test
 test:
