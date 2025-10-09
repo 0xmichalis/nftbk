@@ -25,6 +25,10 @@ fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), 
         let msg = format!("Unknown chains requested: {}", unknown_chains.join(", "));
         return Err(msg);
     }
+    // Validate IPFS pinning configuration
+    if req.pin_on_ipfs && state.ipfs_providers.is_empty() {
+        return Err("pin_on_ipfs requested but no IPFS provider configured".to_string());
+    }
     Ok(())
 }
 
@@ -118,6 +122,7 @@ pub async fn handle_backup(
             nft_count,
             &tokens_json,
             Some(state.pruner_retention_days),
+            req.pin_on_ipfs,
         )
         .await
     {
@@ -130,7 +135,7 @@ pub async fn handle_backup(
 
     let backup_job = BackupJob {
         task_id: task_id.clone(),
-        tokens: req.tokens.clone(),
+        request: req.clone(),
         force: false,
         archive_format: archive_format.clone(),
         requestor: requestor.clone(),

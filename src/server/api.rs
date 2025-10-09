@@ -14,6 +14,9 @@ pub struct Tokens {
 pub struct BackupRequest {
     /// List of tokens to backup, organized by blockchain
     pub tokens: Vec<Tokens>,
+    /// When true, also pin downloaded assets to configured IPFS provider(s)
+    #[serde(default)]
+    pub pin_on_ipfs: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]

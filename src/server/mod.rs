@@ -12,7 +12,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::backup::ChainConfig;
 use crate::ipfs::IpfsProviderConfig;
-use crate::server::api::Tokens;
+use crate::server::api::{BackupRequest, Tokens};
 use crate::server::archive::{
     get_zipped_backup_paths, zip_backup, ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
 };
@@ -64,7 +64,7 @@ pub enum BackupJobOrShutdown {
 #[derive(Debug, Clone)]
 pub struct BackupJob {
     pub task_id: String,
-    pub tokens: Vec<Tokens>,
+    pub request: BackupRequest,
     pub force: bool,
     pub archive_format: String,
     pub requestor: Option<String>,
@@ -196,7 +196,7 @@ pub async fn recover_incomplete_jobs(
 
     for job_meta in incomplete_jobs {
         // Parse the tokens JSON back to Vec<Tokens>
-        let tokens: Vec<Tokens> = match serde_json::from_value(job_meta.tokens) {
+        let tokens: Vec<Tokens> = match serde_json::from_value(job_meta.tokens.clone()) {
             Ok(tokens) => tokens,
             Err(e) => {
                 warn!(
@@ -217,7 +217,10 @@ pub async fn recover_incomplete_jobs(
 
         let backup_job = BackupJob {
             task_id: job_meta.task_id.clone(),
-            tokens,
+            request: BackupRequest {
+                tokens,
+                pin_on_ipfs: job_meta.pin_on_ipfs,
+            },
             force: true, // Force recovery to ensure backup actually runs
             archive_format: job_meta.archive_format,
             requestor: Some(job_meta.requestor),
@@ -251,7 +254,7 @@ pub async fn recover_incomplete_jobs(
 
 async fn run_backup_job_inner(state: AppState, job: BackupJob) {
     let task_id = job.task_id.clone();
-    let tokens = job.tokens.clone();
+    let tokens = job.request.tokens.clone();
     let force = job.force;
     let archive_format = job.archive_format.clone();
     info!("Running backup job for task {}", task_id);
@@ -278,7 +281,11 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
         storage_config: StorageConfig {
             output_path: Some(out_path.clone()),
             prune_redundant: false,
-            ipfs_providers: state.ipfs_providers.clone(),
+            ipfs_providers: if job.request.pin_on_ipfs {
+                state.ipfs_providers.clone()
+            } else {
+                Vec::new()
+            },
         },
         process_config: ProcessManagementConfig {
             exit_on_error: false,

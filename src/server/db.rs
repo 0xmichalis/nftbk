@@ -15,6 +15,7 @@ pub struct BackupMetadataRow {
     pub expires_at: Option<DateTime<Utc>>,
     pub error_log: Option<String>,
     pub fatal_error: Option<String>,
+    pub pin_on_ipfs: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,7 @@ impl Db {
         Db { pool }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_backup_metadata(
         &self,
         task_id: &str,
@@ -52,6 +54,7 @@ impl Db {
         nft_count: i32,
         tokens: &serde_json::Value,
         retention_days: Option<u64>,
+        pin_on_ipfs: bool,
     ) -> Result<(), sqlx::Error> {
         let (expires_at_sql, expires_at_arg) = if let Some(days) = retention_days {
             ("NOW() + ($6 || ' days')::interval", Some(days as i64))
@@ -61,9 +64,9 @@ impl Db {
         let query = format!(
             r#"
             INSERT INTO backup_metadata (
-                task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, expires_at
+                task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, expires_at, pin_on_ipfs
             ) VALUES (
-                $1, NOW(), NOW(), $2, $3, $4, $5, {expires_at_sql}
+                $1, NOW(), NOW(), $2, $3, $4, $5, {expires_at_sql}, $7
             )
             ON CONFLICT (task_id) DO UPDATE SET
                 updated_at = NOW(),
@@ -83,6 +86,7 @@ impl Db {
                 .bind(nft_count)
                 .bind(tokens)
                 .bind(days)
+                .bind(pin_on_ipfs)
                 .execute(&self.pool)
                 .await?;
         } else {
@@ -92,6 +96,7 @@ impl Db {
                 .bind(archive_format)
                 .bind(nft_count)
                 .bind(tokens)
+                .bind(pin_on_ipfs)
                 .execute(&self.pool)
                 .await?;
         }
@@ -227,17 +232,30 @@ impl Db {
         &self,
         task_id: &str,
     ) -> Result<Option<BackupMetadataRow>, sqlx::Error> {
-        let rec = sqlx::query_as!(
-            BackupMetadataRow,
+        let row = sqlx::query(
             r#"
-            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, status, expires_at, error_log, fatal_error
+            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, status, expires_at, error_log, fatal_error, pin_on_ipfs
             FROM backup_metadata WHERE task_id = $1
             "#,
-            task_id
         )
+        .bind(task_id)
         .fetch_optional(&self.pool)
         .await?;
-        Ok(rec)
+
+        Ok(row.map(|row| BackupMetadataRow {
+            task_id: row.get("task_id"),
+            created_at: row.get("created_at"),
+            updated_at: row.get("updated_at"),
+            requestor: row.get("requestor"),
+            archive_format: row.get("archive_format"),
+            nft_count: row.get("nft_count"),
+            tokens: row.get("tokens"),
+            status: row.get("status"),
+            expires_at: row.get("expires_at"),
+            error_log: row.get("error_log"),
+            fatal_error: row.get("fatal_error"),
+            pin_on_ipfs: row.get("pin_on_ipfs"),
+        }))
     }
 
     pub async fn list_requestor_backups(
@@ -249,7 +267,7 @@ impl Db {
 
         let query = format!(
             r#"
-            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, {tokens_field} status, expires_at, error_log, fatal_error
+            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, {tokens_field} status, expires_at, error_log, fatal_error, pin_on_ipfs
             FROM backup_metadata WHERE requestor = $1
             ORDER BY created_at DESC
             "#,
@@ -282,6 +300,7 @@ impl Db {
                     expires_at: row.get("expires_at"),
                     error_log: row.get("error_log"),
                     fatal_error: row.get("fatal_error"),
+                    pin_on_ipfs: row.get("pin_on_ipfs"),
                 }
             })
             .collect();
@@ -316,13 +335,13 @@ impl Db {
     /// Retrieve all backup jobs that are in 'in_progress' status
     /// This is used to recover incomplete jobs on server restart
     pub async fn get_incomplete_backup_jobs(&self) -> Result<Vec<BackupMetadataRow>, sqlx::Error> {
-        let rows = sqlx::query!(
+        let rows = sqlx::query(
             r#"
-            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, status, expires_at, error_log, fatal_error
+            SELECT task_id, created_at, updated_at, requestor, archive_format, nft_count, tokens, status, expires_at, error_log, fatal_error, pin_on_ipfs
             FROM backup_metadata 
             WHERE status = 'in_progress'
             ORDER BY created_at ASC
-            "#
+            "#,
         )
         .fetch_all(&self.pool)
         .await?;
@@ -330,17 +349,18 @@ impl Db {
         let recs = rows
             .into_iter()
             .map(|row| BackupMetadataRow {
-                task_id: row.task_id,
-                created_at: row.created_at,
-                updated_at: row.updated_at,
-                requestor: row.requestor,
-                archive_format: row.archive_format,
-                nft_count: row.nft_count,
-                tokens: row.tokens,
-                status: row.status,
-                expires_at: row.expires_at,
-                error_log: row.error_log,
-                fatal_error: row.fatal_error,
+                task_id: row.get("task_id"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+                requestor: row.get("requestor"),
+                archive_format: row.get("archive_format"),
+                nft_count: row.get("nft_count"),
+                tokens: row.get("tokens"),
+                status: row.get("status"),
+                expires_at: row.get("expires_at"),
+                error_log: row.get("error_log"),
+                fatal_error: row.get("fatal_error"),
+                pin_on_ipfs: row.get("pin_on_ipfs"),
             })
             .collect();
 

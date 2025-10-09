@@ -81,6 +81,10 @@ struct Args {
     /// Path to a TOML file with IPFS provider configuration
     #[arg(long)]
     ipfs_config: Option<String>,
+
+    /// Also request server to pin downloaded assets on IPFS
+    #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+    pin_on_ipfs: bool,
 }
 
 enum BackupStart {
@@ -98,6 +102,7 @@ async fn backup_from_server(
     output_path: Option<PathBuf>,
     force: bool,
     user_agent: String,
+    pin_on_ipfs: bool,
 ) -> Result<()> {
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
     let client = Client::new();
@@ -109,6 +114,7 @@ async fn backup_from_server(
         &client,
         auth_token.as_deref(),
         &user_agent,
+        pin_on_ipfs,
     )
     .await?;
 
@@ -167,8 +173,12 @@ async fn request_backup(
     client: &Client,
     auth_token: Option<&str>,
     user_agent: &str,
+    pin_on_ipfs: bool,
 ) -> Result<BackupStart> {
-    let mut backup_req = BackupRequest { tokens: Vec::new() };
+    let mut backup_req = BackupRequest {
+        tokens: Vec::new(),
+        pin_on_ipfs,
+    };
     for (chain, tokens) in &token_config.chains {
         backup_req.tokens.push(Tokens {
             chain: chain.clone(),
@@ -472,6 +482,7 @@ async fn main() -> Result<()> {
             args.output_path,
             args.force,
             args.user_agent,
+            args.pin_on_ipfs,
         )
         .await;
     }

@@ -6,6 +6,7 @@ use axum::{
     Extension,
 };
 
+use crate::server::api::BackupRequest;
 use crate::server::api::BackupResponse;
 use crate::server::AppState;
 use crate::server::BackupJob;
@@ -82,7 +83,10 @@ pub async fn handle_backup_retry(
     let tokens: Vec<Tokens> = serde_json::from_value(meta.tokens.clone()).unwrap_or_default();
     let backup_job = BackupJob {
         task_id: task_id.clone(),
-        tokens,
+        request: BackupRequest {
+            tokens,
+            pin_on_ipfs: meta.pin_on_ipfs,
+        },
         force: true,
         archive_format: meta.archive_format.clone(),
         requestor: requestor.clone(),
