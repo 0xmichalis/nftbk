@@ -82,7 +82,7 @@ run-cli-test:
 .PHONY: run-cli-server-test
 run-cli-server-test:
 	@if [ -f config_ipfs.toml ]; then PIN_ARG="--pin-on-ipfs true"; else PIN_ARG=""; fi; \
-		SQLX_OFFLINE=true cargo run --bin nftbk-cli -- --tokens-config-path config_tokens_test.toml --output-path nft_backup_test --server-mode true $$PIN_ARG $(filter-out $@,$(MAKECMDGOALS))
+		SQLX_OFFLINE=true cargo run --bin nftbk-cli -- --tokens-config-path config_tokens_test.toml --output-path nft_backup_test --server-mode true --force true $$PIN_ARG $(filter-out $@,$(MAKECMDGOALS))
 
 .PHONY: run
 run: start-db migrate-db run-server

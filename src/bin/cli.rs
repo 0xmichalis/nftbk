@@ -82,13 +82,14 @@ struct Args {
     #[arg(long)]
     ipfs_config: Option<String>,
 
-    /// Also request server to pin downloaded assets on IPFS
+    /// Request server to pin downloaded assets on IPFS
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     pin_on_ipfs: bool,
 }
 
 enum BackupStart {
     Created(BackupResponse),
+    Exists(BackupResponse),
     Conflict {
         task_id: String,
         retry_url: String,
@@ -124,6 +125,45 @@ async fn backup_from_server(
             println!("Task ID: {task_id}");
             task_id
         }
+        BackupStart::Exists(resp) => {
+            let task_id = resp.task_id.clone();
+            println!("Task ID (exists): {task_id}");
+            if force {
+                // Delete and re-request
+                let _ =
+                    delete_backup(&client, &server_address, &task_id, auth_token.as_deref()).await;
+                let second_try = request_backup(
+                    &token_config,
+                    &server_address,
+                    &client,
+                    auth_token.as_deref(),
+                    &user_agent,
+                    pin_on_ipfs,
+                )
+                .await?;
+                match second_try {
+                    BackupStart::Created(resp2) | BackupStart::Exists(resp2) => {
+                        let task_id2 = resp2.task_id.clone();
+                        println!("Task ID (after delete): {task_id2}");
+                        task_id2
+                    }
+                    BackupStart::Conflict {
+                        message,
+                        retry_url,
+                        task_id: _,
+                    } => {
+                        anyhow::bail!(
+                            "{}\nCould not create new task after delete. Try POST to {}{}",
+                            message,
+                            server_address.trim_end_matches('/'),
+                            retry_url
+                        );
+                    }
+                }
+            } else {
+                task_id
+            }
+        }
         BackupStart::Conflict {
             task_id,
             retry_url,
@@ -132,17 +172,37 @@ async fn backup_from_server(
             println!("Task ID: {task_id}");
             if force {
                 println!("Server response: {message}");
-                let server = server_address.trim_end_matches('/');
-                println!("Retrying via {server}{retry_url} ...");
-                retry_backup(
-                    &client,
+                // Try to delete the existing task by task_id, then request again
+                let _ =
+                    delete_backup(&client, &server_address, &task_id, auth_token.as_deref()).await;
+                let second_try = request_backup(
+                    &token_config,
                     &server_address,
-                    &retry_url,
-                    &task_id,
+                    &client,
                     auth_token.as_deref(),
+                    &user_agent,
+                    pin_on_ipfs,
                 )
                 .await?;
-                task_id
+                match second_try {
+                    BackupStart::Created(resp2) | BackupStart::Exists(resp2) => {
+                        let task_id2 = resp2.task_id.clone();
+                        println!("Task ID (after delete): {task_id2}");
+                        task_id2
+                    }
+                    BackupStart::Conflict {
+                        message,
+                        retry_url,
+                        task_id: _,
+                    } => {
+                        anyhow::bail!(
+                            "{}\nCould not create new task after delete. Try POST to {}{}",
+                            message,
+                            server_address.trim_end_matches('/'),
+                            retry_url
+                        );
+                    }
+                }
             } else {
                 anyhow::bail!(
                     "{}\nRun the CLI with --force true, or POST to {}{}",
@@ -165,6 +225,40 @@ async fn backup_from_server(
         &archive_format_from_user_agent(&user_agent),
     )
     .await;
+}
+async fn delete_backup(
+    client: &Client,
+    server_address: &str,
+    task_id: &str,
+    auth_token: Option<&str>,
+) -> Result<()> {
+    let server = server_address.trim_end_matches('/');
+    let url = format!("{server}/backup/{task_id}");
+    let mut req = client.delete(url);
+    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
+        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
+    }
+    let resp = req
+        .send()
+        .await
+        .context("Failed to send DELETE to server")?;
+    match resp.status().as_u16() {
+        204 => {
+            println!("Deleted existing backup {task_id}");
+            Ok(())
+        }
+        404 => Ok(()), // nothing to delete is fine
+        409 => {
+            // In progress; proceed with new request anyway
+            println!("Existing backup {task_id} is in progress; proceeding to create new request");
+            Ok(())
+        }
+        code => {
+            let text = resp.text().await.unwrap_or_default();
+            println!("Warning: failed to delete existing backup ({code}): {text}");
+            Ok(())
+        }
+    }
 }
 
 async fn request_backup(
@@ -200,7 +294,11 @@ async fn request_backup(
     let status = resp.status();
     if status.is_success() {
         let backup_resp: BackupResponse = resp.json().await.context("Invalid server response")?;
-        return Ok(BackupStart::Created(backup_resp));
+        if status.as_u16() == 201 {
+            return Ok(BackupStart::Created(backup_resp));
+        } else {
+            return Ok(BackupStart::Exists(backup_resp));
+        }
     }
     if status.as_u16() == 409 {
         let body: serde_json::Value = resp
@@ -230,35 +328,6 @@ async fn request_backup(
     }
     let text = resp.text().await.unwrap_or_default();
     anyhow::bail!("Server error: {}", text);
-}
-
-async fn retry_backup(
-    client: &Client,
-    server_address: &str,
-    retry_url: &str,
-    task_id: &str,
-    auth_token: Option<&str>,
-) -> Result<BackupResponse> {
-    let server = server_address.trim_end_matches('/');
-    let full_url = format!("{server}{retry_url}");
-    println!("Retrying backup task {task_id} at {full_url} ...");
-    let mut req = client.post(full_url);
-    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
-        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
-    }
-    let resp = req
-        .send()
-        .await
-        .context("Failed to send retry request to server")?;
-    if !resp.status().is_success() {
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Server error during retry: {}", text);
-    }
-    let backup_resp: BackupResponse = resp
-        .json()
-        .await
-        .context("Invalid server response during retry")?;
-    Ok(backup_resp)
 }
 
 async fn wait_for_done_backup(
