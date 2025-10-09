@@ -89,7 +89,7 @@ impl AppState {
         db_url: &str,
         max_connections: u32,
         shutdown_flag: Arc<AtomicBool>,
-        ipfs_provider_config: Vec<IpfsProviderConfig>,
+        ipfs_providers: Vec<IpfsProviderConfig>,
     ) -> Self {
         let config_content = tokio::fs::read_to_string(chain_config_path)
             .await
@@ -101,9 +101,6 @@ impl AppState {
             .resolve_env_vars()
             .expect("Failed to resolve environment variables in chain config");
         let db = Arc::new(Db::new(db_url, max_connections).await);
-
-        // Use IPFS providers from config
-        let ipfs_providers = ipfs_provider_config;
 
         AppState {
             chain_config: Arc::new(chain_config),
