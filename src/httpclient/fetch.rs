@@ -164,3 +164,174 @@ mod try_fetch_response_tests {
         assert!(err.contains("HTTP error: status 500"));
     }
 }
+
+#[cfg(test)]
+mod retry_with_gateways_tests {
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    use crate::url::{IpfsGatewayConfig, IpfsGatewayType};
+
+    // Helper to leak a String into a 'static str for IpfsGatewayConfig
+    fn leak_str(s: String) -> &'static str {
+        Box::leak(s.into_boxed_str())
+    }
+
+    // Build a path-based gateway config from a base URL
+    fn gw(base: &str) -> IpfsGatewayConfig {
+        IpfsGatewayConfig {
+            url: leak_str(base.to_string()),
+            gateway_type: IpfsGatewayType::Path,
+        }
+    }
+
+    #[tokio::test]
+    async fn first_alternative_succeeds() {
+        // Arrange gateways A(original), B(success), C(not used)
+        let server_a = MockServer::start().await;
+        let server_b = MockServer::start().await;
+        let server_c = MockServer::start().await;
+
+        let content_path = "QmHash123/ok";
+        let original_url = format!("{}/ipfs/{}", server_a.uri(), content_path);
+
+        // B returns 200
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", content_path)))
+            .respond_with(ResponseTemplate::new(200).set_body_string("B OK"))
+            .mount(&server_b)
+            .await;
+
+        let gateways = vec![
+            gw(&server_a.uri()),
+            gw(&server_b.uri()),
+            gw(&server_c.uri()),
+        ];
+
+        // Act
+        let res =
+            super::retry_with_gateways(&original_url, anyhow::anyhow!("orig err"), &gateways).await;
+
+        // Assert
+        assert!(res.is_ok());
+        let body = res.unwrap().bytes().await.unwrap();
+        assert_eq!(body.as_ref(), b"B OK");
+    }
+
+    #[tokio::test]
+    async fn first_alternative_http_error_second_succeeds() {
+        // Arrange gateways A(original), B(500), C(200)
+        let server_a = MockServer::start().await;
+        let server_b = MockServer::start().await;
+        let server_c = MockServer::start().await;
+
+        let content_path = "QmHash123/ok2";
+        let original_url = format!("{}/ipfs/{}", server_a.uri(), content_path);
+
+        // B returns 500
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", content_path)))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server_b)
+            .await;
+
+        // C returns 200
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", content_path)))
+            .respond_with(ResponseTemplate::new(200).set_body_string("C OK"))
+            .mount(&server_c)
+            .await;
+
+        let gateways = vec![
+            gw(&server_a.uri()),
+            gw(&server_b.uri()),
+            gw(&server_c.uri()),
+        ];
+
+        // Act
+        let res =
+            super::retry_with_gateways(&original_url, anyhow::anyhow!("orig err"), &gateways).await;
+
+        // Assert
+        assert!(res.is_ok());
+        let body = res.unwrap().bytes().await.unwrap();
+        assert_eq!(body.as_ref(), b"C OK");
+    }
+
+    #[tokio::test]
+    async fn first_alternative_non_http_error_second_succeeds() {
+        // Arrange gateways A(original), B(non-http error), C(200)
+        let server_a = MockServer::start().await;
+        let server_c = MockServer::start().await;
+
+        // Use an unroutable/closed port for B to simulate network error
+        let dead_gateway_base = "http://127.0.0.1:9"; // port 9 (discard) likely closed
+
+        let content_path = "QmHash123/ok3";
+        let original_url = format!("{}/ipfs/{}", server_a.uri(), content_path);
+
+        // C returns 200
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", content_path)))
+            .respond_with(ResponseTemplate::new(200).set_body_string("C OK"))
+            .mount(&server_c)
+            .await;
+
+        let gateways = vec![
+            gw(&server_a.uri()),
+            gw(dead_gateway_base),
+            gw(&server_c.uri()),
+        ];
+
+        // Act
+        let res =
+            super::retry_with_gateways(&original_url, anyhow::anyhow!("orig err"), &gateways).await;
+
+        // Assert
+        assert!(res.is_ok());
+        let body = res.unwrap().bytes().await.unwrap();
+        assert_eq!(body.as_ref(), b"C OK");
+    }
+
+    #[tokio::test]
+    async fn both_alternatives_fail() {
+        // Arrange gateways A(original), B(500), C(502)
+        let server_a = MockServer::start().await;
+        let server_b = MockServer::start().await;
+        let server_c = MockServer::start().await;
+
+        let content_path = "QmHash123/fail";
+        let original_url = format!("{}/ipfs/{}", server_a.uri(), content_path);
+
+        // B returns 500
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", content_path)))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server_b)
+            .await;
+
+        // C returns 502
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", content_path)))
+            .respond_with(ResponseTemplate::new(502))
+            .mount(&server_c)
+            .await;
+
+        let gateways = vec![
+            gw(&server_a.uri()),
+            gw(&server_b.uri()),
+            gw(&server_c.uri()),
+        ];
+
+        // Act
+        let res =
+            super::retry_with_gateways(&original_url, anyhow::anyhow!("orig err"), &gateways).await;
+
+        // Assert: error should reflect the last error (502)
+        assert!(res.is_err());
+        let err = res.err().unwrap().to_string();
+        assert!(err.contains("502"));
+    }
+}
