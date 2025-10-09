@@ -13,6 +13,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::envvar::is_defined;
 use crate::server::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
+use crate::server::db::{PinInfo, ProtectionJobWithBackup, TokenWithPins};
 use crate::server::handlers::handle_backup::{__path_handle_backup, handle_backup};
 use crate::server::handlers::handle_backup_delete::{
     __path_handle_backup_delete, handle_backup_delete,
@@ -50,15 +51,26 @@ use crate::server::AppState;
         handle_pin,
     ),
     components(
-        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinRequest, PinsResponse, PinResponse)
+        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinRequest, PinsResponse, PinResponse, ProtectionJobWithBackup, TokenWithPins, PinInfo)
     ),
     tags(
-        (name = "backup", description = "NFT Backup API endpoints")
+        (name = "backup", description = "Filesystem backup operations"),
+        (name = "pins", description = "IPFS pinning operations")
     ),
     info(
-        title = "NFT Backup API",
+        title = "NFT Protection API",
         version = env!("CARGO_PKG_VERSION"),
-        description = "API for backing up NFT metadata and content from EVM and Tezos NFT contracts",
+        description = "API for protecting NFT metadata and content from EVM and Tezos NFT contracts.
+
+## Key APIs:
+
+### Filesystem Backup Management (`/backups`)
+- **Purpose**: Enable users to request and download NFT backups to their local filesystem
+- **Use Case**: Request a backup, track backup progress, view backup history, monitor failures
+
+### Pin Management (`/pins`) 
+- **Purpose**: Enable users to request and manage IPFS pinning of NFTs
+- **Use Case**: Request a pin, check pin status, verify content is pinned",
         contact(
             name = "nftbk",
             url = "https://github.com/0xmichalis/nftbk"

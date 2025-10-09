@@ -16,7 +16,24 @@ pub type PinsResponse = Vec<TokenWithPins>;
     get,
     path = "/pins",
     responses(
-        (status = 200, description = "List of all pinned tokens for the user", body = PinsResponse),
+        (status = 200, description = "List of all pinned tokens for the user. Returns token metadata with IPFS pin information including CIDs, providers, and pin status.", 
+         body = PinsResponse,
+         example = json!([
+             {
+                 "chain": "ethereum",
+                 "contract_address": "0x1234567890123456789012345678901234567890",
+                 "token_id": "1",
+                 "pins": [
+                     {
+                         "cid": "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
+                         "provider": "pinata",
+                         "status": "pinned",
+                         "created_at": "2024-01-01T00:00:00Z"
+                     }
+                 ]
+             }
+         ])
+        ),
         (status = 401, description = "Unauthorized"),
         (status = 500, description = "Internal server error")
     ),

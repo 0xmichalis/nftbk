@@ -24,19 +24,32 @@ pub struct BackupRequestRow {
 }
 
 /// Combined view of protection_jobs + backup_requests for backwards compatibility
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
+#[schema(description = "Backup job information including metadata and status")]
 pub struct ProtectionJobWithBackup {
+    /// Unique identifier for the backup task
     pub task_id: String,
+    /// When the backup job was created
     pub created_at: DateTime<Utc>,
+    /// When the backup job was last updated
     pub updated_at: DateTime<Utc>,
+    /// User who requested the backup
     pub requestor: String,
+    /// Number of NFTs in this backup job
     pub nft_count: i32,
+    /// Token details (only included if include_tokens=true)
     pub tokens: serde_json::Value,
+    /// Current job status: in_progress, done, error, expired
     pub status: String,
+    /// Detailed error log if backup completed with some failures
     pub error_log: Option<String>,
+    /// Fatal error message if backup failed completely
     pub fatal_error: Option<String>,
+    /// Storage mode used for the backup
     pub storage_mode: String,
+    /// Archive format used for the backup
     pub archive_format: Option<String>,
+    /// When the backup expires (if applicable)
     pub expires_at: Option<DateTime<Utc>>,
 }
 
@@ -718,17 +731,27 @@ impl Db {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
+#[schema(description = "IPFS pin information for a specific CID")]
 pub struct PinInfo {
+    /// Content Identifier (CID) of the pinned content
     pub cid: String,
+    /// IPFS provider where the content is pinned
     pub provider: String,
+    /// Pin status: pinned, pinning, failed, etc.
     pub status: String,
+    /// When the pin was created
     pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
+#[schema(description = "Token information with associated pin requests")]
 pub struct TokenWithPins {
+    /// Blockchain identifier (e.g., ethereum, tezos)
     pub chain: String,
+    /// NFT contract address
     pub contract_address: String,
+    /// NFT token ID
     pub token_id: String,
+    /// List of IPFS pins for this token
     pub pins: Vec<PinInfo>,
 }
