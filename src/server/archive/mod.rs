@@ -193,3 +193,83 @@ pub fn archive_format_from_user_agent(user_agent: &str) -> String {
         "zip".to_string() // Default to zip for max compatibility
     }
 }
+
+/// Parse Accept header to decide archive format. Returns None if undecidable.
+pub fn archive_format_from_accept(accept: &str) -> Option<String> {
+    if accept.contains("application/zip") {
+        return Some("zip".to_string());
+    }
+    if accept.contains("application/gzip")
+        || accept.contains("application/x-gtar")
+        || accept.contains("application/x-tar")
+    {
+        return Some("tar.gz".to_string());
+    }
+    None
+}
+
+/// Decide archive format based on HTTP headers, preferring Accept when present,
+/// and falling back to user-agent heuristics. Defaults to "zip" if undecidable.
+pub fn negotiate_archive_format(accept: Option<&str>, user_agent: Option<&str>) -> String {
+    if let Some(accept_val) = accept {
+        if let Some(fmt) = archive_format_from_accept(accept_val) {
+            return fmt;
+        }
+        // Accept provided but undecidable -> default to zip
+        return "zip".to_string();
+    }
+    user_agent
+        .map(archive_format_from_user_agent)
+        .unwrap_or_else(|| "zip".to_string())
+}
+
+#[cfg(test)]
+mod archive_helpers_tests {
+    use super::{archive_format_from_accept, negotiate_archive_format};
+
+    #[test]
+    fn accept_zip_parses_to_zip() {
+        let fmt = archive_format_from_accept("application/zip");
+        assert_eq!(fmt.as_deref(), Some("zip"));
+    }
+
+    #[test]
+    fn accept_gzip_parses_to_tar_gz() {
+        let fmt = archive_format_from_accept("application/gzip");
+        assert_eq!(fmt.as_deref(), Some("tar.gz"));
+    }
+
+    #[test]
+    fn accept_undecidable_returns_none() {
+        let fmt = archive_format_from_accept("application/json");
+        assert!(fmt.is_none());
+    }
+
+    #[test]
+    fn negotiate_prefers_accept_when_present_zip() {
+        let fmt = negotiate_archive_format(Some("application/zip"), Some("Linux"));
+        assert_eq!(fmt, "zip");
+    }
+
+    #[test]
+    fn negotiate_prefers_accept_when_present_gzip() {
+        let fmt = negotiate_archive_format(Some("application/gzip"), Some("Windows"));
+        assert_eq!(fmt, "tar.gz");
+    }
+
+    #[test]
+    fn negotiate_undecidable_accept_defaults_to_zip() {
+        let fmt = negotiate_archive_format(Some("application/octet-stream"), Some("Linux"));
+        assert_eq!(fmt, "zip");
+    }
+
+    #[test]
+    fn negotiate_no_accept_uses_user_agent() {
+        // Linux -> tar.gz by UA heuristic
+        let fmt_linux = negotiate_archive_format(None, Some("Linux"));
+        assert_eq!(fmt_linux, "tar.gz");
+        // Windows -> zip by UA heuristic
+        let fmt_win = negotiate_archive_format(None, Some("Windows"));
+        assert_eq!(fmt_win, "zip");
+    }
+}

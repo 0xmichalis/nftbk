@@ -8,7 +8,7 @@ use std::collections::HashSet;
 use tracing::{debug, error, info};
 
 use crate::server::api::{ApiProblem, BackupRequest, BackupResponse, ProblemJson};
-use crate::server::archive::archive_format_from_user_agent;
+use crate::server::archive::negotiate_archive_format;
 use crate::server::db::Db;
 use crate::server::hashing::compute_task_id;
 use crate::server::{AppState, BackupJob, BackupJobOrShutdown, StorageMode};
@@ -202,27 +202,11 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         StorageMode::Filesystem
     };
 
-    // Prefer Accept header for content negotiation; fall back to user-agent heuristic
-    let archive_format =
-        if let Some(accept_val) = headers.get("accept").and_then(|v| v.to_str().ok()) {
-            if accept_val.contains("application/zip") {
-                "zip".to_string()
-            } else if accept_val.contains("application/gzip")
-                || accept_val.contains("application/x-gtar")
-                || accept_val.contains("application/x-tar")
-            {
-                "tar.gz".to_string()
-            } else {
-                // Accept present but undecidable -> default to zip
-                "zip".to_string()
-            }
-        } else {
-            headers
-                .get("user-agent")
-                .and_then(|v| v.to_str().ok())
-                .map(archive_format_from_user_agent)
-                .unwrap_or_else(|| "zip".to_string())
-        };
+    // Determine archive format from Accept header or user-agent; fallback to zip
+    let archive_format = negotiate_archive_format(
+        headers.get("accept").and_then(|v| v.to_str().ok()),
+        headers.get("user-agent").and_then(|v| v.to_str().ok()),
+    );
 
     // Write metadata to DB
     let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum::<usize>() as i32;
