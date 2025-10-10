@@ -16,7 +16,7 @@ use tracing::{error, info};
 
 #[utoipa::path(
     post,
-    path = "/backup/{task_id}/retry",
+    path = "/v1/backups/{task_id}/retry",
     params(
         ("task_id" = String, Path, description = "Unique identifier for the backup task")
     ),

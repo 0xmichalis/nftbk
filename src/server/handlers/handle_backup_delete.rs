@@ -12,7 +12,7 @@ use crate::server::AppState;
 
 #[utoipa::path(
     delete,
-    path = "/backup/{task_id}",
+    path = "/v1/backups/{task_id}",
     params(
         ("task_id" = String, Path, description = "Unique identifier for the backup task")
     ),

@@ -21,7 +21,7 @@ fn default_include_tokens() -> bool {
 
 #[utoipa::path(
     get,
-    path = "/backups",
+    path = "/v1/backups",
     params(
         ("include_tokens" = Option<bool>, Query, description = "Whether to include token details in the response")
     ),

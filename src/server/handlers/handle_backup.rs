@@ -43,7 +43,7 @@ fn validate_backup_request_impl(
 
 #[utoipa::path(
     post,
-    path = "/backup",
+    path = "/v1/backups",
     request_body = BackupRequest,
     responses(
         (status = 201, description = "Backup task created successfully", body = BackupResponse),

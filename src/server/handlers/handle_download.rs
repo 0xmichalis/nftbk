@@ -31,7 +31,7 @@ pub struct DownloadTokenResponse {
 
 #[utoipa::path(
     get,
-    path = "/backup/{task_id}/download_token",
+    path = "/v1/backups/{task_id}/download_token",
     params(
         ("task_id" = String, Path, description = "Unique identifier for the backup task")
     ),
@@ -59,7 +59,7 @@ pub async fn handle_download_token(
 
 #[utoipa::path(
     get,
-    path = "/backup/{task_id}/download",
+    path = "/v1/backups/{task_id}/download",
     params(
         ("task_id" = String, Path, description = "Unique identifier for the backup task"),
         ("token" = Option<String>, Query, description = "Download token for authenticated access")

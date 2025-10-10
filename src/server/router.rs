@@ -174,22 +174,22 @@ async fn auth_middleware(
 pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -> Router {
     // Public router (no auth middleware)
     let public_router = Router::new()
-        .route("/backup/:task_id/download", get(handle_download))
-        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .route("/v1/backups/:task_id/download", get(handle_download))
+        .merge(SwaggerUi::new("/v1/swagger-ui").url("/v1/openapi.json", ApiDoc::openapi()))
         .with_state(state.clone());
 
     // Authenticated router
     let mut authed_router = Router::new()
-        .route("/backup", post(handle_backup))
-        .route("/backup/:task_id/status", get(handle_status))
+        .route("/v1/backups", post(handle_backup))
+        .route("/v1/backups/:task_id/status", get(handle_status))
         .route(
-            "/backup/:task_id/download_token",
+            "/v1/backups/:task_id/download_token",
             get(handle_download_token),
         )
-        .route("/backup/:task_id/retry", post(handle_backup_retry))
-        .route("/backup/:task_id", delete(handle_backup_delete))
-        .route("/backups", get(handle_backups))
-        .route("/pins", get(handle_pins).post(handle_create_pins))
+        .route("/v1/backups/:task_id/retry", post(handle_backup_retry))
+        .route("/v1/backups/:task_id", delete(handle_backup_delete))
+        .route("/v1/backups", get(handle_backups))
+        .route("/v1/pins", get(handle_pins).post(handle_create_pins))
         .with_state(state.clone());
 
     let auth_state = AuthState {

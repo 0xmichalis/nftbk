@@ -63,7 +63,7 @@ fn filter_tokens_for_query(tokens: Vec<TokenWithPins>, q: &PinsQuery) -> Vec<Tok
 /// Get all pinned tokens for the authenticated user
 #[utoipa::path(
     get,
-    path = "/pins",
+    path = "/v1/pins",
     params(PinsQuery),
     responses(
         (status = 200, description = "List pinned tokens for the authenticated requestor. Supports filters by NFT info and pin status.", 

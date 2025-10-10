@@ -9,7 +9,7 @@ use crate::server::AppState;
 
 #[utoipa::path(
     get,
-    path = "/backup/{task_id}/status",
+    path = "/v1/backups/{task_id}/status",
     params(
         ("task_id" = String, Path, description = "Unique identifier for the backup task")
     ),

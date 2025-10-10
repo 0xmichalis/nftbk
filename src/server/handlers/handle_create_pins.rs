@@ -142,9 +142,9 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
             "error" | "expired" => {
                 return (
                     StatusCode::CONFLICT,
-                    Json(serde_json::json!({
-                        "error": format!("Pin task in status {status} cannot be (re)started from /pins. Use the provided retry URL to re-run this task."),
-                        "retry_url":  format!("/backup/{task_id}/retry"),
+            Json(serde_json::json!({
+                        "error": format!("Pin task in status {status} cannot be (re)started from /v1/pins. Use the provided retry URL to re-run this task."),
+                        "retry_url":  format!("/v1/backups/{task_id}/retry"),
                         "task_id": task_id
                     })),
                 )
@@ -214,7 +214,7 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
 
 #[utoipa::path(
     post,
-    path = "/pins",
+    path = "/v1/pins",
     request_body = PinRequest,
     responses(
         (status = 201, description = "Pin task created successfully", body = BackupResponse),
