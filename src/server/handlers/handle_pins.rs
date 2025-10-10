@@ -66,7 +66,7 @@ fn filter_tokens_for_query(tokens: Vec<TokenWithPins>, q: &PinsQuery) -> Vec<Tok
     path = "/v1/pins",
     params(PinsQuery),
     responses(
-        (status = 200, description = "List pinned tokens for the authenticated requestor. Supports filters by NFT info and pin status.", 
+        (status = 200, description = "List pinned tokens for the authenticated user. Supports filters by NFT info and pin status.", 
          body = PinsResponse,
          example = json!([
              {
@@ -85,7 +85,6 @@ fn filter_tokens_for_query(tokens: Vec<TokenWithPins>, q: &PinsQuery) -> Vec<Tok
          ])
         ),
         (status = 401, description = "Unauthorized"),
-        (status = 403, description = "Forbidden"),
         (status = 500, description = "Internal server error")
     ),
     security(
