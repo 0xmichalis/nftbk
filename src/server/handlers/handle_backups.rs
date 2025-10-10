@@ -21,6 +21,7 @@ fn default_include_tokens() -> bool {
     false
 }
 
+/// List all backup jobs for the authenticated user
 #[utoipa::path(
     get,
     path = "/v1/backups",

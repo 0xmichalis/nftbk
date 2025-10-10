@@ -225,6 +225,7 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
         .into_response()
 }
 
+/// Create IPFS pin requests for the provided tokens and the authenticated user
 #[utoipa::path(
     post,
     path = "/v1/pins",

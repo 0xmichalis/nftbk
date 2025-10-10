@@ -41,6 +41,9 @@ fn validate_backup_request_impl(
     Ok(())
 }
 
+/// Create a backup job for the authenticated user. This job will be processed asynchronously and the result will be available in the /v1/backups/{task_id} endpoint.
+/// By default, this endpoint creates an archive file with metadata and content from all tokens to be downloaded by the user. The archive format depends on the user-agent (zip or tar.gz).
+/// The user can optionally request to pin content that is stored on IPFS.
 #[utoipa::path(
     post,
     path = "/v1/backups",

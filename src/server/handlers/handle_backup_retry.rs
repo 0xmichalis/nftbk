@@ -14,6 +14,7 @@ use crate::server::BackupJobOrShutdown;
 use crate::server::Tokens;
 use tracing::{error, info};
 
+/// Retry a backup job for the authenticated user. This job will be processed asynchronously and the result will be available in the /v1/backups/{task_id} endpoint.
 #[utoipa::path(
     post,
     path = "/v1/backups/{task_id}/retry",

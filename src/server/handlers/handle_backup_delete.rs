@@ -9,6 +9,8 @@ use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::archive::get_zipped_backup_paths;
 use crate::server::AppState;
 
+/// Delete a backup job for the authenticated user. This will delete the backup archive file and the metadata from the database.
+/// Pins are not deleted yet.
 #[utoipa::path(
     delete,
     path = "/v1/backups/{task_id}",

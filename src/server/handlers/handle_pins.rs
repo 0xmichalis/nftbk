@@ -61,7 +61,7 @@ fn filter_tokens_for_query(tokens: Vec<TokenWithPins>, q: &PinsQuery) -> Vec<Tok
     filtered
 }
 
-/// Get all pinned tokens for the authenticated user
+/// Get all IPFS pin requests for the tokens and the authenticated user
 #[utoipa::path(
     get,
     path = "/v1/pins",

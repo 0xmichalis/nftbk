@@ -31,6 +31,8 @@ pub struct DownloadTokenResponse {
     pub expires_at: u64,
 }
 
+/// Create a download token for the authenticated user. This token can be used in the /v1/backups/{task_id}/download endpoint
+/// to download the backup file for the given task_id. The token is valid for 10 minutes.
 #[utoipa::path(
     post,
     path = "/v1/backups/{task_id}/download-tokens",
@@ -63,6 +65,8 @@ pub async fn handle_download_token(
         .into_response()
 }
 
+/// Download a backup archive for the authenticated user. The user has to provide a download token to access the archive.
+/// The token can be obtained from the /v1/backups/{task_id}/download-tokens endpoint.
 #[utoipa::path(
     get,
     path = "/v1/backups/{task_id}/download",

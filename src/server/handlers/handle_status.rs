@@ -9,6 +9,7 @@ use crate::server::api::{ApiProblem, ProblemJson, StatusResponse};
 use crate::server::db::{Db, ProtectionJobWithBackup};
 use crate::server::AppState;
 
+/// Get the status of a backup task
 #[utoipa::path(
     get,
     path = "/v1/backups/{task_id}",
