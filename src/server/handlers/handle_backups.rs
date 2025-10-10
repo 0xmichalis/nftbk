@@ -47,6 +47,10 @@ fn default_limit() -> u32 {
     responses(
         (status = 200, description = "List of backup jobs for the authenticated user. Returns job metadata including task_id, status, timestamps, and optionally token details.", 
          body = Vec<serde_json::Value>,
+         headers(
+             ("Link" = String, description = "Pagination links per RFC 5988: rel=prev,next"),
+             ("X-Total-Count" = u32, description = "Total number of items before pagination")
+         ),
          example = json!([
              {
                  "task_id": "abc123def456",

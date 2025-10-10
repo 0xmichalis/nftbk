@@ -82,6 +82,10 @@ fn filter_tokens_for_query(tokens: Vec<TokenWithPins>, q: &PinsQuery) -> Vec<Tok
     responses(
         (status = 200, description = "List pinned tokens for the authenticated user. Supports filters by NFT info and pin status.", 
          body = PinsResponse,
+         headers(
+             ("Link" = String, description = "Pagination links per RFC 5988: rel=prev,next"),
+             ("X-Total-Count" = u32, description = "Total number of items before pagination")
+         ),
          example = json!([
              {
                  "chain": "ethereum",
