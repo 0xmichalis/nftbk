@@ -72,6 +72,10 @@ use crate::server::AppState;
         contact(
             name = "nftbk",
             url = "https://github.com/0xmichalis/nftbk"
+        ),
+        license(
+            name = "Apache License 2.0",
+            identifier = "Apache-2.0"
         )
     ),
     security(
