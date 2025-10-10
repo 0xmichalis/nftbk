@@ -58,11 +58,22 @@ pub async fn handle_download_token(
         let mut tokens = state.download_tokens.lock().await;
         tokens.insert(token.clone(), (task_id.clone(), expires_at));
     }
-    (
-        StatusCode::CREATED,
-        Json(DownloadTokenResponse { token, expires_at }),
-    )
-        .into_response()
+    {
+        let mut headers = HeaderMap::new();
+        // Point to the immediate action a client can take with the created token
+        headers.insert(
+            header::LOCATION,
+            format!("/v1/backups/{task_id}/download?token={}", token)
+                .parse()
+                .unwrap(),
+        );
+        (
+            StatusCode::CREATED,
+            headers,
+            Json(DownloadTokenResponse { token, expires_at }),
+        )
+            .into_response()
+    }
 }
 
 /// Download a backup archive for the authenticated user. The user has to provide a download token to access the archive.
@@ -103,12 +114,16 @@ pub async fn handle_download(
         }
     }
     // If we reach here, token is missing or invalid
-    ProblemJson::from_status(
-        StatusCode::UNAUTHORIZED,
-        Some("Invalid or expired token".to_string()),
-        Some(format!("/v1/backups/{task_id}/download")),
+    (
+        // RFC 6750-compliant hint for clients
+        [(header::WWW_AUTHENTICATE, "Bearer error=\"invalid_token\"")],
+        ProblemJson::from_status(
+            StatusCode::UNAUTHORIZED,
+            Some("Invalid or expired token".to_string()),
+            Some(format!("/v1/backups/{task_id}/download")),
+        ),
     )
-    .into_response()
+        .into_response()
 }
 
 // Minimal trait to mock DB calls
@@ -304,12 +319,26 @@ mod handle_download_tests {
         assert_eq!(resp.status(), StatusCode::CREATED);
 
         // Parse body and verify token persisted
+        let location = resp
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
         let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let token_resp: DownloadTokenResponse = serde_json::from_slice(&body_bytes).unwrap();
         let tokens = state.download_tokens.lock().await;
         let stored = tokens.get(&token_resp.token);
         assert!(stored.is_some());
         assert_eq!(stored.unwrap().0, task_id);
+        assert_eq!(
+            location,
+            format!(
+                "/v1/backups/{}/download?token={}",
+                task_id, token_resp.token
+            )
+        );
     }
 
     #[tokio::test]
@@ -330,5 +359,28 @@ mod handle_download_tests {
         let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let problem: crate::server::api::ApiProblem = serde_json::from_slice(&body_bytes).unwrap();
         assert_eq!(problem.status, StatusCode::UNAUTHORIZED.as_u16());
+    }
+
+    #[tokio::test]
+    async fn get_download_401_sets_www_authenticate_header() {
+        let state = make_state();
+        let task_id = "t-xyz".to_string();
+        let resp = handle_download(
+            axum::extract::State(state),
+            axum::extract::Path(task_id),
+            axum::extract::Query(DownloadQuery {
+                token: Some("expired-or-invalid".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        let header_val = resp
+            .headers()
+            .get(axum::http::header::WWW_AUTHENTICATE)
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(header_val, "Bearer error=\"invalid_token\"");
     }
 }
