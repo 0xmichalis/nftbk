@@ -12,7 +12,9 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 use crate::envvar::is_defined;
-use crate::server::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
+use crate::server::api::{
+    ApiProblem, BackupRequest, BackupResponse, ProblemJson, StatusResponse, Tokens,
+};
 use crate::server::db::{PinInfo, ProtectionJobWithBackup, TokenWithPins};
 use crate::server::handlers::handle_backup::{__path_handle_backup, handle_backup};
 use crate::server::handlers::handle_backup_delete::{
@@ -49,7 +51,7 @@ use crate::server::AppState;
         handle_pins,
     ),
     components(
-        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinRequest, PinsResponse, ProtectionJobWithBackup, TokenWithPins, PinInfo)
+        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinRequest, PinsResponse, ProtectionJobWithBackup, TokenWithPins, PinInfo, ApiProblem)
     ),
     tags(
         (name = "backups", description = "General backup operations"),
@@ -168,9 +170,12 @@ async fn auth_middleware(
 
     // 3. If both fail, return 401
     (
-        StatusCode::UNAUTHORIZED,
         [(header::WWW_AUTHENTICATE, "Bearer")],
-        "Unauthorized",
+        ProblemJson::from_status(
+            StatusCode::UNAUTHORIZED,
+            Some("Unauthorized".to_string()),
+            Some(req.uri().to_string()),
+        ),
     )
         .into_response()
 }

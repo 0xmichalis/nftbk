@@ -6,6 +6,8 @@ use axum::{
 };
 use serde::Deserialize;
 
+use crate::server::api::{ApiProblem, ProblemJson};
+use crate::server::db::{Db, ProtectionJobWithBackup};
 use crate::server::AppState;
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -44,10 +46,10 @@ fn default_include_tokens() -> bool {
              }
          ])
         ),
-        (status = 401, description = "Missing user DID"),
-        (status = 500, description = "Internal server error"),
+        (status = 401, description = "Missing user DID", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
-    tag = "backup",
+    tag = "backups",
     security(("bearer_auth" = []))
 )]
 pub async fn handle_backups(
@@ -57,24 +59,126 @@ pub async fn handle_backups(
 ) -> impl IntoResponse {
     let user_did = match user_did {
         Some(did) if !did.is_empty() => did,
-        _ => return (StatusCode::UNAUTHORIZED, "Missing user DID").into_response(),
+        _ => {
+            let problem = ProblemJson::from_status(
+                StatusCode::UNAUTHORIZED,
+                Some("Missing user DID".to_string()),
+                Some("/v1/backups".to_string()),
+            );
+            return problem.into_response();
+        }
     };
-    let mut results = Vec::new();
-    match state
-        .db
-        .list_requestor_protection_jobs(&user_did, query.include_tokens)
+    handle_backups_core(&*state.db, &user_did, query.include_tokens).await
+}
+
+// Minimal trait and core function for mocking
+pub trait BackupsDb {
+    fn list_requestor_protection_jobs<'a>(
+        &'a self,
+        requestor: &'a str,
+        include_tokens: bool,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<ProtectionJobWithBackup>, sqlx::Error>>
+                + Send
+                + 'a,
+        >,
+    >;
+}
+
+impl BackupsDb for Db {
+    fn list_requestor_protection_jobs<'a>(
+        &'a self,
+        requestor: &'a str,
+        include_tokens: bool,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Vec<ProtectionJobWithBackup>, sqlx::Error>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move {
+            Db::list_requestor_protection_jobs(self, requestor, include_tokens).await
+        })
+    }
+}
+
+async fn handle_backups_core<DB: BackupsDb + ?Sized>(
+    db: &DB,
+    user_did: &str,
+    include_tokens: bool,
+) -> axum::response::Response {
+    match db
+        .list_requestor_protection_jobs(user_did, include_tokens)
         .await
     {
-        Ok(b) => {
-            results.extend(b);
-        }
+        Ok(b) => Json(b).into_response(),
         Err(e) => {
-            return (
+            let problem = ProblemJson::from_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Failed to query backups: {e}"),
-            )
-                .into_response();
+                Some(format!("Failed to query backups: {e}")),
+                Some("/v1/backups".to_string()),
+            );
+            problem.into_response()
         }
-    };
-    Json(results).into_response()
+    }
+}
+
+#[cfg(test)]
+mod handle_backups_core_mockdb_tests {
+    use super::{handle_backups_core, BackupsDb};
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    #[derive(Default)]
+    struct MockDb {
+        records: Vec<crate::server::db::ProtectionJobWithBackup>,
+        error: bool,
+    }
+
+    impl BackupsDb for MockDb {
+        fn list_requestor_protection_jobs<'a>(
+            &'a self,
+            _requestor: &'a str,
+            _include_tokens: bool,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            Vec<crate::server::db::ProtectionJobWithBackup>,
+                            sqlx::Error,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            let error = self.error;
+            let recs = self.records.clone();
+            Box::pin(async move {
+                if error {
+                    Err(sqlx::Error::PoolTimedOut)
+                } else {
+                    Ok(recs)
+                }
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_500_problem_on_db_error() {
+        let db = MockDb {
+            records: Vec::new(),
+            error: true,
+        };
+        let resp = handle_backups_core(&db, "did:privy:me", false)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let problem: crate::server::api::ApiProblem = serde_json::from_slice(&body).unwrap();
+        assert_eq!(problem.status, StatusCode::INTERNAL_SERVER_ERROR.as_u16());
+    }
 }

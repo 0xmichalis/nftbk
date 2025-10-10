@@ -6,8 +6,8 @@ use axum::{
     Extension,
 };
 
-use crate::server::api::BackupRequest;
 use crate::server::api::BackupResponse;
+use crate::server::api::{ApiProblem, BackupRequest, ProblemJson};
 use crate::server::AppState;
 use crate::server::BackupJob;
 use crate::server::BackupJobOrShutdown;
@@ -22,12 +22,12 @@ use tracing::{error, info};
     ),
     responses(
         (status = 202, description = "Backup retry initiated successfully", body = BackupResponse),
-        (status = 400, description = "Task is already in progress"),
-        (status = 403, description = "Requestor does not match task owner"),
-        (status = 404, description = "Task not found"),
-        (status = 500, description = "Internal server error"),
+        (status = 400, description = "Task is already in progress", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 403, description = "Requestor does not match task owner", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 404, description = "Task not found", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
-    tag = "backup",
+    tag = "backups",
     security(("bearer_auth" = []))
 )]
 pub async fn handle_backup_retry(
@@ -39,39 +39,43 @@ pub async fn handle_backup_retry(
     let meta = match state.db.get_protection_job(&task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
-            return (
+            let problem = ProblemJson::from_status(
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Metadata not found"})),
-            )
-                .into_response();
+                Some("Metadata not found".to_string()),
+                Some(format!("/v1/backups/{task_id}/retry")),
+            );
+            return problem.into_response();
         }
         Err(_) => {
-            return (
+            let problem = ProblemJson::from_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": "Failed to read metadata from DB"})),
-            )
-                .into_response();
+                Some("Failed to read metadata from DB".to_string()),
+                Some(format!("/v1/backups/{task_id}/retry")),
+            );
+            return problem.into_response();
         }
     };
 
     // Check if task is in progress
     if meta.status == "in_progress" {
-        return (
+        let problem = ProblemJson::from_status(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Task is already in progress"})),
-        )
-            .into_response();
+            Some("Task is already in progress".to_string()),
+            Some(format!("/v1/backups/{task_id}/retry")),
+        );
+        return problem.into_response();
     }
 
     // Ensure the requestor matches the one in the metadata
     let req_requestor = requestor.clone().unwrap_or_default();
     let meta_requestor = meta.requestor.clone();
     if !meta_requestor.is_empty() && req_requestor != meta_requestor {
-        return (
+        let problem = ProblemJson::from_status(
             StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Requestor does not match task owner"})),
-        )
-            .into_response();
+            Some("Requestor does not match task owner".to_string()),
+            Some(format!("/v1/backups/{task_id}/retry")),
+        );
+        return problem.into_response();
     }
 
     let _ = state
@@ -105,11 +109,12 @@ pub async fn handle_backup_retry(
         .await
     {
         error!("Failed to enqueue backup job: {}", e);
-        return (
+        let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Failed to enqueue backup job"})),
-        )
-            .into_response();
+            Some("Failed to enqueue backup job".to_string()),
+            Some(format!("/v1/backups/{task_id}/retry")),
+        );
+        return problem.into_response();
     }
     info!(
         "Retrying backup task {} (requestor: {})",

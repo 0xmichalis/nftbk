@@ -13,6 +13,8 @@ use std::path::PathBuf;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 
+use crate::server::api::{ApiProblem, ProblemJson};
+use crate::server::db::{Db, ProtectionJobWithBackup};
 use crate::server::{check_backup_on_disk, AppState};
 
 #[derive(serde::Deserialize, utoipa::ToSchema)]
@@ -39,7 +41,7 @@ pub struct DownloadTokenResponse {
         (status = 201, description = "Download token created successfully", body = DownloadTokenResponse),
         (status = 401, description = "Unauthorized"),
     ),
-    tag = "backup",
+    tag = "backups",
     security(("bearer_auth" = []))
 )]
 pub async fn handle_download_token(
@@ -70,12 +72,12 @@ pub async fn handle_download_token(
     ),
     responses(
         (status = 200, description = "Backup file download", content_type = "application/zip"),
-        (status = 202, description = "Task not completed yet"),
-        (status = 401, description = "Invalid or expired token"),
-        (status = 404, description = "Task not found"),
-        (status = 500, description = "Internal server error"),
+        (status = 202, description = "Task not completed yet", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 401, description = "Invalid or expired token", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 404, description = "Task not found", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
-    tag = "backup"
+    tag = "backups"
 )]
 pub async fn handle_download(
     State(state): State<AppState>,
@@ -92,28 +94,80 @@ pub async fn handle_download(
                 tokens.remove(&token);
                 // Serve the file without further auth
                 drop(tokens);
-                return serve_zip_file_for_token(&state, &task_id).await;
+                return serve_zip_file_for_token_core(&*state.db, &state, &task_id).await;
             }
         }
     }
     // If we reach here, token is missing or invalid
-    (
+    ProblemJson::from_status(
         StatusCode::UNAUTHORIZED,
-        Body::from("Invalid or expired token"),
+        Some("Invalid or expired token".to_string()),
+        Some(format!("/v1/backups/{task_id}/download")),
     )
-        .into_response()
+    .into_response()
 }
 
-async fn serve_zip_file_for_token(state: &AppState, task_id: &str) -> Response {
+// Minimal trait to mock DB calls
+pub trait DownloadDb {
+    fn get_protection_job<'a>(
+        &'a self,
+        task_id: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Option<ProtectionJobWithBackup>, sqlx::Error>>
+                + Send
+                + 'a,
+        >,
+    >;
+}
+
+impl DownloadDb for Db {
+    fn get_protection_job<'a>(
+        &'a self,
+        task_id: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<Output = Result<Option<ProtectionJobWithBackup>, sqlx::Error>>
+                + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { Db::get_protection_job(self, task_id).await })
+    }
+}
+
+async fn serve_zip_file_for_token_core<DB: DownloadDb + ?Sized>(
+    db: &DB,
+    state: &AppState,
+    task_id: &str,
+) -> Response {
     // Read archive_format and status from the database
-    let meta = match state.db.get_protection_job(task_id).await {
+    let meta = match db.get_protection_job(task_id).await {
         Ok(Some(m)) => m,
-        _ => {
-            return (StatusCode::NOT_FOUND, Body::from("Task not found")).into_response();
+        Ok(None) => {
+            return ProblemJson::from_status(
+                StatusCode::NOT_FOUND,
+                Some("Task not found".to_string()),
+                Some(format!("/v1/backups/{task_id}/download")),
+            )
+            .into_response();
+        }
+        Err(_) => {
+            return ProblemJson::from_status(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Some("Failed to read metadata".to_string()),
+                Some(format!("/v1/backups/{task_id}/download")),
+            )
+            .into_response();
         }
     };
     if meta.status != "done" {
-        return (StatusCode::ACCEPTED, Body::from("Task not completed yet")).into_response();
+        return ProblemJson::from_status(
+            StatusCode::ACCEPTED,
+            Some("Task not completed yet".to_string()),
+            Some(format!("/v1/backups/{task_id}/download")),
+        )
+        .into_response();
     }
 
     // Check if this job has a filesystem backup
@@ -121,11 +175,14 @@ async fn serve_zip_file_for_token(state: &AppState, task_id: &str) -> Response {
         Some(fmt) => fmt,
         None => {
             // IPFS-only job - no download available
-            return (
+            return ProblemJson::from_status(
                 StatusCode::BAD_REQUEST,
-                Body::from("This protection job is IPFS-only and has no downloadable archive"),
+                Some(
+                    "This protection job is IPFS-only and has no downloadable archive".to_string(),
+                ),
+                Some(format!("/v1/backups/{task_id}/download")),
             )
-                .into_response();
+            .into_response();
         }
     };
 
@@ -140,29 +197,36 @@ async fn serve_zip_file_for_token(state: &AppState, task_id: &str) -> Response {
     {
         return serve_zip_file(&zip_path, task_id, archive_format).await;
     }
-    (StatusCode::NOT_FOUND, Body::from("Task not found")).into_response()
+    ProblemJson::from_status(
+        StatusCode::NOT_FOUND,
+        Some("Task not found".to_string()),
+        Some(format!("/v1/backups/{task_id}/download")),
+    )
+    .into_response()
 }
 
 async fn serve_zip_file(zip_path: &PathBuf, task_id: &str, archive_format: &str) -> Response {
     let file = match File::open(zip_path).await {
         Ok(file) => file,
         Err(_) => {
-            return (
+            return ProblemJson::from_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Body::from("Failed to open zip file"),
+                Some("Failed to open archive".to_string()),
+                Some(format!("/v1/backups/{task_id}/download")),
             )
-                .into_response();
+            .into_response();
         }
     };
     // Get file size for Content-Length
     let file_size = match tokio::fs::metadata(zip_path).await {
         Ok(meta) => meta.len(),
         Err(_) => {
-            return (
+            return ProblemJson::from_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Body::from("Failed to get file metadata"),
+                Some("Failed to get archive metadata".to_string()),
+                Some(format!("/v1/backups/{task_id}/download")),
             )
-                .into_response();
+            .into_response();
         }
     };
     let stream = ReaderStream::new(file);
@@ -258,5 +322,9 @@ mod handle_download_tests {
         .await
         .into_response();
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+        // Parse problem+json
+        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let problem: crate::server::api::ApiProblem = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(problem.status, StatusCode::UNAUTHORIZED.as_u16());
     }
 }
