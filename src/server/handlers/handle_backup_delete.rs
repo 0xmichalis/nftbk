@@ -3,7 +3,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::archive::get_zipped_backup_paths;
@@ -119,14 +119,13 @@ impl DeleteDb for crate::server::db::Db {
 }
 
 /// Delete filesystem files and directories for a given task
-/// Returns (deleted_anything, errors)
+/// Returns true if any files were deleted, false if none existed
 async fn delete_dir_and_archive_for_task(
     base_dir: &str,
     task_id: &str,
     archive_format: Option<&str>,
-) -> (bool, Vec<String>) {
+) -> Result<bool, String> {
     let mut deleted_anything = false;
-    let mut errors = Vec::new();
 
     if let Some(archive_format) = archive_format {
         let (archive_path, archive_checksum_path) =
@@ -138,8 +137,7 @@ async fn delete_dir_and_archive_for_task(
                 }
                 Err(e) => {
                     if e.kind() != std::io::ErrorKind::NotFound {
-                        warn!("Failed to delete file {}: {}", path.display(), e);
-                        errors.push(format!("Failed to delete file {}: {}", path.display(), e));
+                        return Err(format!("Failed to delete file {}: {}", path.display(), e));
                     }
                 }
             }
@@ -153,75 +151,59 @@ async fn delete_dir_and_archive_for_task(
         }
         Err(e) => {
             if e.kind() != std::io::ErrorKind::NotFound {
-                warn!("Failed to delete backup dir {}: {}", backup_dir, e);
-                errors.push(format!("Failed to delete backup dir {backup_dir}: {e}"));
+                return Err(format!("Failed to delete backup dir {backup_dir}: {e}"));
             }
         }
     }
 
-    (deleted_anything, errors)
+    Ok(deleted_anything)
 }
 
 /// Delete IPFS pins for a given task ID
-/// Returns (deleted_anything, errors)
+/// Returns true if any pins were deleted, false if none existed
 async fn delete_ipfs_pins_for_task<DB: DeleteDb + ?Sized>(
     db: &DB,
     task_id: &str,
     ipfs_providers: &[Box<dyn crate::ipfs::IpfsPinningProvider>],
-) -> (bool, Vec<String>) {
+) -> Result<bool, String> {
+    let pin_requests = db
+        .get_pin_requests_by_task_id(task_id)
+        .await
+        .map_err(|e| format!("Failed to get pin requests for task {}: {}", task_id, e))?;
+
     let mut deleted_anything = false;
-    let mut errors = Vec::new();
 
-    match db.get_pin_requests_by_task_id(task_id).await {
-        Ok(pin_requests) => {
-            for pin_request in &pin_requests {
-                // Find the matching provider instance
-                let provider = ipfs_providers
-                    .iter()
-                    .find(|provider| provider.provider_name() == pin_request.provider);
+    for pin_request in &pin_requests {
+        // Find the matching provider instance
+        let provider = ipfs_providers
+            .iter()
+            .find(|provider| provider.provider_name() == pin_request.provider);
 
-                if let Some(provider) = provider {
-                    match provider.delete_pin(&pin_request.request_id).await {
-                        Ok(()) => {
-                            info!(
-                                "Successfully unpinned {} from provider {} for task {}",
-                                pin_request.cid, pin_request.provider, task_id
-                            );
-                            deleted_anything = true;
-                        }
-                        Err(e) => {
-                            warn!(
-                                "Failed to unpin {} from provider {} for task {}: {}",
-                                pin_request.cid, pin_request.provider, task_id, e
-                            );
-                            errors.push(format!(
-                                "Failed to unpin {} from {}: {}",
-                                pin_request.cid, pin_request.provider, e
-                            ));
-                        }
-                    }
-                } else {
-                    warn!(
-                        "No provider instance found for provider {} when unpinning {} in task {}",
-                        pin_request.provider, pin_request.cid, task_id
-                    );
-                    errors.push(format!(
-                        "No provider instance found for provider {} when unpinning {}",
-                        pin_request.provider, pin_request.cid
-                    ));
-                }
-            }
-        }
-        Err(e) => {
-            warn!("Failed to get pin requests for task {}: {}", task_id, e);
-            errors.push(format!(
-                "Failed to get pin requests for task {}: {}",
-                task_id, e
-            ));
-        }
+        let provider = provider.ok_or_else(|| {
+            format!(
+                "No provider instance found for provider {} when unpinning {}",
+                pin_request.provider, pin_request.cid
+            )
+        })?;
+
+        provider
+            .delete_pin(&pin_request.request_id)
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to unpin {} from provider {} for task {}: {}",
+                    pin_request.cid, pin_request.provider, task_id, e
+                )
+            })?;
+
+        info!(
+            "Successfully unpinned {} from provider {} for task {}",
+            pin_request.cid, pin_request.provider, task_id
+        );
+        deleted_anything = true;
     }
 
-    (deleted_anything, errors)
+    Ok(deleted_anything)
 }
 
 async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
@@ -279,57 +261,57 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
         return problem.into_response();
     }
 
-    let mut errors = Vec::new();
-    let mut deleted_anything = false;
-
     // Handle filesystem cleanup if this backup used filesystem storage
     if meta.storage_mode == "filesystem" || meta.storage_mode == "both" {
-        let (fs_deleted, fs_errors) =
-            delete_dir_and_archive_for_task(base_dir, task_id, meta.archive_format.as_deref())
-                .await;
-        if fs_deleted {
-            deleted_anything = true;
+        match delete_dir_and_archive_for_task(base_dir, task_id, meta.archive_format.as_deref())
+            .await
+        {
+            Ok(_) => {
+                // Filesystem cleanup completed (whether files existed or not)
+            }
+            Err(e) => {
+                error!("Filesystem deletion failed for task {}: {}", task_id, e);
+                let problem = ProblemJson::from_status(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Some(format!("Failed to delete filesystem files: {}", e)),
+                    Some(format!("/v1/backups/{}", task_id)),
+                );
+                return problem.into_response();
+            }
         }
-        errors.extend(fs_errors);
     }
 
     // Handle IPFS pin deletion if this backup used IPFS storage
     if meta.storage_mode == "ipfs" || meta.storage_mode == "both" {
-        let (ipfs_deleted, ipfs_errors) =
-            delete_ipfs_pins_for_task(db, task_id, ipfs_providers).await;
-        if ipfs_deleted {
-            deleted_anything = true;
+        match delete_ipfs_pins_for_task(db, task_id, ipfs_providers).await {
+            Ok(_) => {
+                // IPFS pin cleanup completed (whether pins existed or not)
+            }
+            Err(e) => {
+                error!("IPFS pin deletion failed for task {}: {}", task_id, e);
+                let problem = ProblemJson::from_status(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Some(format!("Failed to delete IPFS pins: {}", e)),
+                    Some(format!("/v1/backups/{}", task_id)),
+                );
+                return problem.into_response();
+            }
         }
-        errors.extend(ipfs_errors);
     }
 
+    // Delete the protection job metadata
     if let Err(e) = db.delete_protection_job(task_id).await {
-        errors.push(format!("Failed to delete metadata from DB: {e}"));
-    } else {
-        deleted_anything = true;
-    }
-
-    if !deleted_anything {
+        error!("Database deletion failed for task {}: {}", task_id, e);
         let problem = ProblemJson::from_status(
-            StatusCode::NOT_FOUND,
-            Some("Nothing found to delete".to_string()),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Some(format!("Failed to delete metadata from database: {}", e)),
             Some(format!("/v1/backups/{}", task_id)),
         );
         return problem.into_response();
     }
 
-    if errors.is_empty() {
-        info!("Deleted backup {}", task_id);
-        (StatusCode::NO_CONTENT, ()).into_response()
-    } else {
-        error!("Errors during delete: {:?}", errors);
-        ProblemJson::from_status(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Some(format!("{:?}", errors)),
-            Some(format!("/v1/backups/{}", task_id)),
-        )
-        .into_response()
-    }
+    info!("Deleted backup {}", task_id);
+    (StatusCode::NO_CONTENT, ()).into_response()
 }
 
 #[cfg(test)]
