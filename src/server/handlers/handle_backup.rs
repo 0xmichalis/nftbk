@@ -48,6 +48,10 @@ fn validate_backup_request_impl(
     post,
     path = "/v1/backups",
     request_body = BackupRequest,
+    params(
+        ("accept" = Option<String>, Header, description = "Preferred archive media type for backup content: application/zip or application/gzip. If omitted or undecidable, defaults to zip."),
+        ("user-agent" = Option<String>, Header, description = "Used as a heuristic fallback to select archive format when Accept is not provided.")
+    ),
     responses(
         (status = 202, description = "Backup task accepted and queued", body = BackupResponse),
         (status = 200, description = "Backup already exists or in progress", body = BackupResponse),
