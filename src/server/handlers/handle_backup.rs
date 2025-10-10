@@ -390,6 +390,7 @@ mod handle_backup_endpoint_tests {
             db,
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ipfs_providers,
+            ipfs_provider_instances: Arc::new(Vec::new()),
         }
     }
 

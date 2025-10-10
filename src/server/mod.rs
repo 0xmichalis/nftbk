@@ -12,7 +12,7 @@ use tokio::sync::Mutex;
 use tracing::{debug, error, info, warn};
 
 use crate::backup::ChainConfig;
-use crate::ipfs::IpfsProviderConfig;
+use crate::ipfs::{IpfsPinningProvider, IpfsProviderConfig};
 use crate::server::api::{BackupRequest, Tokens};
 use crate::server::archive::{
     get_zipped_backup_paths, zip_backup, ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
@@ -54,6 +54,7 @@ pub struct AppState {
     pub db: Arc<Db>,
     pub shutdown_flag: Arc<AtomicBool>,
     pub ipfs_providers: Vec<IpfsProviderConfig>,
+    pub ipfs_provider_instances: Arc<Vec<Box<dyn IpfsPinningProvider>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -134,6 +135,26 @@ impl AppState {
             .expect("Failed to resolve environment variables in chain config");
         let db = Arc::new(Db::new(db_url, max_connections).await);
 
+        // Create IPFS provider instances at startup
+        let mut ipfs_provider_instances = Vec::new();
+        for config in &ipfs_providers {
+            match config.create_provider() {
+                Ok(provider) => {
+                    info!(
+                        "Successfully created IPFS provider: {}",
+                        provider.provider_name()
+                    );
+                    ipfs_provider_instances.push(provider);
+                }
+                Err(e) => {
+                    error!(
+                        "Failed to create IPFS provider from config {:?}: {}",
+                        config, e
+                    );
+                }
+            }
+        }
+
         AppState {
             chain_config: Arc::new(chain_config),
             base_dir: Arc::new(base_dir.to_string()),
@@ -146,6 +167,7 @@ impl AppState {
             db,
             shutdown_flag,
             ipfs_providers,
+            ipfs_provider_instances: Arc::new(ipfs_provider_instances),
         }
     }
 }

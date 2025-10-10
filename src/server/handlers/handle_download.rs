@@ -303,6 +303,7 @@ mod handle_download_tests {
             db,
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ipfs_providers: Vec::new(),
+            ipfs_provider_instances: Arc::new(Vec::new()),
         }
     }
 
