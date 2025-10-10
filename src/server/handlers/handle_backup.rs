@@ -202,12 +202,27 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         StorageMode::Filesystem
     };
 
-    // Select archive format based on user-agent
-    let archive_format = headers
-        .get("user-agent")
-        .and_then(|v| v.to_str().ok())
-        .map(archive_format_from_user_agent)
-        .unwrap_or_else(|| "zip".to_string());
+    // Prefer Accept header for content negotiation; fall back to user-agent heuristic
+    let archive_format =
+        if let Some(accept_val) = headers.get("accept").and_then(|v| v.to_str().ok()) {
+            if accept_val.contains("application/zip") {
+                "zip".to_string()
+            } else if accept_val.contains("application/gzip")
+                || accept_val.contains("application/x-gtar")
+                || accept_val.contains("application/x-tar")
+            {
+                "tar.gz".to_string()
+            } else {
+                // Accept present but undecidable -> default to zip
+                "zip".to_string()
+            }
+        } else {
+            headers
+                .get("user-agent")
+                .and_then(|v| v.to_str().ok())
+                .map(archive_format_from_user_agent)
+                .unwrap_or_else(|| "zip".to_string())
+        };
 
     // Write metadata to DB
     let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum::<usize>() as i32;
@@ -444,7 +459,7 @@ mod handle_backup_endpoint_tests {
 }
 
 #[cfg(test)]
-mod handle_backup_core_mockdb_tests {
+mod handle_backup_core_tests {
     use super::BackupDb;
     use crate::server::api::{BackupRequest, Tokens};
     use axum::body::to_bytes;
@@ -456,6 +471,7 @@ mod handle_backup_core_mockdb_tests {
     struct MockDb {
         status: Option<String>,
         inserted: std::sync::Arc<std::sync::Mutex<bool>>,
+        last_archive_format: std::sync::Arc<std::sync::Mutex<Option<String>>>,
     }
 
     impl BackupDb for MockDb {
@@ -480,8 +496,10 @@ mod handle_backup_core_mockdb_tests {
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
         {
             let flag = self.inserted.clone();
+            let fmt_store = self.last_archive_format.clone();
             Box::pin(async move {
                 *flag.lock().unwrap() = true;
+                *fmt_store.lock().unwrap() = _archive_format.map(|s| s.to_string());
                 Ok(())
             })
         }
@@ -525,6 +543,7 @@ mod handle_backup_core_mockdb_tests {
         let db = MockDb {
             status: Some("in_progress".to_string()),
             inserted: Default::default(),
+            last_archive_format: Default::default(),
         };
         let (tx, _rx) = mpsc::channel(1);
         let req = BackupRequest {
@@ -539,5 +558,106 @@ mod handle_backup_core_mockdb_tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn accept_zip_selects_zip() {
+        let db = MockDb::default();
+        let (tx, _rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("accept", "application/zip".parse().unwrap());
+        let _ = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+            .await
+            .into_response();
+        let chosen = db.last_archive_format.lock().unwrap().clone();
+        assert_eq!(chosen.as_deref(), Some("zip"));
+    }
+
+    #[tokio::test]
+    async fn accept_gzip_selects_tar_gz() {
+        let db = MockDb::default();
+        let (tx, _rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("accept", "application/gzip".parse().unwrap());
+        let _ = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+            .await
+            .into_response();
+        let chosen = db.last_archive_format.lock().unwrap().clone();
+        assert_eq!(chosen.as_deref(), Some("tar.gz"));
+    }
+
+    #[tokio::test]
+    async fn undecidable_accept_defaults_zip_in_core() {
+        let db = MockDb::default();
+        let (tx, _rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("accept", "application/json".parse().unwrap());
+        let _ = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+            .await
+            .into_response();
+        let chosen = db.last_archive_format.lock().unwrap().clone();
+        assert_eq!(chosen.as_deref(), Some("zip"));
+    }
+
+    #[tokio::test]
+    async fn selects_from_user_agent() {
+        let db = MockDb::default();
+        let (tx, _rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "Linux".parse().unwrap());
+        let _ = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+            .await
+            .into_response();
+        let chosen = db.last_archive_format.lock().unwrap().clone();
+        assert!(matches!(chosen.as_deref(), Some("tar.gz")));
+    }
+
+    #[tokio::test]
+    async fn both_accept_and_user_agent_present_accept_wins() {
+        let db = MockDb::default();
+        let (tx, _rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+        };
+        let mut headers = HeaderMap::new();
+        headers.insert("user-agent", "Linux TarPreferred".parse().unwrap());
+        headers.insert("accept", "application/zip".parse().unwrap());
+        let _ = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+            .await
+            .into_response();
+        let chosen = db.last_archive_format.lock().unwrap().clone();
+        assert_eq!(chosen.as_deref(), Some("zip"));
     }
 }
