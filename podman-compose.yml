@@ -29,8 +29,7 @@ services:
       "--unsafe-skip-checksum-check", "true",
       "--base-dir", "/app/data",
       "--privy-config", "/app/privy/config.toml",
-      "--ipfs-config", "/app/config_ipfs.toml",
-      "--no-color", "true"
+      "--ipfs-config", "/app/config_ipfs.toml"
     ]
     restart: unless-stopped
 
