@@ -238,11 +238,20 @@ impl IpfsPinningProvider for PinataClient {
             .await
             .context("DELETE /v3/files/public/pin_by_cid/{id} failed")?;
 
-        let status_code = res.error_for_status_ref().map(|_| ()).err();
+        let status = res.status();
         let text = res.text().await.context("reading response body")?;
 
-        if let Some(err) = status_code {
-            return Err(anyhow::anyhow!("{}: {}", err, text));
+        // If the pin doesn't exist (404), that's actually success - the desired end state
+        if status == 404 {
+            warn!(
+                "Pin not found by request id {request_id} ({text}), treating as successful deletion",
+            );
+            return Ok(());
+        }
+
+        // For all other error status codes, return an error
+        if !status.is_success() {
+            return Err(anyhow::anyhow!("HTTP {}: {}", status, text));
         }
 
         Ok(())
@@ -718,9 +727,9 @@ mod tests {
 
         let client = PinataClient::new(server.uri(), "test-token".to_string());
 
+        // 404 should be treated as success since the desired end state is "pin doesn't exist"
         let result = client.delete_pin("non-existent-id").await;
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("404"));
+        assert!(result.is_ok());
     }
 
     #[tokio::test]
