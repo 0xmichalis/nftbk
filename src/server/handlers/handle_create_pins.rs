@@ -216,7 +216,7 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
         format!("/v1/backups/{task_id}").parse().unwrap(),
     );
     (
-        StatusCode::CREATED,
+        StatusCode::ACCEPTED,
         headers,
         Json(BackupResponse { task_id }),
     )
@@ -228,7 +228,7 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
     path = "/v1/pins",
     request_body = PinRequest,
     responses(
-        (status = 201, description = "Pin task created successfully", body = BackupResponse),
+        (status = 202, description = "Pin task accepted and queued", body = BackupResponse),
         (status = 200, description = "Pin task already exists or in progress", body = BackupResponse),
         (status = 400, description = "Invalid request", body = serde_json::Value),
         (status = 409, description = "Task exists in error/expired state", body = serde_json::Value),
@@ -301,7 +301,7 @@ mod handle_create_pins_tests {
     }
 
     #[tokio::test]
-    async fn returns_201_and_enqueues_on_new_pin_task() {
+    async fn returns_202_and_enqueues_on_new_pin_task() {
         let db = MockDb::default();
         let (tx, mut rx) = mpsc::channel(1);
         let req = PinRequest {
@@ -315,7 +315,7 @@ mod handle_create_pins_tests {
             .await
             .into_response();
 
-        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
         // Assert Location header equals the URL derived from response body task_id
         let location = resp
             .headers()

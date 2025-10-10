@@ -46,7 +46,7 @@ fn validate_backup_request_impl(
     path = "/v1/backups",
     request_body = BackupRequest,
     responses(
-        (status = 201, description = "Backup task created successfully", body = BackupResponse),
+        (status = 202, description = "Backup task accepted and queued", body = BackupResponse),
         (status = 200, description = "Backup already exists or in progress", body = BackupResponse),
         (status = 400, description = "Invalid request", body = serde_json::Value),
         (status = 409, description = "Backup exists in error/expired state", body = serde_json::Value),
@@ -260,7 +260,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         format!("/v1/backups/{task_id}").parse().unwrap(),
     );
     (
-        StatusCode::CREATED,
+        StatusCode::ACCEPTED,
         headers,
         Json(BackupResponse { task_id }),
     )
@@ -482,7 +482,7 @@ mod handle_backup_core_mockdb_tests {
     }
 
     #[tokio::test]
-    async fn returns_201_and_enqueues_on_new_task() {
+    async fn returns_202_and_enqueues_on_new_task() {
         let db = MockDb::default();
         let (tx, mut rx) = mpsc::channel(1);
         let req = BackupRequest {
@@ -496,7 +496,7 @@ mod handle_backup_core_mockdb_tests {
         let resp = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
             .await
             .into_response();
-        assert_eq!(resp.status(), StatusCode::CREATED);
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
         // Assert Location header points to the created backup resource
         let location = resp
             .headers()
