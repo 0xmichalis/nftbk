@@ -208,8 +208,19 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
             .into_response();
     }
 
-    info!("Created IPFS pin task: {task_id} for {} tokens", nft_count);
-    (StatusCode::CREATED, Json(BackupResponse { task_id })).into_response()
+    info!("Created protection job: {task_id} for {} tokens", nft_count);
+    // Canonical Location is the task; clients can derive pin filters
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::LOCATION,
+        format!("/v1/backups/{task_id}").parse().unwrap(),
+    );
+    (
+        StatusCode::CREATED,
+        headers,
+        Json(BackupResponse { task_id }),
+    )
+        .into_response()
 }
 
 #[utoipa::path(
@@ -245,6 +256,7 @@ pub async fn handle_create_pins(
 #[cfg(test)]
 mod handle_create_pins_tests {
     use super::*;
+    use axum::body::to_bytes;
     use axum::response::IntoResponse;
     use tokio::sync::mpsc;
 
@@ -304,6 +316,18 @@ mod handle_create_pins_tests {
             .into_response();
 
         assert_eq!(resp.status(), StatusCode::CREATED);
+        // Assert Location header equals the URL derived from response body task_id
+        let location = resp
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let task_id = v.get("task_id").and_then(|t| t.as_str()).unwrap();
+        assert_eq!(location, format!("/v1/backups/{task_id}"));
 
         // Ensure job enqueued
         let msg = rx.try_recv();

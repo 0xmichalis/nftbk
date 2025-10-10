@@ -254,7 +254,17 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         nft_count,
         archive_format
     );
-    (StatusCode::CREATED, Json(BackupResponse { task_id })).into_response()
+    let mut headers = axum::http::HeaderMap::new();
+    headers.insert(
+        axum::http::header::LOCATION,
+        format!("/v1/backups/{task_id}").parse().unwrap(),
+    );
+    (
+        StatusCode::CREATED,
+        headers,
+        Json(BackupResponse { task_id }),
+    )
+        .into_response()
 }
 
 #[cfg(test)]
@@ -431,6 +441,7 @@ mod handle_backup_endpoint_tests {
 mod handle_backup_core_mockdb_tests {
     use super::BackupDb;
     use crate::server::api::{BackupRequest, Tokens};
+    use axum::body::to_bytes;
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
     use tokio::sync::mpsc;
@@ -486,6 +497,18 @@ mod handle_backup_core_mockdb_tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::CREATED);
+        // Assert Location header points to the created backup resource
+        let location = resp
+            .headers()
+            .get(axum::http::header::LOCATION)
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let task_id = v.get("task_id").and_then(|t| t.as_str()).unwrap();
+        assert_eq!(location, format!("/v1/backups/{task_id}"));
         // Ensure job enqueued
         let msg = rx.try_recv();
         assert!(msg.is_ok());
