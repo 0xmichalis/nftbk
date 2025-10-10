@@ -347,12 +347,23 @@ impl Db {
         }))
     }
 
-    pub async fn list_requestor_protection_jobs(
+    pub async fn list_requestor_protection_jobs_paginated(
         &self,
         requestor: &str,
         include_tokens: bool,
-    ) -> Result<Vec<ProtectionJobWithBackup>, sqlx::Error> {
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<ProtectionJobWithBackup>, u32), sqlx::Error> {
         let tokens_field = if include_tokens { "pj.tokens," } else { "" };
+
+        // Total count
+        let total_row = sqlx::query!(
+            r#"SELECT COUNT(*) as count FROM protection_jobs pj WHERE pj.requestor = $1"#,
+            requestor
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let total: u32 = (total_row.count.unwrap_or(0) as i64).max(0) as u32;
 
         let query = format!(
             r#"
@@ -364,11 +375,14 @@ impl Db {
             LEFT JOIN backup_requests br ON pj.task_id = br.task_id
             WHERE pj.requestor = $1
             ORDER BY pj.created_at DESC
+            LIMIT $2 OFFSET $3
             "#,
         );
 
         let rows = sqlx::query(&query)
             .bind(requestor)
+            .bind(limit)
+            .bind(offset)
             .fetch_all(&self.pool)
             .await?;
 
@@ -399,7 +413,7 @@ impl Db {
             })
             .collect();
 
-        Ok(recs)
+        Ok((recs, total))
     }
 
     pub async fn list_unprocessed_expired_backups(
