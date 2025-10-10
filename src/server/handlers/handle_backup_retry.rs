@@ -11,6 +11,7 @@ use crate::server::api::{ApiProblem, BackupRequest, ProblemJson};
 use crate::server::AppState;
 use crate::server::BackupJob;
 use crate::server::BackupJobOrShutdown;
+use crate::server::JobType;
 use crate::server::Tokens;
 use tracing::{error, info};
 
@@ -171,7 +172,7 @@ async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
         requestor: requestor.clone(),
     };
     if let Err(e) = backup_job_sender
-        .send(BackupJobOrShutdown::Job(backup_job))
+        .send(BackupJobOrShutdown::Job(JobType::Creation(backup_job)))
         .await
     {
         error!("Failed to enqueue backup job: {}", e);
@@ -267,6 +268,7 @@ mod handle_backup_retry_core_tests {
             storage_mode: "filesystem".to_string(),
             archive_format: Some("zip".to_string()),
             expires_at: None,
+            deleted_at: None,
         }
     }
 

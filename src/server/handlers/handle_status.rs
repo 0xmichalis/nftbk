@@ -135,6 +135,7 @@ mod handle_status_core_tests {
             storage_mode: "filesystem".to_string(),
             archive_format: Some("zip".to_string()),
             expires_at: None,
+            deleted_at: None,
         }
     }
 

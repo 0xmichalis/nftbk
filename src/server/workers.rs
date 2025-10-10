@@ -3,7 +3,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::info;
 
-use crate::server::{run_backup_job, AppState, BackupJobOrShutdown};
+use crate::server::{run_backup_job, run_deletion_job, AppState, BackupJobOrShutdown, JobType};
 
 pub fn spawn_backup_workers(
     parallelism: usize,
@@ -23,9 +23,14 @@ pub fn spawn_backup_workers(
                     rx.recv().await
                 };
                 match job {
-                    Some(BackupJobOrShutdown::Job(job)) => {
-                        run_backup_job(state_clone.clone(), job).await;
-                    }
+                    Some(BackupJobOrShutdown::Job(job_type)) => match job_type {
+                        JobType::Creation(backup_job) => {
+                            run_backup_job(state_clone.clone(), backup_job).await;
+                        }
+                        JobType::Deletion(deletion_job) => {
+                            run_deletion_job(state_clone.clone(), deletion_job).await;
+                        }
+                    },
                     Some(BackupJobOrShutdown::Shutdown) | None => break,
                 }
             }

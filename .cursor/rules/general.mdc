@@ -48,3 +48,4 @@ The best way to ensure that is to run `make all`.
 ## Testing
 
 - When adding unit tests for a function, create a test module dedicates to that function named `mod <function_name>_tests`
+- In unit tests avoid trying to connect to real or dummy databases. Instead write production code that uses traits to mock database connectors. For blockchain APIs, IPFS APIs, or any other external APIs, use `wiremock` to mock them.

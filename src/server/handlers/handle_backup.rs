@@ -11,7 +11,7 @@ use crate::server::api::{ApiProblem, BackupRequest, BackupResponse, ProblemJson}
 use crate::server::archive::negotiate_archive_format;
 use crate::server::db::Db;
 use crate::server::hashing::compute_task_id;
-use crate::server::{AppState, BackupJob, BackupJobOrShutdown, StorageMode};
+use crate::server::{AppState, BackupJob, BackupJobOrShutdown, JobType, StorageMode};
 
 fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), String> {
     validate_backup_request_impl(&state.chain_config, state.ipfs_providers.len(), req)
@@ -156,7 +156,20 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
     req: BackupRequest,
     pruner_retention_days: u64,
 ) -> axum::response::Response {
-    let task_id = compute_task_id(&req.tokens, requestor.as_deref());
+    // Validate that requestor is present
+    let requestor_str = match &requestor {
+        Some(s) if !s.is_empty() => s.clone(),
+        _ => {
+            let problem = ProblemJson::from_status(
+                StatusCode::BAD_REQUEST,
+                Some("Requestor required".to_string()),
+                Some("/v1/backups".to_string()),
+            );
+            return problem.into_response();
+        }
+    };
+
+    let task_id = compute_task_id(&req.tokens, Some(&requestor_str));
 
     if let Ok(Some(status)) = db.get_backup_status(&task_id).await {
         match status.as_str() {
@@ -218,7 +231,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
     if let Err(e) = db
         .insert_protection_job(
             &task_id,
-            requestor.as_deref().unwrap_or(""),
+            &requestor_str,
             nft_count,
             &tokens_json,
             storage_mode.as_str(),
@@ -241,10 +254,10 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         force: false,
         storage_mode,
         archive_format: Some(archive_format.clone()),
-        requestor: requestor.clone(),
+        requestor: Some(requestor_str.clone()),
     };
     if let Err(e) = backup_job_sender
-        .send(BackupJobOrShutdown::Job(backup_job))
+        .send(BackupJobOrShutdown::Job(JobType::Creation(backup_job)))
         .await
     {
         error!("Failed to enqueue backup job: {}", e);
@@ -495,9 +508,9 @@ mod handle_backup_core_tests {
     }
 
     #[tokio::test]
-    async fn returns_202_and_enqueues_on_new_task() {
+    async fn returns_400_when_missing_requestor() {
         let db = MockDb::default();
-        let (tx, mut rx) = mpsc::channel(1);
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let req = BackupRequest {
             tokens: vec![Tokens {
                 chain: "ethereum".to_string(),
@@ -509,6 +522,25 @@ mod handle_backup_core_tests {
         let resp = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
             .await
             .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn returns_202_and_enqueues_on_new_task() {
+        let db = MockDb::default();
+        let (tx, mut rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+        };
+        let headers = HeaderMap::new();
+        let resp =
+            super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
+                .await
+                .into_response();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
         // Assert Location header points to the created backup resource
         let location = resp
@@ -543,9 +575,10 @@ mod handle_backup_core_tests {
             pin_on_ipfs: false,
         };
         let headers = HeaderMap::new();
-        let resp = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
-            .await
-            .into_response();
+        let resp =
+            super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
+                .await
+                .into_response();
         assert_eq!(resp.status(), StatusCode::OK);
     }
 
@@ -562,7 +595,7 @@ mod handle_backup_core_tests {
         };
         let mut headers = HeaderMap::new();
         headers.insert("accept", "application/zip".parse().unwrap());
-        let _ = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+        let _ = super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
             .await
             .into_response();
         let chosen = db.last_archive_format.lock().unwrap().clone();
@@ -582,7 +615,7 @@ mod handle_backup_core_tests {
         };
         let mut headers = HeaderMap::new();
         headers.insert("accept", "application/gzip".parse().unwrap());
-        let _ = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+        let _ = super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
             .await
             .into_response();
         let chosen = db.last_archive_format.lock().unwrap().clone();
@@ -602,7 +635,7 @@ mod handle_backup_core_tests {
         };
         let mut headers = HeaderMap::new();
         headers.insert("accept", "application/json".parse().unwrap());
-        let _ = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+        let _ = super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
             .await
             .into_response();
         let chosen = db.last_archive_format.lock().unwrap().clone();
@@ -622,7 +655,7 @@ mod handle_backup_core_tests {
         };
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "Linux".parse().unwrap());
-        let _ = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+        let _ = super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
             .await
             .into_response();
         let chosen = db.last_archive_format.lock().unwrap().clone();
@@ -643,7 +676,7 @@ mod handle_backup_core_tests {
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "Linux TarPreferred".parse().unwrap());
         headers.insert("accept", "application/zip".parse().unwrap());
-        let _ = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
+        let _ = super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
             .await
             .into_response();
         let chosen = db.last_archive_format.lock().unwrap().clone();

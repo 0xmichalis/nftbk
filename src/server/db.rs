@@ -51,6 +51,8 @@ pub struct ProtectionJobWithBackup {
     pub archive_format: Option<String>,
     /// When the backup expires (if applicable)
     pub expires_at: Option<DateTime<Utc>>,
+    /// When deletion was started (if applicable)
+    pub deleted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -312,6 +314,16 @@ impl Db {
         Ok(())
     }
 
+    pub async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE protection_jobs SET status = 'in_progress', deleted_at = NOW(), updated_at = NOW() WHERE task_id = $1"#,
+            task_id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn get_protection_job(
         &self,
         task_id: &str,
@@ -321,7 +333,7 @@ impl Db {
             SELECT 
                 pj.task_id, pj.created_at, pj.updated_at, pj.requestor, pj.nft_count, 
                 pj.tokens, pj.status, pj.error_log, pj.fatal_error, pj.storage_mode,
-                br.archive_format, br.expires_at
+                pj.deleted_at, br.archive_format, br.expires_at
             FROM protection_jobs pj
             LEFT JOIN backup_requests br ON pj.task_id = br.task_id
             WHERE pj.task_id = $1
@@ -344,6 +356,7 @@ impl Db {
             storage_mode: row.get("storage_mode"),
             archive_format: row.get("archive_format"),
             expires_at: row.get("expires_at"),
+            deleted_at: row.get("deleted_at"),
         }))
     }
 
@@ -370,7 +383,7 @@ impl Db {
             SELECT 
                 pj.task_id, pj.created_at, pj.updated_at, pj.requestor, pj.nft_count, 
                 {tokens_field} pj.status, pj.error_log, pj.fatal_error, pj.storage_mode,
-                br.archive_format, br.expires_at
+                pj.deleted_at, br.archive_format, br.expires_at
             FROM protection_jobs pj
             LEFT JOIN backup_requests br ON pj.task_id = br.task_id
             WHERE pj.requestor = $1
@@ -409,6 +422,7 @@ impl Db {
                     storage_mode: row.get("storage_mode"),
                     archive_format: row.get("archive_format"),
                     expires_at: row.get("expires_at"),
+                    deleted_at: row.get("deleted_at"),
                 }
             })
             .collect();
@@ -453,7 +467,7 @@ impl Db {
             SELECT 
                 pj.task_id, pj.created_at, pj.updated_at, pj.requestor, pj.nft_count, 
                 pj.tokens, pj.status, pj.error_log, pj.fatal_error, pj.storage_mode,
-                br.archive_format, br.expires_at
+                pj.deleted_at, br.archive_format, br.expires_at
             FROM protection_jobs pj
             LEFT JOIN backup_requests br ON pj.task_id = br.task_id
             WHERE pj.status = 'in_progress'
@@ -478,6 +492,7 @@ impl Db {
                 storage_mode: row.get("storage_mode"),
                 archive_format: row.get("archive_format"),
                 expires_at: row.get("expires_at"),
+                deleted_at: row.get("deleted_at"),
             })
             .collect();
 

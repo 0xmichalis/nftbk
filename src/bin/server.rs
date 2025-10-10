@@ -198,7 +198,7 @@ async fn main() {
         spawn_backup_workers(args.backup_parallelism, backup_job_receiver, state.clone());
 
     // Recover incomplete backup jobs from previous server runs
-    match recover_incomplete_jobs(&state).await {
+    match recover_incomplete_jobs(&state.db, &state.backup_job_sender).await {
         Ok(count) => {
             if count > 0 {
                 info!("Successfully recovered {} incomplete backup jobs", count);

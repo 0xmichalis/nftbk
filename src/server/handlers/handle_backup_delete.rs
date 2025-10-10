@@ -7,11 +7,12 @@ use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::archive::get_zipped_backup_paths;
-use crate::server::AppState;
+use crate::server::{AppState, BackupJobOrShutdown, DeletionJob, JobType};
 
-/// Delete a backup job for the authenticated user. This will delete the backup archive files
-/// (if the backup used filesystem storage), unpin any IPFS content (if the backup used IPFS storage),
-/// and remove the metadata from the database.
+/// Delete a backup job for the authenticated user. This will queue a deletion job that will
+/// delete the backup archive files (if the backup used filesystem storage), unpin any IPFS content
+/// (if the backup used IPFS storage), and remove the metadata from the database.
+/// The deletion is processed asynchronously by workers.
 #[utoipa::path(
     delete,
     path = "/v1/backups/{task_id}",
@@ -19,7 +20,7 @@ use crate::server::AppState;
         ("task_id" = String, Path, description = "Unique identifier for the backup task")
     ),
     responses(
-        (status = 204, description = "Backup deleted successfully"),
+        (status = 202, description = "Backup deletion job queued successfully"),
         (status = 400, description = "Bad request", body = ApiProblem, content_type = "application/problem+json"),
         (status = 403, description = "Requestor does not match task owner", body = ApiProblem, content_type = "application/problem+json"),
         (status = 404, description = "Task not found", body = ApiProblem, content_type = "application/problem+json"),
@@ -34,14 +35,7 @@ pub async fn handle_backup_delete(
     Path(task_id): Path<String>,
     Extension(requestor): Extension<Option<String>>,
 ) -> impl IntoResponse {
-    handle_backup_delete_core(
-        &*state.db,
-        &state.base_dir,
-        &task_id,
-        requestor,
-        &state.ipfs_provider_instances,
-    )
-    .await
+    handle_backup_delete_core(&*state.db, &state.backup_job_sender, &task_id, requestor).await
 }
 
 // Minimal trait to mock DB calls
@@ -118,9 +112,50 @@ impl DeleteDb for crate::server::db::Db {
     }
 }
 
+impl DeleteDb for std::sync::Arc<crate::server::db::Db> {
+    fn get_protection_job<'a>(
+        &'a self,
+        task_id: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        Option<crate::server::db::ProtectionJobWithBackup>,
+                        sqlx::Error,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { crate::server::db::Db::get_protection_job(self, task_id).await })
+    }
+    fn delete_protection_job<'a>(
+        &'a self,
+        task_id: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
+    {
+        Box::pin(async move { crate::server::db::Db::delete_protection_job(self, task_id).await })
+    }
+    fn get_pin_requests_by_task_id<'a>(
+        &'a self,
+        task_id: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<Vec<crate::server::db::PinRequestRow>, sqlx::Error>,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(
+            async move { crate::server::db::Db::get_pin_requests_by_task_id(self, task_id).await },
+        )
+    }
+}
+
 /// Delete filesystem files and directories for a given task
 /// Returns true if any files were deleted, false if none existed
-async fn delete_dir_and_archive_for_task(
+pub async fn delete_dir_and_archive_for_task(
     base_dir: &str,
     task_id: &str,
     archive_format: Option<&str>,
@@ -161,7 +196,7 @@ async fn delete_dir_and_archive_for_task(
 
 /// Delete IPFS pins for a given task ID
 /// Returns true if any pins were deleted, false if none existed
-async fn delete_ipfs_pins_for_task<DB: DeleteDb + ?Sized>(
+pub async fn delete_ipfs_pins_for_task<DB: DeleteDb + ?Sized>(
     db: &DB,
     task_id: &str,
     ipfs_providers: &[Box<dyn crate::ipfs::IpfsPinningProvider>],
@@ -208,10 +243,9 @@ async fn delete_ipfs_pins_for_task<DB: DeleteDb + ?Sized>(
 
 async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
     db: &DB,
-    base_dir: &str,
+    backup_job_sender: &tokio::sync::mpsc::Sender<BackupJobOrShutdown>,
     task_id: &str,
     requestor: Option<String>,
-    ipfs_providers: &[Box<dyn crate::ipfs::IpfsPinningProvider>],
 ) -> axum::response::Response {
     let requestor_str = match requestor {
         Some(s) if !s.is_empty() => s,
@@ -225,6 +259,7 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
         }
     };
 
+    // Check if the task exists and get its metadata
     let meta = match db.get_protection_job(task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
@@ -244,6 +279,8 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
             return problem.into_response();
         }
     };
+
+    // Verify requestor matches task owner
     if meta.requestor != requestor_str {
         let problem = ProblemJson::from_status(
             StatusCode::FORBIDDEN,
@@ -252,6 +289,8 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
         );
         return problem.into_response();
     }
+
+    // Check if task is in progress
     if meta.status == "in_progress" {
         let problem = ProblemJson::from_status(
             StatusCode::CONFLICT,
@@ -261,57 +300,27 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
         return problem.into_response();
     }
 
-    // Handle filesystem cleanup if this backup used filesystem storage
-    if meta.storage_mode == "filesystem" || meta.storage_mode == "both" {
-        match delete_dir_and_archive_for_task(base_dir, task_id, meta.archive_format.as_deref())
-            .await
-        {
-            Ok(_) => {
-                // Filesystem cleanup completed (whether files existed or not)
-            }
-            Err(e) => {
-                error!("Filesystem deletion failed for task {}: {}", task_id, e);
-                let problem = ProblemJson::from_status(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Some(format!("Failed to delete filesystem files: {}", e)),
-                    Some(format!("/v1/backups/{}", task_id)),
-                );
-                return problem.into_response();
-            }
-        }
-    }
+    // Create deletion job and queue it
+    let deletion_job = DeletionJob {
+        task_id: task_id.to_string(),
+        requestor: Some(requestor_str),
+    };
 
-    // Handle IPFS pin deletion if this backup used IPFS storage
-    if meta.storage_mode == "ipfs" || meta.storage_mode == "both" {
-        match delete_ipfs_pins_for_task(db, task_id, ipfs_providers).await {
-            Ok(_) => {
-                // IPFS pin cleanup completed (whether pins existed or not)
-            }
-            Err(e) => {
-                error!("IPFS pin deletion failed for task {}: {}", task_id, e);
-                let problem = ProblemJson::from_status(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Some(format!("Failed to delete IPFS pins: {}", e)),
-                    Some(format!("/v1/backups/{}", task_id)),
-                );
-                return problem.into_response();
-            }
-        }
-    }
-
-    // Delete the protection job metadata
-    if let Err(e) = db.delete_protection_job(task_id).await {
-        error!("Database deletion failed for task {}: {}", task_id, e);
+    if let Err(e) = backup_job_sender
+        .send(BackupJobOrShutdown::Job(JobType::Deletion(deletion_job)))
+        .await
+    {
+        error!("Failed to enqueue deletion job for task {}: {}", task_id, e);
         let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Some(format!("Failed to delete metadata from database: {}", e)),
+            Some("Failed to enqueue deletion job".to_string()),
             Some(format!("/v1/backups/{}", task_id)),
         );
         return problem.into_response();
     }
 
-    info!("Deleted backup {}", task_id);
-    (StatusCode::NO_CONTENT, ()).into_response()
+    info!("Queued deletion job for backup {}", task_id);
+    (StatusCode::ACCEPTED, ()).into_response()
 }
 
 #[cfg(test)]
@@ -406,25 +415,15 @@ mod handle_backup_delete_core_tests {
                 None
             },
             expires_at: None,
-        }
-    }
-
-    fn sample_pin_request(provider: &str) -> crate::server::db::PinRequestRow {
-        crate::server::db::PinRequestRow {
-            id: 1,
-            task_id: "t1".to_string(),
-            provider: provider.to_string(),
-            cid: "QmTest123".to_string(),
-            request_id: "req_123".to_string(),
-            status: "pinned".to_string(),
-            requestor: "did:me".to_string(),
+            deleted_at: None,
         }
     }
 
     #[tokio::test]
     async fn returns_400_when_missing_requestor() {
         let db = MockDb::default();
-        let resp = handle_backup_delete_core(&db, "/tmp", "t1", None, &[])
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let resp = handle_backup_delete_core(&db, &tx, "t1", None)
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -438,7 +437,8 @@ mod handle_backup_delete_core_tests {
             delete_error: false,
             pin_requests: Vec::new(),
         };
-        let resp = handle_backup_delete_core(&db, "/tmp", "t1", Some("did:me".to_string()), &[])
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let resp = handle_backup_delete_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -452,7 +452,8 @@ mod handle_backup_delete_core_tests {
             delete_error: false,
             pin_requests: Vec::new(),
         };
-        let resp = handle_backup_delete_core(&db, "/tmp", "t1", Some("did:me".to_string()), &[])
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let resp = handle_backup_delete_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -466,7 +467,8 @@ mod handle_backup_delete_core_tests {
             delete_error: false,
             pin_requests: Vec::new(),
         };
-        let resp = handle_backup_delete_core(&db, "/tmp", "t1", Some("did:me".to_string()), &[])
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let resp = handle_backup_delete_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -480,263 +482,29 @@ mod handle_backup_delete_core_tests {
             delete_error: false,
             pin_requests: Vec::new(),
         };
-        let resp = handle_backup_delete_core(&db, "/tmp", "t1", Some("did:me".to_string()), &[])
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let resp = handle_backup_delete_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
-    async fn returns_204_on_success_and_deletes_files() {
-        let base = format!(
-            "{}/nftbk-test-{}",
-            std::env::temp_dir().display(),
-            uuid::Uuid::new_v4()
-        );
-        let task_id = "t1".to_string();
-        tokio::fs::create_dir_all(format!("{}/nftbk-{}", base, task_id))
-            .await
-            .unwrap();
+    async fn returns_202_on_success_and_queues_deletion() {
         let db = MockDb {
             meta: Some(sample_meta("did:me", "done", "filesystem")),
             get_error: false,
             delete_error: false,
             pin_requests: Vec::new(),
         };
-        let resp = handle_backup_delete_core(&db, &base, &task_id, Some("did:me".to_string()), &[])
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let resp = handle_backup_delete_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
             .into_response();
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-    }
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
 
-    // Storage mode specific tests
-    #[tokio::test]
-    async fn filesystem_only_mode_deletes_files_but_not_ipfs() {
-        use wiremock::matchers::{method, path_regex};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let base = format!(
-            "{}/nftbk-test-{}",
-            std::env::temp_dir().display(),
-            uuid::Uuid::new_v4()
-        );
-        let task_id = "t1".to_string();
-
-        // Create test files and directory
-        tokio::fs::create_dir_all(format!("{}/nftbk-{}", base, task_id))
-            .await
-            .unwrap();
-        tokio::fs::write(format!("{}/nftbk-{}.zip", base, task_id), "test archive")
-            .await
-            .unwrap();
-        tokio::fs::write(
-            format!("{}/nftbk-{}.zip.sha256", base, task_id),
-            "test checksum",
-        )
-        .await
-        .unwrap();
-
-        // Start WireMock server
-        let mock_server = MockServer::start().await;
-
-        // Set up mock for IPFS unpin endpoint (should NOT be called for filesystem mode)
-        Mock::given(method("DELETE"))
-            .and(path_regex(r"/v3/files/public/pin_by_cid/.*"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"message": "unpinned"})))
-            .expect(0) // Expect 0 calls for filesystem mode
-            .mount(&mock_server)
-            .await;
-
-        let db = MockDb {
-            meta: Some(sample_meta("did:me", "done", "filesystem")),
-            get_error: false,
-            delete_error: false,
-            pin_requests: vec![sample_pin_request("pinata")], // Should not be processed
-        };
-
-        // Create IPFS provider instance pointing to our mock server
-        let mock_provider_config = crate::ipfs::IpfsProviderConfig::Pinata {
-            base_url: mock_server.uri(),
-            bearer_token: Some("test_token".to_string()),
-            bearer_token_env: None,
-        };
-        let mock_provider = mock_provider_config.create_provider().unwrap();
-        let mock_providers = vec![mock_provider];
-
-        let resp = handle_backup_delete_core(
-            &db,
-            &base,
-            &task_id,
-            Some("did:me".to_string()),
-            &mock_providers,
-        )
-        .await
-        .into_response();
-
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-        // Verify files were deleted
-        assert!(
-            tokio::fs::metadata(format!("{}/nftbk-{}.zip", base, task_id))
-                .await
-                .is_err()
-        );
-        assert!(
-            tokio::fs::metadata(format!("{}/nftbk-{}.zip.sha256", base, task_id))
-                .await
-                .is_err()
-        );
-        assert!(tokio::fs::metadata(format!("{}/nftbk-{}", base, task_id))
-            .await
-            .is_err());
-
-        // WireMock will automatically verify that no unpin requests were made
-    }
-
-    #[tokio::test]
-    async fn ipfs_only_mode_does_not_delete_files() {
-        use wiremock::matchers::{method, path_regex};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let base = format!(
-            "{}/nftbk-test-{}",
-            std::env::temp_dir().display(),
-            uuid::Uuid::new_v4()
-        );
-        let task_id = "t1".to_string();
-
-        // Create test files and directory (these should remain)
-        tokio::fs::create_dir_all(format!("{}/nftbk-{}", base, task_id))
-            .await
-            .unwrap();
-        tokio::fs::write(format!("{}/nftbk-{}.zip", base, task_id), "test archive")
-            .await
-            .unwrap();
-
-        // Start WireMock server
-        let mock_server = MockServer::start().await;
-
-        // Set up mock for IPFS unpin endpoint (should be called for ipfs mode)
-        Mock::given(method("DELETE"))
-            .and(path_regex(r"/v3/files/public/pin_by_cid/.*"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"message": "unpinned"})))
-            .expect(1) // Expect 1 call for ipfs mode
-            .mount(&mock_server)
-            .await;
-
-        let db = MockDb {
-            meta: Some(sample_meta("did:me", "done", "ipfs")),
-            get_error: false,
-            delete_error: false,
-            pin_requests: vec![sample_pin_request("pinata")], // Should be processed
-        };
-
-        // Create IPFS provider instance pointing to our mock server
-        let mock_provider_config = crate::ipfs::IpfsProviderConfig::Pinata {
-            base_url: mock_server.uri(),
-            bearer_token: Some("test_token".to_string()),
-            bearer_token_env: None,
-        };
-        let mock_provider = mock_provider_config.create_provider().unwrap();
-        let mock_providers = vec![mock_provider];
-
-        let resp = handle_backup_delete_core(
-            &db,
-            &base,
-            &task_id,
-            Some("did:me".to_string()),
-            &mock_providers,
-        )
-        .await
-        .into_response();
-
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-        // Verify files were NOT deleted (since storage_mode is ipfs only)
-        assert!(
-            tokio::fs::metadata(format!("{}/nftbk-{}.zip", base, task_id))
-                .await
-                .is_ok()
-        );
-        assert!(tokio::fs::metadata(format!("{}/nftbk-{}", base, task_id))
-            .await
-            .is_ok());
-
-        // WireMock will automatically verify that 1 unpin request was made
-    }
-
-    #[tokio::test]
-    async fn both_mode_deletes_files_and_processes_ipfs() {
-        use wiremock::matchers::{method, path_regex};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let base = format!(
-            "{}/nftbk-test-{}",
-            std::env::temp_dir().display(),
-            uuid::Uuid::new_v4()
-        );
-        let task_id = "t1".to_string();
-
-        // Create test files and directory
-        tokio::fs::create_dir_all(format!("{}/nftbk-{}", base, task_id))
-            .await
-            .unwrap();
-        tokio::fs::write(format!("{}/nftbk-{}.zip", base, task_id), "test archive")
-            .await
-            .unwrap();
-
-        // Start WireMock server
-        let mock_server = MockServer::start().await;
-
-        // Set up mock for IPFS unpin endpoint (should be called for both mode)
-        Mock::given(method("DELETE"))
-            .and(path_regex(r"/v3/files/public/pin_by_cid/.*"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"message": "unpinned"})))
-            .expect(2) // Expect 2 calls for both mode (2 pin requests)
-            .mount(&mock_server)
-            .await;
-
-        let db = MockDb {
-            meta: Some(sample_meta("did:me", "done", "both")),
-            get_error: false,
-            delete_error: false,
-            pin_requests: vec![
-                sample_pin_request("pinata"),
-                sample_pin_request("pinata"), // Two pin requests to test multiple unpins
-            ],
-        };
-
-        // Create IPFS provider instance pointing to our mock server
-        let mock_provider_config = crate::ipfs::IpfsProviderConfig::Pinata {
-            base_url: mock_server.uri(),
-            bearer_token: Some("test_token".to_string()),
-            bearer_token_env: None,
-        };
-        let mock_provider = mock_provider_config.create_provider().unwrap();
-        let mock_providers = vec![mock_provider];
-
-        let resp = handle_backup_delete_core(
-            &db,
-            &base,
-            &task_id,
-            Some("did:me".to_string()),
-            &mock_providers,
-        )
-        .await
-        .into_response();
-
-        assert_eq!(resp.status(), StatusCode::NO_CONTENT);
-
-        // Verify files were deleted (since storage_mode includes filesystem)
-        assert!(
-            tokio::fs::metadata(format!("{}/nftbk-{}.zip", base, task_id))
-                .await
-                .is_err()
-        );
-        assert!(tokio::fs::metadata(format!("{}/nftbk-{}", base, task_id))
-            .await
-            .is_err());
-
-        // WireMock will automatically verify that 2 unpin requests were made
+        // Verify that a deletion job was queued
+        let job = rx.try_recv();
+        assert!(job.is_ok());
     }
 }

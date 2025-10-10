@@ -283,6 +283,7 @@ mod handle_backups_core_mockdb_tests {
                 storage_mode: "filesystem".to_string(),
                 archive_format: Some("zip".to_string()),
                 expires_at: None,
+                deleted_at: None,
             });
         }
         let db = MockDb {

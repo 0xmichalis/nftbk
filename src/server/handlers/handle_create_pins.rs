@@ -12,7 +12,7 @@ use utoipa::ToSchema;
 use crate::server::api::{ApiProblem, BackupResponse, ProblemJson, Tokens};
 use crate::server::db::Db;
 use crate::server::hashing::compute_task_id;
-use crate::server::{AppState, BackupJob, BackupJobOrShutdown, StorageMode};
+use crate::server::{AppState, BackupJob, BackupJobOrShutdown, JobType, StorageMode};
 
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct PinRequest {
@@ -115,12 +115,25 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
     requestor: Option<String>,
     req: PinRequest,
 ) -> axum::response::Response {
+    // Validate that requestor is present
+    let requestor_str = match &requestor {
+        Some(s) if !s.is_empty() => s.clone(),
+        _ => {
+            let problem = ProblemJson::from_status(
+                StatusCode::BAD_REQUEST,
+                Some("Requestor required".to_string()),
+                Some("/v1/backups/pins".to_string()),
+            );
+            return problem.into_response();
+        }
+    };
+
     // Convert PinRequest to BackupRequest format for task_id computation
     let backup_req_for_hash = crate::server::api::BackupRequest {
         tokens: req.tokens.clone(),
         pin_on_ipfs: true, // Always true for this endpoint
     };
-    let task_id = compute_task_id(&backup_req_for_hash.tokens, requestor.as_deref());
+    let task_id = compute_task_id(&backup_req_for_hash.tokens, Some(&requestor_str));
 
     // Check if task already exists
     if let Ok(Some(status)) = db.get_backup_status(&task_id).await {
@@ -170,7 +183,7 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
     if let Err(e) = db
         .insert_protection_job(
             &task_id,
-            requestor.as_deref().unwrap_or(""),
+            &requestor_str,
             nft_count,
             &tokens_json,
             "ipfs",
@@ -198,7 +211,7 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
     };
 
     if let Err(e) = backup_job_sender
-        .send(BackupJobOrShutdown::Job(backup_job))
+        .send(BackupJobOrShutdown::Job(JobType::Creation(backup_job)))
         .await
     {
         error!("Failed to enqueue pin job: {}", e);
@@ -305,6 +318,22 @@ mod handle_create_pins_tests {
     }
 
     #[tokio::test]
+    async fn returns_400_when_missing_requestor() {
+        let db = MockDb::default();
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let req = PinRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+        };
+        let resp = handle_create_pins_core(&db, &tx, None, req)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
     async fn returns_202_and_enqueues_on_new_pin_task() {
         let db = MockDb::default();
         let (tx, mut rx) = mpsc::channel(1);
@@ -315,7 +344,7 @@ mod handle_create_pins_tests {
             }],
         };
 
-        let resp = handle_create_pins_core(&db, &tx, None, req)
+        let resp = handle_create_pins_core(&db, &tx, Some("did:test".to_string()), req)
             .await
             .into_response();
 
@@ -355,7 +384,7 @@ mod handle_create_pins_tests {
             }],
         };
 
-        let resp = handle_create_pins_core(&db, &tx, None, req)
+        let resp = handle_create_pins_core(&db, &tx, Some("did:test".to_string()), req)
             .await
             .into_response();
 
@@ -379,7 +408,7 @@ mod handle_create_pins_tests {
             }],
         };
 
-        let resp = handle_create_pins_core(&db, &tx, None, req)
+        let resp = handle_create_pins_core(&db, &tx, Some("did:test".to_string()), req)
             .await
             .into_response();
 
@@ -403,7 +432,7 @@ mod handle_create_pins_tests {
             }],
         };
 
-        let resp = handle_create_pins_core(&db, &tx, None, req)
+        let resp = handle_create_pins_core(&db, &tx, Some("did:test".to_string()), req)
             .await
             .into_response();
 
@@ -427,7 +456,7 @@ mod handle_create_pins_tests {
             }],
         };
 
-        let resp = handle_create_pins_core(&db, &tx, None, req)
+        let resp = handle_create_pins_core(&db, &tx, Some("did:test".to_string()), req)
             .await
             .into_response();
 

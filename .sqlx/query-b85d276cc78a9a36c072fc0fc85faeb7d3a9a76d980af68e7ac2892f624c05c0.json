@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE protection_jobs SET status = 'in_progress', deleted_at = NOW(), updated_at = NOW() WHERE task_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b85d276cc78a9a36c072fc0fc85faeb7d3a9a76d980af68e7ac2892f624c05c0"
+}
