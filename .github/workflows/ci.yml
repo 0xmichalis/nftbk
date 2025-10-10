@@ -77,6 +77,7 @@ jobs:
 
     - name: Upload coverage to Coveralls
       uses: coverallsapp/github-action@v2
+      continue-on-error: true
 
   docker-publish:
     name: Build and Push Docker Image
