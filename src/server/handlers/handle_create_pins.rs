@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use tracing::{debug, error, info};
 use utoipa::ToSchema;
 
-use crate::server::api::{BackupResponse, Tokens};
+use crate::server::api::{ApiProblem, BackupResponse, ProblemJson, Tokens};
 use crate::server::db::Db;
 use crate::server::hashing::compute_task_id;
 use crate::server::{AppState, BackupJob, BackupJobOrShutdown, StorageMode};
@@ -140,26 +140,26 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
                 return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
             }
             "error" | "expired" => {
-                return (
+                let problem = ProblemJson::from_status(
                     StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                        "error": format!("Pin task in status {status} cannot be (re)started from /v1/pins. Use the provided retry URL to re-run this task."),
-                        "retry_url":  format!("/v1/backups/{task_id}/retry"),
-                        "task_id": task_id
-                    })),
-                )
-                    .into_response();
+                    Some(format!(
+                        "Pin task in status {status} cannot be started. Use retry."
+                    )),
+                    Some(format!("/v1/backups/{task_id}")),
+                );
+                return problem.into_response();
             }
             other => {
                 error!(
                     "Unknown status '{}' for task {} when handling /pins",
                     other, task_id
                 );
-                return (
+                let problem = ProblemJson::from_status(
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": "Unknown task status"})),
-                )
-                    .into_response();
+                    Some("Unknown task status".to_string()),
+                    Some("/v1/pins".to_string()),
+                );
+                return problem.into_response();
             }
         }
     }
@@ -179,11 +179,12 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
         )
         .await
     {
-        return (
+        let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": format!("Failed to write metadata to DB: {}", e)})),
-        )
-            .into_response();
+            Some(format!("Failed to write metadata to DB: {}", e)),
+            Some(format!("/v1/backups/{}", task_id)),
+        );
+        return problem.into_response();
     }
 
     // Create backup job with IPFS-only storage mode
@@ -201,11 +202,12 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
         .await
     {
         error!("Failed to enqueue pin job: {}", e);
-        return (
+        let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": "Failed to enqueue pin job"})),
-        )
-            .into_response();
+            Some("Failed to enqueue pin job".to_string()),
+            Some(format!("/v1/backups/{}", task_id)),
+        );
+        return problem.into_response();
     }
 
     info!("Created protection job: {task_id} for {} tokens", nft_count);
@@ -230,9 +232,9 @@ async fn handle_create_pins_core<DB: PinDb + ?Sized>(
     responses(
         (status = 202, description = "Pin task accepted and queued", body = BackupResponse),
         (status = 200, description = "Pin task already exists or in progress", body = BackupResponse),
-        (status = 400, description = "Invalid request", body = serde_json::Value),
-        (status = 409, description = "Task exists in error/expired state", body = serde_json::Value),
-        (status = 500, description = "Internal server error", body = serde_json::Value),
+        (status = 400, description = "Invalid request", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 409, description = "Task exists in error/expired state", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
     tag = "pins",
     security(("bearer_auth" = []))
@@ -243,11 +245,12 @@ pub async fn handle_create_pins(
     Json(req): Json<PinRequest>,
 ) -> axum::response::Response {
     if let Err(msg) = validate_pin_request(&state, &req) {
-        return (
+        let problem = ProblemJson::from_status(
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": msg})),
-        )
-            .into_response();
+            Some(msg),
+            Some("/v1/pins".to_string()),
+        );
+        return problem.into_response();
     }
 
     handle_create_pins_core(&*state.db, &state.backup_job_sender, requestor, req).await
@@ -431,5 +434,35 @@ mod handle_create_pins_tests {
 
         // Should not insert a new row
         assert!(!*db.inserted.lock().unwrap());
+    }
+
+    #[test]
+    fn validate_returns_error_when_no_ipfs_providers() {
+        let mut chains = std::collections::HashMap::new();
+        chains.insert("ethereum".to_string(), "rpc://dummy".to_string());
+        let chain_config = crate::backup::ChainConfig(chains);
+        let req = super::PinRequest {
+            tokens: vec![crate::server::api::Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+        };
+        let res = super::validate_pin_request_impl(&chain_config, 0, &req);
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn validate_returns_error_for_unknown_chain() {
+        let mut chains = std::collections::HashMap::new();
+        chains.insert("ethereum".to_string(), "rpc://dummy".to_string());
+        let chain_config = crate::backup::ChainConfig(chains);
+        let req = super::PinRequest {
+            tokens: vec![crate::server::api::Tokens {
+                chain: "polygon".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+        };
+        let res = super::validate_pin_request_impl(&chain_config, 1, &req);
+        assert!(res.is_err());
     }
 }

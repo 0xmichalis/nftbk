@@ -6,6 +6,7 @@ use axum::{
 };
 use tracing::{debug, error, info};
 
+use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::db::{Db, TokenWithPins};
 use crate::server::AppState;
 
@@ -84,8 +85,8 @@ fn filter_tokens_for_query(tokens: Vec<TokenWithPins>, q: &PinsQuery) -> Vec<Tok
              }
          ])
         ),
-        (status = 401, description = "Unauthorized"),
-        (status = 500, description = "Internal server error")
+        (status = 401, description = "Unauthorized", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json")
     ),
     security(
         ("bearer_auth" = [])
@@ -101,7 +102,15 @@ pub async fn handle_pins(
         Some(req) => req,
         None => {
             error!("No requestor found in request extensions");
-            return (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response();
+            return (
+                StatusCode::UNAUTHORIZED,
+                ProblemJson::from_status(
+                    StatusCode::UNAUTHORIZED,
+                    Some("Missing authentication subject".to_string()),
+                    Some("/v1/pins".to_string()),
+                ),
+            )
+                .into_response();
         }
     };
 
@@ -154,7 +163,15 @@ async fn handle_pins_core<DB: PinsDb + ?Sized>(
                 "Failed to get pinned tokens for requestor {}: {}",
                 subject, e
             );
-            (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                ProblemJson::from_status(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Some("Failed to get pinned tokens".to_string()),
+                    Some("/v1/pins".to_string()),
+                ),
+            )
+                .into_response()
         }
     }
 }
@@ -366,5 +383,11 @@ mod handle_pins_core_mockdb_tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        // Parse problem+json
+        let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let problem: crate::server::api::ApiProblem = serde_json::from_slice(&body).unwrap();
+        assert_eq!(problem.status, StatusCode::INTERNAL_SERVER_ERROR.as_u16());
     }
 }

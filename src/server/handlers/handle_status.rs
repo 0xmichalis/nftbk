@@ -1,10 +1,11 @@
 use axum::http::StatusCode as AxumStatusCode;
+use axum::response::IntoResponse;
 use axum::{
     extract::{Path as AxumPath, State},
     Json,
 };
 
-use crate::server::api::StatusResponse;
+use crate::server::api::{ApiProblem, ProblemJson, StatusResponse};
 use crate::server::db::{Db, ProtectionJobWithBackup};
 use crate::server::AppState;
 
@@ -16,17 +17,24 @@ use crate::server::AppState;
     ),
     responses(
         (status = 200, description = "Backup retrieved successfully", body = StatusResponse),
-        (status = 404, description = "Backup not found"),
-        (status = 500, description = "Internal server error"),
+        (status = 404, description = "Backup not found", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
-    tag = "backup",
+    tag = "backups",
     security(("bearer_auth" = []))
 )]
 pub async fn handle_status(
     State(state): State<AppState>,
     AxumPath(task_id): AxumPath<String>,
-) -> Result<Json<StatusResponse>, AxumStatusCode> {
-    handle_status_core(&*state.db, &task_id).await
+) -> axum::response::Response {
+    match handle_status_core(&*state.db, &task_id).await {
+        Ok(json) => json.into_response(),
+        Err(status) => {
+            let problem =
+                ProblemJson::from_status(status, None, Some(format!("/v1/backups/{task_id}")));
+            problem.into_response()
+        }
+    }
 }
 
 // Minimal trait to mock DB calls for unit tests
