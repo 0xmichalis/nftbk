@@ -113,7 +113,7 @@ make run-server
 
 ### OpenAPI Documentation
 
-The server includes interactive OpenAPI documentation available at `/swagger-ui` when running. This provides a complete API reference with example requests and responses for all endpoints. The OpenAPI specification JSON is available at `/api-docs/openapi.json`.
+The server includes interactive OpenAPI documentation available at `/v1/swagger-ui` when running. This provides a complete API reference with example requests and responses for all endpoints. The OpenAPI specification JSON is available at `/v1/api-docs/openapi.json`.
 
 Example usage:
 ```sh
@@ -121,7 +121,7 @@ Example usage:
 make run-server
 
 # View the interactive API documentation
-open http://localhost:8080/swagger-ui
+open http://localhost:8080/v1/swagger-ui
 ```
 
 ## Contribute
