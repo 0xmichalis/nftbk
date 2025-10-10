@@ -1,22 +1,72 @@
 use axum::{
-    extract::{Extension, State},
+    extract::{Extension, Query, State},
     http::StatusCode,
     response::IntoResponse,
     Json,
 };
 use tracing::{debug, error, info};
 
-use crate::server::db::TokenWithPins;
+use crate::server::db::{Db, TokenWithPins};
 use crate::server::AppState;
 
 pub type PinsResponse = Vec<TokenWithPins>;
+
+#[derive(serde::Deserialize, utoipa::IntoParams, Debug, Clone, Default)]
+#[into_params(parameter_in = Query)]
+pub struct PinsQuery {
+    /// E.g. "ethereum"
+    pub chain: Option<String>,
+    /// Contract address (checksum or lowercase)
+    pub contract_address: Option<String>,
+    /// Token id as string
+    pub token_id: Option<String>,
+    /// Filter by pin status (e.g. pinned, pinning)
+    pub status: Option<String>,
+}
+
+fn filter_tokens_for_query(tokens: Vec<TokenWithPins>, q: &PinsQuery) -> Vec<TokenWithPins> {
+    let mut filtered: Vec<TokenWithPins> = tokens
+        .into_iter()
+        .filter(|t| match (&q.chain, &q.contract_address, &q.token_id) {
+            (Some(chain), Some(contract), Some(token_id)) => {
+                t.chain.eq_ignore_ascii_case(chain)
+                    && t.contract_address.eq_ignore_ascii_case(contract)
+                    && t.token_id == *token_id
+            }
+            (Some(chain), Some(contract), None) => {
+                t.chain.eq_ignore_ascii_case(chain)
+                    && t.contract_address.eq_ignore_ascii_case(contract)
+            }
+            (Some(chain), None, None) => t.chain.eq_ignore_ascii_case(chain),
+            _ => true,
+        })
+        .collect();
+
+    if q.status.is_some() {
+        for token in &mut filtered {
+            token.pins.retain(|p| {
+                let status_ok = q
+                    .status
+                    .as_ref()
+                    .map(|s| p.status.eq_ignore_ascii_case(s))
+                    .unwrap_or(true);
+                status_ok
+            });
+        }
+        // Remove tokens that ended up with no pins after filtering by pin-level criteria
+        filtered.retain(|t| !t.pins.is_empty());
+    }
+
+    filtered
+}
 
 /// Get all pinned tokens for the authenticated user
 #[utoipa::path(
     get,
     path = "/pins",
+    params(PinsQuery),
     responses(
-        (status = 200, description = "List of all pinned tokens for the user. Returns token metadata with IPFS pin information including CIDs, providers, and pin status.", 
+        (status = 200, description = "List pinned tokens for the authenticated requestor. Supports filters by NFT info and pin status.", 
          body = PinsResponse,
          example = json!([
              {
@@ -35,6 +85,7 @@ pub type PinsResponse = Vec<TokenWithPins>;
          ])
         ),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Forbidden"),
         (status = 500, description = "Internal server error")
     ),
     security(
@@ -45,8 +96,9 @@ pub type PinsResponse = Vec<TokenWithPins>;
 pub async fn handle_pins(
     State(state): State<AppState>,
     Extension(requestor): Extension<Option<String>>,
+    Query(query): Query<PinsQuery>,
 ) -> impl IntoResponse {
-    let requestor = match requestor {
+    let subject = match requestor {
         Some(req) => req,
         None => {
             error!("No requestor found in request extensions");
@@ -54,21 +106,54 @@ pub async fn handle_pins(
         }
     };
 
-    debug!("Getting all pinned tokens for requestor: {}", requestor);
+    debug!(
+        "Getting pinned tokens for requestor: {} with query: {:?}",
+        subject, query
+    );
 
-    match state.db.get_pinned_tokens_by_requestor(&requestor).await {
+    handle_pins_core(&*state.db, &subject, query).await
+}
+
+// A minimal trait to enable mocking DB calls for unit tests of this handler
+pub trait PinsDb {
+    fn get_pinned_tokens_by_requestor<'a>(
+        &'a self,
+        requestor: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<TokenWithPins>, sqlx::Error>> + Send + 'a>,
+    >;
+}
+
+impl PinsDb for Db {
+    fn get_pinned_tokens_by_requestor<'a>(
+        &'a self,
+        requestor: &'a str,
+    ) -> std::pin::Pin<
+        Box<dyn std::future::Future<Output = Result<Vec<TokenWithPins>, sqlx::Error>> + Send + 'a>,
+    > {
+        Box::pin(async move { Db::get_pinned_tokens_by_requestor(self, requestor).await })
+    }
+}
+
+async fn handle_pins_core<DB: PinsDb + ?Sized>(
+    db: &DB,
+    subject: &str,
+    query: PinsQuery,
+) -> axum::response::Response {
+    match db.get_pinned_tokens_by_requestor(subject).await {
         Ok(tokens) => {
+            let filtered = filter_tokens_for_query(tokens, &query);
             info!(
                 "Retrieved {} pinned tokens for requestor: {}",
-                tokens.len(),
-                requestor
+                filtered.len(),
+                subject
             );
-            (StatusCode::OK, Json(tokens)).into_response()
+            (StatusCode::OK, Json(filtered)).into_response()
         }
         Err(e) => {
             error!(
                 "Failed to get pinned tokens for requestor {}: {}",
-                requestor, e
+                subject, e
             );
             (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error").into_response()
         }
@@ -76,9 +161,9 @@ pub async fn handle_pins(
 }
 
 #[cfg(test)]
-mod tests {
+mod filter_tokens_for_query_tests {
     use super::*;
-    use crate::server::db::{PinInfo, TokenWithPins};
+    use crate::server::db::PinInfo;
     use chrono::{DateTime, Utc};
 
     fn create_test_tokens() -> Vec<TokenWithPins> {
@@ -99,7 +184,7 @@ mod tests {
                     PinInfo {
                         cid: "QmTestHash2".to_string(),
                         provider: "web3storage".to_string(),
-                        status: "pinned".to_string(),
+                        status: "pinning".to_string(),
                         created_at: DateTime::parse_from_rfc3339("2023-01-01T01:00:00Z")
                             .unwrap()
                             .with_timezone(&Utc),
@@ -123,16 +208,164 @@ mod tests {
     }
 
     #[test]
-    fn test_pins_response_serialization() {
+    fn filters_by_chain_contract_token() {
         let tokens = create_test_tokens();
-        let response: PinsResponse = tokens.clone();
-        let json = serde_json::to_string(&response).unwrap();
-        let deserialized: PinsResponse = serde_json::from_str(&json).unwrap();
-        assert_eq!(deserialized.len(), 2);
-        assert_eq!(deserialized[0].chain, "ethereum");
-        assert_eq!(deserialized[0].token_id, "1");
-        assert_eq!(deserialized[0].pins.len(), 2);
-        assert_eq!(deserialized[0].pins[0].cid, "QmTestHash1");
-        assert_eq!(deserialized[0].pins[1].cid, "QmTestHash2");
+        let q = PinsQuery {
+            chain: Some("ethereum".to_string()),
+            contract_address: Some("0x1234567890123456789012345678901234567890".to_string()),
+            token_id: Some("1".to_string()),
+            ..Default::default()
+        };
+        let filtered = filter_tokens_for_query(tokens, &q);
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].token_id, "1");
+    }
+
+    #[test]
+    fn filters_by_status() {
+        let tokens = create_test_tokens();
+        let q = PinsQuery {
+            status: Some("pinned".to_string()),
+            ..Default::default()
+        };
+        let filtered = filter_tokens_for_query(tokens, &q);
+        // token 1 retains only pinned entries (1 pin), token 2 is pinned (1 pin)
+        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered[0].pins.len(), 1);
+        assert_eq!(filtered[1].pins.len(), 1);
+    }
+
+    #[test]
+    fn removes_tokens_without_matching_pins() {
+        let tokens = create_test_tokens();
+        let q = PinsQuery {
+            status: Some("pinning".to_string()),
+            ..Default::default()
+        };
+        let filtered = filter_tokens_for_query(tokens, &q);
+        // token 1 has a pinning entry; token 2 is pinned only and gets removed
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].token_id, "1");
+    }
+}
+
+#[cfg(test)]
+mod handle_pins_core_mockdb_tests {
+    use super::{handle_pins_core, PinsDb, PinsQuery};
+    use crate::server::db::{PinInfo, TokenWithPins};
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use chrono::{DateTime, Utc};
+
+    #[derive(Clone, Default)]
+    struct MockDb {
+        tokens: Vec<TokenWithPins>,
+        error: bool,
+    }
+
+    impl PinsDb for MockDb {
+        fn get_pinned_tokens_by_requestor<'a>(
+            &'a self,
+            _requestor: &'a str,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<Output = Result<Vec<TokenWithPins>, sqlx::Error>>
+                    + Send
+                    + 'a,
+            >,
+        > {
+            let tokens = self.tokens.clone();
+            let error = self.error;
+            Box::pin(async move {
+                if error {
+                    Err(sqlx::Error::PoolTimedOut)
+                } else {
+                    Ok(tokens)
+                }
+            })
+        }
+    }
+
+    fn create_test_tokens() -> Vec<TokenWithPins> {
+        vec![
+            TokenWithPins {
+                chain: "ethereum".to_string(),
+                contract_address: "0x1234567890123456789012345678901234567890".to_string(),
+                token_id: "1".to_string(),
+                pins: vec![
+                    PinInfo {
+                        cid: "QmTestHash1".to_string(),
+                        provider: "pinata".to_string(),
+                        status: "pinned".to_string(),
+                        created_at: DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z")
+                            .unwrap()
+                            .with_timezone(&Utc),
+                    },
+                    PinInfo {
+                        cid: "QmTestHash2".to_string(),
+                        provider: "web3storage".to_string(),
+                        status: "pinning".to_string(),
+                        created_at: DateTime::parse_from_rfc3339("2023-01-01T01:00:00Z")
+                            .unwrap()
+                            .with_timezone(&Utc),
+                    },
+                ],
+            },
+            TokenWithPins {
+                chain: "ethereum".to_string(),
+                contract_address: "0x1234567890123456789012345678901234567890".to_string(),
+                token_id: "2".to_string(),
+                pins: vec![PinInfo {
+                    cid: "QmTestHash3".to_string(),
+                    provider: "pinata".to_string(),
+                    status: "pinned".to_string(),
+                    created_at: DateTime::parse_from_rfc3339("2023-01-02T00:00:00Z")
+                        .unwrap()
+                        .with_timezone(&Utc),
+                }],
+            },
+        ]
+    }
+
+    #[tokio::test]
+    async fn returns_200_with_all_tokens_for_subject() {
+        let db = MockDb {
+            tokens: create_test_tokens(),
+            error: false,
+        };
+        let q = PinsQuery::default();
+        let resp = handle_pins_core(&db, "did:privy:subject", q)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn returns_200_and_filters_by_status() {
+        let db = MockDb {
+            tokens: create_test_tokens(),
+            error: false,
+        };
+        let q = PinsQuery {
+            status: Some("pinned".to_string()),
+            ..Default::default()
+        };
+        let resp = handle_pins_core(&db, "did:privy:subject", q)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn returns_500_on_db_error() {
+        let db = MockDb {
+            tokens: Vec::new(),
+            error: true,
+        };
+        let q = PinsQuery::default();
+        let resp = handle_pins_core(&db, "did:privy:subject", q)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 }

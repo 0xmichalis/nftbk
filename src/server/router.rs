@@ -30,7 +30,6 @@ use crate::server::handlers::handle_download::{DownloadQuery, DownloadTokenRespo
 use crate::server::handlers::handle_download::{
     __path_handle_download, __path_handle_download_token, handle_download, handle_download_token,
 };
-use crate::server::handlers::handle_pin::{__path_handle_pin, handle_pin, PinResponse};
 use crate::server::handlers::handle_pins::{__path_handle_pins, handle_pins, PinsResponse};
 use crate::server::handlers::handle_status::{__path_handle_status, handle_status};
 use crate::server::privy::verify_privy_jwt;
@@ -48,10 +47,9 @@ use crate::server::AppState;
         handle_backups,
         handle_create_pins,
         handle_pins,
-        handle_pin,
     ),
     components(
-        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinRequest, PinsResponse, PinResponse, ProtectionJobWithBackup, TokenWithPins, PinInfo)
+        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinRequest, PinsResponse, ProtectionJobWithBackup, TokenWithPins, PinInfo)
     ),
     tags(
         (name = "backup", description = "Filesystem backup operations"),
@@ -192,7 +190,6 @@ pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -
         .route("/backup/:task_id", delete(handle_backup_delete))
         .route("/backups", get(handle_backups))
         .route("/pins", get(handle_pins).post(handle_create_pins))
-        .route("/pin/:chain/:contract_address/:token_id", get(handle_pin))
         .with_state(state.clone());
 
     let auth_state = AuthState {
