@@ -67,7 +67,7 @@ pub async fn handle_backup(
             Some(msg),
             Some("/v1/backups".to_string()),
         );
-        return (StatusCode::BAD_REQUEST, problem).into_response();
+        return problem.into_response();
     }
     let response = handle_backup_core(
         &*state.db,
