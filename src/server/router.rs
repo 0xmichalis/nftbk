@@ -52,7 +52,7 @@ use crate::server::AppState;
         schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinRequest, PinsResponse, ProtectionJobWithBackup, TokenWithPins, PinInfo)
     ),
     tags(
-        (name = "backup", description = "Filesystem backup operations"),
+        (name = "backups", description = "General backup operations"),
         (name = "pins", description = "IPFS pinning operations")
     ),
     info(
@@ -62,8 +62,8 @@ use crate::server::AppState;
 
 ## Key APIs:
 
-### Filesystem Backup Management (`/backups`)
-- **Purpose**: Enable users to request and download NFT backups to their local filesystem
+### Backup Management (`/backups`)
+- **Purpose**: Enable users to request NFT backups and either download them to their local filesystem or pin them to IPFS
 - **Use Case**: Request a backup, track backup progress, view backup history, monitor failures
 
 ### Pin Management (`/pins`) 
