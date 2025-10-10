@@ -160,6 +160,18 @@ make run
 make run-server
 ```
 
+### Cloudflare + Caddy (TLS via DNS-01)
+
+If you deploy behind Cloudflare and want to keep the proxy enabled (orange
+cloud) while using automatic TLS via Let's Encrypt, switch Caddy to use the
+Cloudflare DNS-01 challenge:
+
+1. Create a Cloudflare API Token with permissions: `Zone.Zone: Read` and
+   `Zone.DNS: Edit`, restricted to your domain zone.
+2. Set the token as `CLOUDFLARE_API_TOKEN` in `.env.caddy`.
+3. In Cloudflare SSL/TLS settings, set mode to "Full (strict)".
+4. Restart Caddy
+
 ### OpenAPI Documentation
 
 The server includes interactive OpenAPI documentation available at `/v1/swagger-ui`

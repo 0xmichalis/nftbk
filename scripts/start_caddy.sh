@@ -12,10 +12,20 @@ OUTPUT_PATH=/etc/caddy/Caddyfile
 
 # Simple template replacement without sed complications
 replace_template() {
-  local host="$1"
-  local upstream="$2"
+  _host="$1"
+  _upstream="$2"
+  _template_content=""
+  # Remove TLS block if CLOUDFLARE_API_TOKEN is not set
+  if [ -z "${CLOUDFLARE_API_TOKEN}" ]; then
+    # Remove lines from "tls {" to the matching closing "}" at the same indentation level
+    _template_content=$(sed '/^[[:space:]]*tls {$/,/^[[:space:]]*}$/d' "${TEMPLATE_PATH}")
+  else
+    # https://github.com/caddy-dns/cloudflare
+    _template_content=$(cat "${TEMPLATE_PATH}")
+  fi
   # Use @ as delimiter to avoid issues with / in domains
-  sed -e "s@\\\${SERVER_NAME}@${host}@g" -e "s@\\\${UPSTREAM}@${upstream}@g" "${TEMPLATE_PATH}"
+  echo "${_template_content}" | sed -e "s@\\\${SERVER_NAME}@${_host}@g" -e "s@\\\${UPSTREAM}@${_upstream}@g"
+  unset _host _upstream _template_content
 }
 
 if [ ! -s "${TEMPLATE_PATH}" ]; then
