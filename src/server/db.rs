@@ -617,68 +617,102 @@ impl Db {
         Ok(rows)
     }
 
-    /// Get all pinned tokens for a requestor
+    /// Paginated pinned tokens grouped by (chain, contract_address, token_id)
     pub async fn get_pinned_tokens_by_requestor(
         &self,
         requestor: &str,
-    ) -> Result<Vec<TokenWithPins>, sqlx::Error> {
-        let query = r#"
-            SELECT pt.chain, pt.contract_address, pt.token_id,
-                   pr.cid, pr.provider, pr.status, pt.created_at
-            FROM pinned_tokens pt
-            JOIN pin_requests pr ON pr.id = pt.pin_request_id
-            WHERE pr.requestor = $1
-            ORDER BY pt.chain, pt.contract_address, pt.token_id, pt.created_at DESC
-        "#;
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<TokenWithPins>, u32), sqlx::Error> {
+        // Total distinct tokens for this requestor
+        let total_row = sqlx::query!(
+            r#"
+            SELECT COUNT(*) as count
+            FROM (
+                SELECT DISTINCT pt.chain, pt.contract_address, pt.token_id
+                FROM pinned_tokens pt
+                JOIN pin_requests pr ON pr.id = pt.pin_request_id
+                WHERE pr.requestor = $1
+            ) t
+            "#,
+            requestor
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let total: u32 = (total_row.count.unwrap_or(0) as i64).max(0) as u32;
 
-        let rows = sqlx::query(query)
+        // Page of distinct tokens ordered by most recent pin time
+        let rows = sqlx::query!(
+            r#"
+            SELECT t.chain, t.contract_address, t.token_id
+            FROM (
+                SELECT pt.chain, pt.contract_address, pt.token_id, MAX(pt.created_at) AS last_created
+                FROM pinned_tokens pt
+                JOIN pin_requests pr ON pr.id = pt.pin_request_id
+                WHERE pr.requestor = $1
+                GROUP BY pt.chain, pt.contract_address, pt.token_id
+            ) t
+            ORDER BY last_created DESC
+            LIMIT $2 OFFSET $3
+            "#,
+            requestor,
+            limit,
+            offset
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        // For each token key, fetch pins (ordered by created_at desc)
+        let mut result: Vec<TokenWithPins> = Vec::new();
+        for r in rows {
+            let token_rows = sqlx::query(
+                r#"
+                SELECT pt.chain, pt.contract_address, pt.token_id,
+                       pr.cid, pr.provider, pr.status, pt.created_at
+                FROM pinned_tokens pt
+                JOIN pin_requests pr ON pr.id = pt.pin_request_id
+                WHERE pr.requestor = $1
+                  AND pt.chain = $2
+                  AND pt.contract_address = $3
+                  AND pt.token_id = $4
+                ORDER BY pt.created_at DESC
+                "#,
+            )
             .bind(requestor)
+            .bind(&r.chain)
+            .bind(&r.contract_address)
+            .bind(&r.token_id)
             .fetch_all(&self.pool)
             .await?;
 
-        // Group pins by token
-        let mut token_map: std::collections::HashMap<(String, String, String), TokenWithPins> =
-            std::collections::HashMap::new();
-
-        for row in rows {
-            let chain: String = row.get("chain");
-            let contract_address: String = row.get("contract_address");
-            let token_id: String = row.get("token_id");
-            let cid: String = row.get("cid");
-            let provider: String = row.get("provider");
-            let status: String = row.get("status");
-            let created_at: DateTime<Utc> = row.get("created_at");
-
-            let key = (chain.clone(), contract_address.clone(), token_id.clone());
-
-            let pin_info = PinInfo {
-                cid,
-                provider,
-                status,
-                created_at,
-            };
-
-            token_map
-                .entry(key)
-                .or_insert_with(|| TokenWithPins {
-                    chain,
-                    contract_address,
-                    token_id,
-                    pins: Vec::new(),
-                })
-                .pins
-                .push(pin_info);
+            let mut pins: Vec<PinInfo> = Vec::new();
+            let mut chain = String::new();
+            let mut contract_address = String::new();
+            let mut token_id = String::new();
+            for row in token_rows {
+                chain = row.get("chain");
+                contract_address = row.get("contract_address");
+                token_id = row.get("token_id");
+                let cid: String = row.get("cid");
+                let provider: String = row.get("provider");
+                let status: String = row.get("status");
+                let created_at: DateTime<Utc> = row.get("created_at");
+                pins.push(PinInfo {
+                    cid,
+                    provider,
+                    status,
+                    created_at,
+                });
+            }
+            result.push(TokenWithPins {
+                chain,
+                contract_address,
+                token_id,
+                pins,
+            });
         }
 
-        let mut result: Vec<TokenWithPins> = token_map.into_values().collect();
-        result.sort_by(|a, b| {
-            a.chain
-                .cmp(&b.chain)
-                .then(a.contract_address.cmp(&b.contract_address))
-                .then(a.token_id.cmp(&b.token_id))
-        });
-
-        Ok(result)
+        Ok((result, total))
     }
 
     /// Get a specific pinned token for a requestor

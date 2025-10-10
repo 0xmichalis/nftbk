@@ -1,6 +1,6 @@
 use axum::{
     extract::{Extension, Query, State},
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::IntoResponse,
     Json,
 };
@@ -23,6 +23,19 @@ pub struct PinsQuery {
     pub token_id: Option<String>,
     /// Filter by pin status (e.g. pinned, pinning)
     pub status: Option<String>,
+    /// Page number starting at 1
+    #[serde(default = "default_page")]
+    pub page: u32,
+    /// Items per page (max 100)
+    #[serde(default = "default_limit")]
+    pub limit: u32,
+}
+
+fn default_page() -> u32 {
+    1
+}
+fn default_limit() -> u32 {
+    50
 }
 
 fn filter_tokens_for_query(tokens: Vec<TokenWithPins>, q: &PinsQuery) -> Vec<TokenWithPins> {
@@ -124,22 +137,38 @@ pub async fn handle_pins(
 
 // A minimal trait to enable mocking DB calls for unit tests of this handler
 pub trait PinsDb {
+    #[allow(clippy::type_complexity)]
     fn get_pinned_tokens_by_requestor<'a>(
         &'a self,
         requestor: &'a str,
+        limit: i64,
+        offset: i64,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Vec<TokenWithPins>, sqlx::Error>> + Send + 'a>,
+        Box<
+            dyn std::future::Future<Output = Result<(Vec<TokenWithPins>, u32), sqlx::Error>>
+                + Send
+                + 'a,
+        >,
     >;
 }
 
 impl PinsDb for Db {
+    #[allow(clippy::type_complexity)]
     fn get_pinned_tokens_by_requestor<'a>(
         &'a self,
         requestor: &'a str,
+        limit: i64,
+        offset: i64,
     ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Vec<TokenWithPins>, sqlx::Error>> + Send + 'a>,
+        Box<
+            dyn std::future::Future<Output = Result<(Vec<TokenWithPins>, u32), sqlx::Error>>
+                + Send
+                + 'a,
+        >,
     > {
-        Box::pin(async move { Db::get_pinned_tokens_by_requestor(self, requestor).await })
+        Box::pin(
+            async move { Db::get_pinned_tokens_by_requestor(self, requestor, limit, offset).await },
+        )
     }
 }
 
@@ -148,15 +177,44 @@ async fn handle_pins_core<DB: PinsDb + ?Sized>(
     subject: &str,
     query: PinsQuery,
 ) -> axum::response::Response {
-    match db.get_pinned_tokens_by_requestor(subject).await {
-        Ok(tokens) => {
+    let limit = query.limit.clamp(1, 100);
+    let page = query.page.max(1);
+    let offset = ((page - 1) * limit) as i64;
+    match db
+        .get_pinned_tokens_by_requestor(subject, limit as i64, offset)
+        .await
+    {
+        Ok((tokens, total)) => {
             let filtered = filter_tokens_for_query(tokens, &query);
+            let mut headers = HeaderMap::new();
+            headers.insert("X-Total-Count", total.to_string().parse().unwrap());
+            let mut links: Vec<String> = Vec::new();
+            let last_page = total.div_ceil(limit).max(1);
+            if page > 1 {
+                links.push(format!(
+                    "</v1/pins?page={}&limit={}>; rel=\"prev\"",
+                    page - 1,
+                    limit
+                ));
+            }
+            if page < last_page {
+                links.push(format!(
+                    "</v1/pins?page={}&limit={}>; rel=\"next\"",
+                    page + 1,
+                    limit
+                ));
+            }
+            if !links.is_empty() {
+                headers.insert("Link", links.join(", ").parse().unwrap());
+            }
             info!(
-                "Retrieved {} pinned tokens for requestor: {}",
+                "Retrieved {} pinned tokens for requestor: {} (page {}, limit {})",
                 filtered.len(),
-                subject
+                subject,
+                page,
+                limit
             );
-            (StatusCode::OK, Json(filtered)).into_response()
+            (StatusCode::OK, headers, Json(filtered)).into_response()
         }
         Err(e) => {
             error!(
@@ -283,9 +341,11 @@ mod handle_pins_core_mockdb_tests {
         fn get_pinned_tokens_by_requestor<'a>(
             &'a self,
             _requestor: &'a str,
+            limit: i64,
+            offset: i64,
         ) -> std::pin::Pin<
             Box<
-                dyn std::future::Future<Output = Result<Vec<TokenWithPins>, sqlx::Error>>
+                dyn std::future::Future<Output = Result<(Vec<TokenWithPins>, u32), sqlx::Error>>
                     + Send
                     + 'a,
             >,
@@ -296,7 +356,15 @@ mod handle_pins_core_mockdb_tests {
                 if error {
                     Err(sqlx::Error::PoolTimedOut)
                 } else {
-                    Ok(tokens)
+                    let total = tokens.len() as u32;
+                    let start = offset.max(0) as usize;
+                    let end = (start + limit.max(0) as usize).min(tokens.len());
+                    let page = if start < tokens.len() {
+                        tokens[start..end].to_vec()
+                    } else {
+                        Vec::new()
+                    };
+                    Ok((page, total))
                 }
             })
         }
@@ -349,7 +417,11 @@ mod handle_pins_core_mockdb_tests {
             tokens: create_test_tokens(),
             error: false,
         };
-        let q = PinsQuery::default();
+        let q = PinsQuery {
+            page: 1,
+            limit: 50,
+            ..Default::default()
+        };
         let resp = handle_pins_core(&db, "did:privy:subject", q)
             .await
             .into_response();
@@ -364,6 +436,8 @@ mod handle_pins_core_mockdb_tests {
         };
         let q = PinsQuery {
             status: Some("pinned".to_string()),
+            page: 1,
+            limit: 50,
             ..Default::default()
         };
         let resp = handle_pins_core(&db, "did:privy:subject", q)
@@ -378,7 +452,11 @@ mod handle_pins_core_mockdb_tests {
             tokens: Vec::new(),
             error: true,
         };
-        let q = PinsQuery::default();
+        let q = PinsQuery {
+            page: 1,
+            limit: 50,
+            ..Default::default()
+        };
         let resp = handle_pins_core(&db, "did:privy:subject", q)
             .await
             .into_response();
