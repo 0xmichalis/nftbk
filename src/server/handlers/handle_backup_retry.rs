@@ -35,8 +35,77 @@ pub async fn handle_backup_retry(
     Path(task_id): Path<String>,
     Extension(requestor): Extension<Option<String>>,
 ) -> impl IntoResponse {
+    handle_backup_retry_core(
+        &*state.db,
+        &state.backup_job_sender,
+        &task_id,
+        requestor,
+        state.pruner_retention_days,
+    )
+    .await
+}
+
+// Minimal trait to mock DB calls
+pub trait RetryDb {
+    fn get_protection_job<'a>(
+        &'a self,
+        task_id: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        Option<crate::server::db::ProtectionJobWithBackup>,
+                        sqlx::Error,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    >;
+    fn retry_backup<'a>(
+        &'a self,
+        task_id: &'a str,
+        retention_days: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>;
+}
+
+impl RetryDb for crate::server::db::Db {
+    fn get_protection_job<'a>(
+        &'a self,
+        task_id: &'a str,
+    ) -> std::pin::Pin<
+        Box<
+            dyn std::future::Future<
+                    Output = Result<
+                        Option<crate::server::db::ProtectionJobWithBackup>,
+                        sqlx::Error,
+                    >,
+                > + Send
+                + 'a,
+        >,
+    > {
+        Box::pin(async move { crate::server::db::Db::get_protection_job(self, task_id).await })
+    }
+    fn retry_backup<'a>(
+        &'a self,
+        task_id: &'a str,
+        retention_days: u64,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
+    {
+        Box::pin(
+            async move { crate::server::db::Db::retry_backup(self, task_id, retention_days).await },
+        )
+    }
+}
+
+async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
+    db: &DB,
+    backup_job_sender: &tokio::sync::mpsc::Sender<BackupJobOrShutdown>,
+    task_id: &str,
+    requestor: Option<String>,
+    retention_days: u64,
+) -> axum::response::Response {
     // Fetch metadata from DB once
-    let meta = match state.db.get_protection_job(&task_id).await {
+    let meta = match db.get_protection_job(task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
             let problem = ProblemJson::from_status(
@@ -78,10 +147,7 @@ pub async fn handle_backup_retry(
         return problem.into_response();
     }
 
-    let _ = state
-        .db
-        .retry_backup(&task_id, state.pruner_retention_days)
-        .await;
+    let _ = db.retry_backup(task_id, retention_days).await;
 
     // Re-run backup job
     let tokens: Vec<Tokens> = serde_json::from_value(meta.tokens.clone()).unwrap_or_default();
@@ -93,7 +159,7 @@ pub async fn handle_backup_retry(
         || storage_mode == crate::server::StorageMode::Both;
 
     let backup_job = BackupJob {
-        task_id: task_id.clone(),
+        task_id: task_id.to_string(),
         request: BackupRequest {
             tokens,
             pin_on_ipfs,
@@ -103,8 +169,7 @@ pub async fn handle_backup_retry(
         archive_format: meta.archive_format.clone(),
         requestor: requestor.clone(),
     };
-    if let Err(e) = state
-        .backup_job_sender
+    if let Err(e) = backup_job_sender
         .send(BackupJobOrShutdown::Job(backup_job))
         .await
     {
@@ -121,5 +186,169 @@ pub async fn handle_backup_retry(
         task_id,
         requestor.clone().unwrap_or_default()
     );
-    (StatusCode::ACCEPTED, Json(BackupResponse { task_id })).into_response()
+    (
+        StatusCode::ACCEPTED,
+        Json(BackupResponse {
+            task_id: task_id.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+#[cfg(test)]
+mod handle_backup_retry_core_tests {
+    use super::{handle_backup_retry_core, RetryDb};
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use tokio::sync::mpsc;
+
+    #[derive(Clone, Default)]
+    struct MockDb {
+        meta: Option<crate::server::db::ProtectionJobWithBackup>,
+        get_error: bool,
+        retry_error: bool,
+    }
+
+    impl RetryDb for MockDb {
+        fn get_protection_job<'a>(
+            &'a self,
+            _task_id: &'a str,
+        ) -> std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = Result<
+                            Option<crate::server::db::ProtectionJobWithBackup>,
+                            sqlx::Error,
+                        >,
+                    > + Send
+                    + 'a,
+            >,
+        > {
+            let meta = self.meta.clone();
+            let err = self.get_error;
+            Box::pin(async move {
+                if err {
+                    Err(sqlx::Error::PoolTimedOut)
+                } else {
+                    Ok(meta)
+                }
+            })
+        }
+        fn retry_backup<'a>(
+            &'a self,
+            _task_id: &'a str,
+            _retention_days: u64,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
+        {
+            let err = self.retry_error;
+            Box::pin(async move {
+                if err {
+                    Err(sqlx::Error::PoolTimedOut)
+                } else {
+                    Ok(())
+                }
+            })
+        }
+    }
+
+    fn sample_meta(owner: &str, status: &str) -> crate::server::db::ProtectionJobWithBackup {
+        use chrono::{TimeZone, Utc};
+        crate::server::db::ProtectionJobWithBackup {
+            task_id: "t1".to_string(),
+            created_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            updated_at: Utc.timestamp_opt(1_700_000_100, 0).unwrap(),
+            requestor: owner.to_string(),
+            nft_count: 1,
+            tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
+            status: status.to_string(),
+            error_log: None,
+            fatal_error: None,
+            storage_mode: "filesystem".to_string(),
+            archive_format: Some("zip".to_string()),
+            expires_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_404_when_missing_task() {
+        let db = MockDb {
+            meta: None,
+            ..Default::default()
+        };
+        let (tx, _rx) = mpsc::channel(1);
+        let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn returns_500_on_db_error() {
+        let db = MockDb {
+            meta: None,
+            get_error: true,
+            retry_error: false,
+        };
+        let (tx, _rx) = mpsc::channel(1);
+        let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn returns_400_when_in_progress() {
+        let db = MockDb {
+            meta: Some(sample_meta("did:me", "in_progress")),
+            ..Default::default()
+        };
+        let (tx, _rx) = mpsc::channel(1);
+        let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn returns_403_on_owner_mismatch() {
+        let db = MockDb {
+            meta: Some(sample_meta("did:other", "done")),
+            ..Default::default()
+        };
+        let (tx, _rx) = mpsc::channel(1);
+        let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn returns_500_when_enqueue_fails() {
+        let db = MockDb {
+            meta: Some(sample_meta("did:me", "done")),
+            ..Default::default()
+        };
+        let (tx, rx) = mpsc::channel(1);
+        drop(rx); // close receiver to force send error
+        let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn returns_202_on_success() {
+        let db = MockDb {
+            meta: Some(sample_meta("did:me", "error")),
+            ..Default::default()
+        };
+        let (tx, mut rx) = mpsc::channel(1);
+        let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        // Ensure job enqueued
+        let msg = rx.try_recv();
+        assert!(msg.is_ok());
+    }
 }
