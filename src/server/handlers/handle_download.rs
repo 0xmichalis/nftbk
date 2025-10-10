@@ -21,7 +21,7 @@ pub struct DownloadQuery {
     pub token: Option<String>,
 }
 
-#[derive(serde::Serialize, utoipa::ToSchema)]
+#[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct DownloadTokenResponse {
     /// Download token for authenticated access
     pub token: String,
@@ -30,13 +30,13 @@ pub struct DownloadTokenResponse {
 }
 
 #[utoipa::path(
-    get,
-    path = "/v1/backups/{task_id}/download_token",
+    post,
+    path = "/v1/backups/{task_id}/download-tokens",
     params(
         ("task_id" = String, Path, description = "Unique identifier for the backup task")
     ),
     responses(
-        (status = 200, description = "Download token generated successfully", body = DownloadTokenResponse),
+        (status = 201, description = "Download token created successfully", body = DownloadTokenResponse),
         (status = 401, description = "Unauthorized"),
     ),
     tag = "backup",
@@ -54,7 +54,11 @@ pub async fn handle_download_token(
         let mut tokens = state.download_tokens.lock().await;
         tokens.insert(token.clone(), (task_id.clone(), expires_at));
     }
-    Json(DownloadTokenResponse { token, expires_at })
+    (
+        StatusCode::CREATED,
+        Json(DownloadTokenResponse { token, expires_at }),
+    )
+        .into_response()
 }
 
 #[utoipa::path(
@@ -180,4 +184,79 @@ async fn serve_zip_file(zip_path: &PathBuf, task_id: &str, archive_format: &str)
         file_size.to_string().parse().unwrap(),
     );
     (StatusCode::OK, headers, body).into_response()
+}
+
+#[cfg(test)]
+mod handle_download_tests {
+    use super::{handle_download, handle_download_token, DownloadQuery, DownloadTokenResponse};
+    use axum::body::to_bytes;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::{mpsc, Mutex};
+
+    use crate::server::db::Db;
+    use crate::server::AppState;
+
+    fn make_state() -> AppState {
+        let mut chains = HashMap::new();
+        chains.insert("ethereum".to_string(), "rpc://dummy".to_string());
+        let chain_config = crate::backup::ChainConfig(chains);
+        // Lazy pool does not actually connect
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://user:pass@localhost/db")
+            .unwrap();
+        let db = Arc::new(Db { pool });
+        AppState {
+            chain_config: Arc::new(chain_config),
+            base_dir: Arc::new("/tmp".to_string()),
+            unsafe_skip_checksum_check: true,
+            auth_token: None,
+            pruner_enabled: false,
+            pruner_retention_days: 7,
+            download_tokens: Arc::new(Mutex::new(HashMap::new())),
+            backup_job_sender: mpsc::channel(1).0,
+            db,
+            shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ipfs_providers: Vec::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn post_download_token_returns_201_and_stores_token() {
+        let state = make_state();
+        let task_id = "t-123".to_string();
+        let resp = handle_download_token(
+            axum::extract::State(state.clone()),
+            axum::extract::Path(task_id.clone()),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::CREATED);
+
+        // Parse body and verify token persisted
+        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let token_resp: DownloadTokenResponse = serde_json::from_slice(&body_bytes).unwrap();
+        let tokens = state.download_tokens.lock().await;
+        let stored = tokens.get(&token_resp.token);
+        assert!(stored.is_some());
+        assert_eq!(stored.unwrap().0, task_id);
+    }
+
+    #[tokio::test]
+    async fn get_download_returns_401_on_invalid_token() {
+        let state = make_state();
+        let task_id = "t-abc".to_string();
+        let resp = handle_download(
+            axum::extract::State(state),
+            axum::extract::Path(task_id),
+            axum::extract::Query(DownloadQuery {
+                token: Some("invalid".to_string()),
+            }),
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
 }

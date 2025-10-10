@@ -186,8 +186,8 @@ pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -
             get(handle_status).delete(handle_backup_delete),
         )
         .route(
-            "/v1/backups/:task_id/download_token",
-            get(handle_download_token),
+            "/v1/backups/:task_id/download-tokens",
+            post(handle_download_token),
         )
         .route("/v1/backups/:task_id/retry", post(handle_backup_retry))
         .route("/v1/pins", get(handle_pins).post(handle_create_pins))
