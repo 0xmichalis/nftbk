@@ -4,7 +4,7 @@ use axum::middleware::Next;
 use axum::{
     extract::Request,
     response::IntoResponse,
-    routing::{delete, get, post},
+    routing::{get, post},
     Router,
 };
 use subtle::ConstantTimeEq;
@@ -180,15 +180,16 @@ pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -
 
     // Authenticated router
     let mut authed_router = Router::new()
-        .route("/v1/backups", post(handle_backup))
-        .route("/v1/backups/:task_id/status", get(handle_status))
+        .route("/v1/backups", get(handle_backups).post(handle_backup))
+        .route(
+            "/v1/backups/:task_id",
+            get(handle_status).delete(handle_backup_delete),
+        )
         .route(
             "/v1/backups/:task_id/download_token",
             get(handle_download_token),
         )
         .route("/v1/backups/:task_id/retry", post(handle_backup_retry))
-        .route("/v1/backups/:task_id", delete(handle_backup_delete))
-        .route("/v1/backups", get(handle_backups))
         .route("/v1/pins", get(handle_pins).post(handle_create_pins))
         .with_state(state.clone());
 
