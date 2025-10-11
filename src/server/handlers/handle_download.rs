@@ -26,8 +26,10 @@ pub struct DownloadQuery {
 #[derive(serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
 pub struct DownloadTokenResponse {
     /// Download token for authenticated access
+    #[schema(example = "dGVzdF90b2tlbl9leGFtcGxlXzEyMzQ1Njc4")]
     pub token: String,
-    /// Token expiration timestamp (Unix timestamp)
+    /// Token expiration timestamp (Unix timestamp in seconds, typically 10 minutes from creation)
+    #[schema(example = 1704067200)]
     pub expires_at: u64,
 }
 

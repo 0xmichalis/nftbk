@@ -28,31 +28,76 @@ pub struct BackupRequestRow {
 #[schema(description = "Backup job information including metadata and status")]
 pub struct ProtectionJobWithBackup {
     /// Unique identifier for the backup task
+    #[schema(example = "abc123def456")]
     pub task_id: String,
-    /// When the backup job was created
+    /// When the backup job was created (ISO 8601 timestamp)
+    #[schema(example = "2024-01-01T12:00:00Z")]
     pub created_at: DateTime<Utc>,
-    /// When the backup job was last updated
+    /// When the backup job was last updated (ISO 8601 timestamp)
+    #[schema(example = "2024-01-01T12:05:00Z")]
     pub updated_at: DateTime<Utc>,
     /// User who requested the backup
+    #[schema(example = "user123")]
     pub requestor: String,
     /// Number of NFTs in this backup job
+    #[schema(example = 42)]
     pub nft_count: i32,
     /// Token details (only included if include_tokens=true)
     pub tokens: serde_json::Value,
-    /// Current job status: in_progress, done, error, expired
+    /// Current job status (in_progress, done, error, expired)
+    #[schema(example = "done")]
     pub status: String,
     /// Detailed error log if backup completed with some failures
+    #[schema(example = "Failed to download token #123: HTTP 404")]
     pub error_log: Option<String>,
     /// Fatal error message if backup failed completely
+    #[schema(example = "Database connection failed")]
     pub fatal_error: Option<String>,
-    /// Storage mode used for the backup
+    /// Storage mode used for the backup (filesystem, ipfs, both)
+    #[schema(example = "filesystem")]
     pub storage_mode: String,
-    /// Archive format used for the backup
+    /// Archive format used for the backup (zip, tar.gz)
+    #[schema(example = "zip")]
     pub archive_format: Option<String>,
-    /// When the backup expires (if applicable)
+    /// When the backup expires (if applicable, typically 7 days from creation)
+    #[schema(example = "2024-01-08T12:00:00Z")]
     pub expires_at: Option<DateTime<Utc>>,
     /// When deletion was started (if applicable)
+    #[schema(example = "2024-01-02T10:00:00Z")]
     pub deleted_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
+#[schema(description = "IPFS pin information for a specific CID")]
+pub struct PinInfo {
+    /// Content Identifier (CID) of the pinned content
+    #[schema(example = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")]
+    pub cid: String,
+    /// IPFS provider where the content is pinned
+    #[schema(example = "pinata")]
+    pub provider: String,
+    /// Pin status (pinned, pinning, failed, queued)
+    #[schema(example = "pinned")]
+    pub status: String,
+    /// When the pin was created (ISO 8601 timestamp)
+    #[schema(example = "2024-01-01T12:00:00Z")]
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
+#[schema(description = "Token information with associated pin requests")]
+pub struct TokenWithPins {
+    /// Blockchain identifier (e.g., ethereum, tezos)
+    #[schema(example = "ethereum")]
+    pub chain: String,
+    /// NFT contract address
+    #[schema(example = "0x1234567890123456789012345678901234567890")]
+    pub contract_address: String,
+    /// NFT token ID
+    #[schema(example = "123")]
+    pub token_id: String,
+    /// List of IPFS pins for this token
+    pub pins: Vec<PinInfo>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -839,30 +884,4 @@ impl Db {
         tx.commit().await?;
         Ok(())
     }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
-#[schema(description = "IPFS pin information for a specific CID")]
-pub struct PinInfo {
-    /// Content Identifier (CID) of the pinned content
-    pub cid: String,
-    /// IPFS provider where the content is pinned
-    pub provider: String,
-    /// Pin status: pinned, pinning, failed, etc.
-    pub status: String,
-    /// When the pin was created
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
-#[schema(description = "Token information with associated pin requests")]
-pub struct TokenWithPins {
-    /// Blockchain identifier (e.g., ethereum, tezos)
-    pub chain: String,
-    /// NFT contract address
-    pub contract_address: String,
-    /// NFT token ID
-    pub token_id: String,
-    /// List of IPFS pins for this token
-    pub pins: Vec<PinInfo>,
 }

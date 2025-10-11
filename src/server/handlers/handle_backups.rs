@@ -46,26 +46,11 @@ fn default_limit() -> u32 {
     ),
     responses(
         (status = 200, description = "List of backup jobs for the authenticated user. Returns job metadata including task_id, status, timestamps, and optionally token details.", 
-         body = Vec<serde_json::Value>,
+         body = Vec<ProtectionJobWithBackup>,
          headers(
              ("Link" = String, description = "Pagination links per RFC 5988: rel=prev,next"),
              ("X-Total-Count" = u32, description = "Total number of items before pagination")
-         ),
-         example = json!([
-             {
-                 "task_id": "abc123def456",
-                 "status": "done",
-                 "created_at": "2024-01-01T00:00:00Z",
-                 "updated_at": "2024-01-01T00:05:00Z",
-                 "requestor": "user123",
-                 "nft_count": 5,
-                 "storage_mode": "local",
-                 "archive_format": "tar.gz",
-                 "expires_at": null,
-                 "error_log": null,
-                 "fatal_error": null
-             }
-         ])
+         )
         ),
         (status = 401, description = "Missing user DID", body = ApiProblem, content_type = "application/problem+json"),
         (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
