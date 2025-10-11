@@ -28,6 +28,7 @@ pub mod archive;
 pub mod db;
 pub mod handlers;
 pub mod hashing;
+pub mod pin_monitor;
 pub mod privy;
 pub mod pruner;
 pub mod router;
@@ -112,7 +113,7 @@ pub struct AppState {
     pub db: Arc<Db>,
     pub shutdown_flag: Arc<AtomicBool>,
     pub ipfs_providers: Vec<IpfsProviderConfig>,
-    pub ipfs_provider_instances: Arc<Vec<Box<dyn IpfsPinningProvider>>>,
+    pub ipfs_provider_instances: Arc<Vec<Arc<dyn IpfsPinningProvider>>>,
 }
 
 impl Default for AppState {
@@ -156,7 +157,7 @@ impl AppState {
                         "Successfully created IPFS provider: {}",
                         provider.provider_name()
                     );
-                    ipfs_provider_instances.push(provider);
+                    ipfs_provider_instances.push(Arc::from(provider));
                 }
                 Err(e) => {
                     error!(

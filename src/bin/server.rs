@@ -13,6 +13,7 @@ use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
 
+use nftbk::server::pin_monitor::run_pin_monitor;
 use nftbk::server::pruner::run_pruner;
 use nftbk::server::router::build_router;
 use nftbk::server::{recover_incomplete_jobs, spawn_backup_workers, AppState, BackupJobOrShutdown};
@@ -55,6 +56,10 @@ struct Args {
     /// Pruner regex pattern for file names to prune
     #[arg(long, default_value = "^nftbk-")]
     pruner_pattern: String,
+
+    /// Pin monitor interval in seconds
+    #[arg(long, default_value_t = 120)]
+    pin_monitor_interval_seconds: u64,
 
     /// Number of backup worker threads to run in parallel
     #[arg(long, default_value_t = 4)]
@@ -223,6 +228,24 @@ async fn main() {
         None
     };
 
+    // Start the pin monitor thread if IPFS providers are configured
+    let pin_monitor_handle = if state.ipfs_provider_instances.is_empty() {
+        None
+    } else {
+        let db = state.db.clone();
+        let providers = state.ipfs_provider_instances.clone();
+        let interval = args.pin_monitor_interval_seconds;
+        let shutdown_flag = state.shutdown_flag.clone();
+        info!(
+            "Starting pin monitor with {} IPFS provider(s) and {} second interval",
+            providers.len(),
+            interval
+        );
+        Some(tokio::spawn(async move {
+            run_pin_monitor(db, providers.to_vec(), interval, shutdown_flag).await;
+        }))
+    };
+
     // Add graceful shutdown
     let shutdown_signal = async move {
         let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
@@ -260,6 +283,11 @@ async fn main() {
         let _ = handle.await;
     }
     info!("Pruner has exited");
+
+    if let Some(handle) = pin_monitor_handle {
+        let _ = handle.await;
+    }
+    info!("Pin monitor has exited");
 
     // On shutdown, send one Shutdown message per worker
     for _ in 0..args.backup_parallelism {

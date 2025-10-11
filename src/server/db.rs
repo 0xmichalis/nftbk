@@ -791,6 +791,54 @@ impl Db {
             pins,
         }))
     }
+
+    /// Get all pin requests that are in 'queued' or 'pinning' status
+    /// This is used by the pin monitor to check for status updates
+    pub async fn get_active_pin_requests(&self) -> Result<Vec<PinRequestRow>, sqlx::Error> {
+        let rows = sqlx::query_as!(
+            PinRequestRow,
+            r#"
+            SELECT id, task_id, provider, cid, request_id, status, requestor
+            FROM pin_requests
+            WHERE status IN ('queued', 'pinning')
+            ORDER BY id
+            "#
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
+
+    /// Batch update pin request statuses
+    /// Updates multiple pin requests in a single transaction
+    pub async fn batch_update_pin_request_statuses(
+        &self,
+        updates: &[(i64, String)],
+    ) -> Result<(), sqlx::Error> {
+        if updates.is_empty() {
+            return Ok(());
+        }
+
+        let mut tx = self.pool.begin().await?;
+
+        for (id, status) in updates {
+            sqlx::query!(
+                r#"
+                UPDATE pin_requests
+                SET status = $2
+                WHERE id = $1
+                "#,
+                id,
+                status
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]

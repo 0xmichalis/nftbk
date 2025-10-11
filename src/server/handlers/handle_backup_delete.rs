@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use std::sync::Arc;
 use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
@@ -199,7 +200,7 @@ pub async fn delete_dir_and_archive_for_task(
 pub async fn delete_ipfs_pins_for_task<DB: DeleteDb + ?Sized>(
     db: &DB,
     task_id: &str,
-    ipfs_providers: &[Box<dyn crate::ipfs::IpfsPinningProvider>],
+    ipfs_providers: &[Arc<dyn crate::ipfs::IpfsPinningProvider>],
 ) -> Result<bool, String> {
     let pin_requests = db
         .get_pin_requests_by_task_id(task_id)
