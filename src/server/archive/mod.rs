@@ -212,11 +212,15 @@ pub fn archive_format_from_accept(accept: &str) -> Option<String> {
 /// and falling back to user-agent heuristics. Defaults to "zip" if undecidable.
 pub fn negotiate_archive_format(accept: Option<&str>, user_agent: Option<&str>) -> String {
     if let Some(accept_val) = accept {
-        if let Some(fmt) = archive_format_from_accept(accept_val) {
+        // Skip generic Accept headers like "*/*" and fall back to user-agent
+        if accept_val == "*/*" {
+            // Fall through to user-agent logic
+        } else if let Some(fmt) = archive_format_from_accept(accept_val) {
             return fmt;
+        } else {
+            // Accept provided but undecidable -> default to zip
+            return "zip".to_string();
         }
-        // Accept provided but undecidable -> default to zip
-        return "zip".to_string();
     }
     user_agent
         .map(archive_format_from_user_agent)
@@ -271,5 +275,16 @@ mod archive_helpers_tests {
         // Windows -> zip by UA heuristic
         let fmt_win = negotiate_archive_format(None, Some("Windows"));
         assert_eq!(fmt_win, "zip");
+    }
+
+    #[test]
+    fn negotiate_generic_accept_falls_back_to_user_agent() {
+        // Generic Accept header "*/*" should fall back to user-agent
+        let fmt_linux = negotiate_archive_format(Some("*/*"), Some("Linux"));
+        assert_eq!(fmt_linux, "tar.gz");
+        let fmt_windows = negotiate_archive_format(Some("*/*"), Some("Windows"));
+        assert_eq!(fmt_windows, "zip");
+        let fmt_mac = negotiate_archive_format(Some("*/*"), Some("Macintosh"));
+        assert_eq!(fmt_mac, "zip");
     }
 }
