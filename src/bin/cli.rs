@@ -600,14 +600,15 @@ async fn main() -> Result<()> {
     chain_config.resolve_env_vars()?;
 
     // Load IPFS provider configuration from file if provided
-    let ipfs_providers = if let Some(path) = &args.ipfs_config {
+    let ipfs_providers = if args.ipfs_config.is_none() {
+        Vec::new()
+    } else {
+        let path = args.ipfs_config.as_ref().unwrap();
         let contents = std::fs::read_to_string(path)
             .with_context(|| format!("Failed to read IPFS config file '{path}'"))?;
         let config: IpfsConfigFile = toml::from_str(&contents)
             .with_context(|| format!("Failed to parse IPFS config file '{path}'"))?;
         config.ipfs_provider
-    } else {
-        Vec::new()
     };
 
     let output_path = args.output_path.clone();

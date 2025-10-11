@@ -24,7 +24,7 @@ The best way to ensure that is to run `make all`.
 ### Structure
 
 - Prefer early returns to avoid long, nested if/else blocks.
-- When writing or refactoring an if/else block, ensure that the longer branch is always the else block for readability.
+- When writing conditional statements (if-else, match arms, etc.), always place the smallest/shortest clause first to enhance readability. This applies to both simple conditions and complex nested logic. For example, prefer `if condition.is_none() { short_clause } else { long_clause }` over `if let Some(value) = condition { long_clause } else { short_clause }`. Avoid adding empty blocks or meaningless comments just to satisfy this rule - only apply it when it genuinely improves readability without introducing noise.
 
 ### Code comments
 

@@ -141,7 +141,11 @@ async fn main() {
     }
 
     // Load IPFS provider configuration from file if provided
-    let ipfs_providers = if let Some(path) = &args.ipfs_config {
+    let ipfs_providers = if args.ipfs_config.is_none() {
+        // No config file, use empty list (AppState will fall back to env vars)
+        Vec::new()
+    } else {
+        let path = args.ipfs_config.as_ref().unwrap();
         match std::fs::read_to_string(path) {
             Ok(contents) => match toml::from_str::<IpfsConfigFile>(&contents) {
                 Ok(file) => {
@@ -162,9 +166,6 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-    } else {
-        // No config file, use empty list (AppState will fall back to env vars)
-        Vec::new()
     };
 
     let (backup_job_sender, backup_job_receiver) =
@@ -216,7 +217,9 @@ async fn main() {
     }
 
     // Start the pruner thread
-    let pruner_handle = if args.enable_pruner {
+    let pruner_handle = if !args.enable_pruner {
+        None
+    } else {
         let db = state.db.clone();
         let base_dir = args.base_dir.clone();
         let interval = args.pruner_interval_seconds;
@@ -224,8 +227,6 @@ async fn main() {
         Some(tokio::spawn(async move {
             run_pruner(db, base_dir, interval, shutdown_flag).await;
         }))
-    } else {
-        None
     };
 
     // Start the pin monitor thread if IPFS providers are configured
