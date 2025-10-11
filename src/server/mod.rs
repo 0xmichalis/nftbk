@@ -174,7 +174,7 @@ impl AppState {
             auth_token,
             pruner_enabled,
             pruner_retention_days,
-            download_tokens: Arc::new(Mutex::new(HashMap::new())),
+            download_tokens: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
             backup_job_sender,
             db,
             shutdown_flag,
@@ -396,7 +396,88 @@ pub async fn recover_incomplete_jobs<DB: RecoveryDb + ?Sized>(
     Ok(job_count)
 }
 
-async fn run_backup_job_inner(state: AppState, job: BackupJob) {
+// Trait for database operations needed by backup and deletion jobs
+#[async_trait::async_trait]
+pub trait BackupJobDb {
+    async fn clear_backup_errors(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn set_backup_error(&self, task_id: &str, error: &str) -> Result<(), sqlx::Error>;
+    async fn insert_pin_requests_with_tokens(
+        &self,
+        task_id: &str,
+        requestor: &str,
+        token_pin_mappings: &[crate::TokenPinMapping],
+    ) -> Result<(), sqlx::Error>;
+    async fn update_protection_job_error_log(
+        &self,
+        task_id: &str,
+        error_log: &str,
+    ) -> Result<(), sqlx::Error>;
+    async fn update_protection_job_status(
+        &self,
+        task_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error>;
+    async fn get_protection_job(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<crate::server::db::ProtectionJobWithBackup>, sqlx::Error>;
+    async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn delete_protection_job(&self, task_id: &str) -> Result<(), sqlx::Error>;
+}
+
+// Implement BackupJobDb trait for the real Db
+#[async_trait::async_trait]
+impl BackupJobDb for Db {
+    async fn clear_backup_errors(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::clear_backup_errors(self, task_id).await
+    }
+
+    async fn set_backup_error(&self, task_id: &str, error: &str) -> Result<(), sqlx::Error> {
+        Db::set_backup_error(self, task_id, error).await
+    }
+
+    async fn insert_pin_requests_with_tokens(
+        &self,
+        task_id: &str,
+        requestor: &str,
+        token_pin_mappings: &[crate::TokenPinMapping],
+    ) -> Result<(), sqlx::Error> {
+        Db::insert_pin_requests_with_tokens(self, task_id, requestor, token_pin_mappings).await
+    }
+
+    async fn update_protection_job_error_log(
+        &self,
+        task_id: &str,
+        error_log: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_protection_job_error_log(self, task_id, error_log).await
+    }
+
+    async fn update_protection_job_status(
+        &self,
+        task_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_protection_job_status(self, task_id, status).await
+    }
+
+    async fn get_protection_job(
+        &self,
+        task_id: &str,
+    ) -> Result<Option<crate::server::db::ProtectionJobWithBackup>, sqlx::Error> {
+        Db::get_protection_job(self, task_id).await
+    }
+
+    async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::start_deletion(self, task_id).await
+    }
+
+    async fn delete_protection_job(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::delete_protection_job(self, task_id).await
+    }
+}
+
+async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: BackupJob, db: &DB) {
     let task_id = job.task_id.clone();
     let tokens = job.request.tokens.clone();
     let force = job.force;
@@ -409,7 +490,7 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
 
     // If force is set, clean up the error log if it exists
     if force {
-        let _ = state.db.clear_backup_errors(&task_id).await;
+        let _ = db.clear_backup_errors(&task_id).await;
     }
 
     // Prepare backup config
@@ -468,8 +549,7 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
                 return;
             }
             error!("Backup {task_id} failed: {}", e);
-            let _ = state
-                .db
+            let _ = db
                 .set_backup_error(&task_id, &format!("Backup failed: {e}"))
                 .await;
             return;
@@ -479,8 +559,7 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
     // Persist token-pin request mappings atomically, if any
     if !token_pin_mappings.is_empty() {
         let req = job.requestor.as_deref().unwrap_or("");
-        let _ = state
-            .db
+        let _ = db
             .insert_pin_requests_with_tokens(&job.task_id, req, &token_pin_mappings)
             .await;
     }
@@ -488,10 +567,7 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
     // Store non-fatal error log in DB if present
     if !error_log.is_empty() {
         let log_str = error_log.join("\n");
-        let _ = state
-            .db
-            .update_protection_job_error_log(&task_id, &log_str)
-            .await;
+        let _ = db.update_protection_job_error_log(&task_id, &log_str).await;
     }
 
     // Handle archiving based on storage mode
@@ -546,13 +622,10 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
                     if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
                         let error_msg = format!("Failed to write archive checksum file: {e}");
                         error!("{error_msg}");
-                        let _ = state.db.set_backup_error(&task_id, &error_msg).await;
+                        let _ = db.set_backup_error(&task_id, &error_msg).await;
                         return;
                     }
-                    let _ = state
-                        .db
-                        .update_protection_job_status(&task_id, "done")
-                        .await;
+                    let _ = db.update_protection_job_status(&task_id, "done").await;
                 }
                 Err(e) => {
                     let err_str = e.to_string();
@@ -566,7 +639,7 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
                     }
                     let error_msg = format!("Failed to archive backup: {e}");
                     error!("{error_msg}");
-                    let _ = state.db.set_backup_error(&task_id, &error_msg).await;
+                    let _ = db.set_backup_error(&task_id, &error_msg).await;
                     return;
                 }
             }
@@ -575,16 +648,17 @@ async fn run_backup_job_inner(state: AppState, job: BackupJob) {
         }
         StorageMode::Ipfs => {
             // IPFS-only mode: no filesystem operations needed
-            let _ = state
-                .db
-                .update_protection_job_status(&task_id, "done")
-                .await;
+            let _ = db.update_protection_job_status(&task_id, "done").await;
             info!("IPFS pinning for {} complete", task_id);
         }
     }
 }
 
-async fn run_deletion_job_inner(state: AppState, job: DeletionJob) {
+async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
+    state: AppState,
+    job: DeletionJob,
+    db: &DB,
+) {
     let task_id = job.task_id.clone();
     info!("Running deletion job for task {}", task_id);
 
@@ -594,20 +668,18 @@ async fn run_deletion_job_inner(state: AppState, job: DeletionJob) {
     };
 
     // Get the protection job metadata
-    let meta = match state.db.get_protection_job(&task_id).await {
+    let meta = match db.get_protection_job(&task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
             error!("Task {} not found for deletion", task_id);
-            let _ = state
-                .db
+            let _ = db
                 .set_backup_error(&task_id, "Task not found for deletion")
                 .await;
             return;
         }
         Err(e) => {
             error!("Failed to read metadata for task {}: {}", task_id, e);
-            let _ = state
-                .db
+            let _ = db
                 .set_backup_error(&task_id, &format!("Failed to read metadata: {}", e))
                 .await;
             return;
@@ -621,8 +693,7 @@ async fn run_deletion_job_inner(state: AppState, job: DeletionJob) {
                 "Requestor {} does not match task owner {} for task {}",
                 requestor, meta.requestor, task_id
             );
-            let _ = state
-                .db
+            let _ = db
                 .set_backup_error(&task_id, "Requestor does not match task owner")
                 .await;
             return;
@@ -632,18 +703,16 @@ async fn run_deletion_job_inner(state: AppState, job: DeletionJob) {
     // Check if task is in progress
     if meta.status == "in_progress" {
         error!("Cannot delete task {} that is in progress", task_id);
-        let _ = state
-            .db
+        let _ = db
             .set_backup_error(&task_id, "Can only delete completed tasks")
             .await;
         return;
     }
 
     // Set status to in_progress for deletion
-    if let Err(e) = state.db.start_deletion(&task_id).await {
+    if let Err(e) = db.start_deletion(&task_id).await {
         error!("Failed to start deletion for task {}: {}", task_id, e);
-        let _ = state
-            .db
+        let _ = db
             .set_backup_error(&task_id, &format!("Failed to start deletion: {}", e))
             .await;
         return;
@@ -682,11 +751,10 @@ async fn run_deletion_job_inner(state: AppState, job: DeletionJob) {
     }
 
     // Delete the protection job metadata
-    if let Err(e) = state.db.delete_protection_job(&task_id).await {
+    if let Err(e) = db.delete_protection_job(&task_id).await {
         error!("Database deletion failed for task {}: {}", task_id, e);
         // This is the only error we should fail on, as it means the job metadata couldn't be removed
-        let _ = state
-            .db
+        let _ = db
             .set_backup_error(
                 &task_id,
                 &format!("Failed to delete metadata from database: {}", e),
@@ -703,7 +771,7 @@ pub async fn run_backup_job(state: AppState, job: BackupJob) {
     let state_clone = state.clone();
     let task_id_clone = task_id.clone();
 
-    let fut = AssertUnwindSafe(run_backup_job_inner(state, job)).catch_unwind();
+    let fut = AssertUnwindSafe(run_backup_job_inner(state.clone(), job, &*state.db)).catch_unwind();
 
     let result = fut.await;
     if let Err(panic) = result {
@@ -716,10 +784,7 @@ pub async fn run_backup_job(state: AppState, job: BackupJob) {
         };
         let error_msg = format!("Backup job for task {task_id_clone} panicked: {panic_msg}");
         error!("{error_msg}");
-        let _ = state_clone
-            .db
-            .set_backup_error(&task_id_clone, &error_msg)
-            .await;
+        let _ = BackupJobDb::set_backup_error(&*state_clone.db, &task_id_clone, &error_msg).await;
     }
 }
 
@@ -728,7 +793,8 @@ pub async fn run_deletion_job(state: AppState, job: DeletionJob) {
     let state_clone = state.clone();
     let task_id_clone = task_id.clone();
 
-    let fut = AssertUnwindSafe(run_deletion_job_inner(state, job)).catch_unwind();
+    let fut =
+        AssertUnwindSafe(run_deletion_job_inner(state.clone(), job, &*state.db)).catch_unwind();
 
     let result = fut.await;
     if let Err(panic) = result {
@@ -741,10 +807,7 @@ pub async fn run_deletion_job(state: AppState, job: DeletionJob) {
         };
         let error_msg = format!("Deletion job for task {task_id_clone} panicked: {panic_msg}");
         error!("{error_msg}");
-        let _ = state_clone
-            .db
-            .set_backup_error(&task_id_clone, &error_msg)
-            .await;
+        let _ = BackupJobDb::set_backup_error(&*state_clone.db, &task_id_clone, &error_msg).await;
     }
 }
 
