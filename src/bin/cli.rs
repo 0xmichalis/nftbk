@@ -22,6 +22,8 @@ use nftbk::server::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
 use nftbk::server::archive::archive_format_from_user_agent;
 use nftbk::{ProcessManagementConfig, StorageConfig};
 
+const BACKUPS_API_PATH: &str = "/v1/backups";
+
 #[derive(serde::Deserialize)]
 struct IpfsConfigFile {
     ipfs_provider: Vec<IpfsProviderConfig>,
@@ -233,7 +235,7 @@ async fn delete_backup(
     auth_token: Option<&str>,
 ) -> Result<()> {
     let server = server_address.trim_end_matches('/');
-    let url = format!("{server}/backup/{task_id}");
+    let url = format!("{server}{BACKUPS_API_PATH}/{task_id}",);
     let mut req = client.delete(url);
     if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
         req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
@@ -242,12 +244,37 @@ async fn delete_backup(
         .send()
         .await
         .context("Failed to send DELETE to server")?;
+
     match resp.status().as_u16() {
-        204 => {
-            println!("Deleted existing backup {task_id}");
+        202 => {
+            println!("Deletion request sent for backup {task_id}, waiting for completion...");
+            // Poll until backup is actually deleted (returns 404)
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                let status_url = format!("{server}{BACKUPS_API_PATH}/{task_id}");
+                let mut status_req = client.get(&status_url);
+                if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
+                    status_req = status_req
+                        .header("Authorization", format!("Bearer {}", auth_token.unwrap()));
+                }
+                match status_req.send().await {
+                    Ok(status_resp) => {
+                        if status_resp.status().as_u16() == 404 {
+                            println!("Backup {task_id} successfully deleted");
+                            return Ok(());
+                        }
+                        // Still exists, continue polling
+                    }
+                    Err(_) => {
+                        // Network error, continue polling
+                    }
+                }
+            }
+        }
+        404 => {
+            println!("Backup {task_id} already deleted");
             Ok(())
         }
-        404 => Ok(()), // nothing to delete is fine
         409 => {
             // In progress; proceed with new request anyway
             println!("Existing backup {task_id} is in progress; proceeding to create new request");
@@ -281,8 +308,10 @@ async fn request_backup(
     }
 
     let server = server_address.trim_end_matches('/');
-    println!("Submitting backup request to server at {server}/backup ...",);
-    let mut req = client.post(format!("{server}/backup")).json(&backup_req);
+    println!("Submitting backup request to server at {server}{BACKUPS_API_PATH} ...");
+    let mut req = client
+        .post(format!("{server}{BACKUPS_API_PATH}"))
+        .json(&backup_req);
     req = req.header("User-Agent", user_agent);
     if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
         req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
@@ -318,7 +347,7 @@ async fn request_backup(
         let message = body
             .get("error")
             .and_then(|v| v.as_str())
-            .unwrap_or("Server returned conflict for /backup")
+            .unwrap_or(&format!("Server returned conflict for {BACKUPS_API_PATH}"))
             .to_string();
         return Ok(BackupStart::Conflict {
             task_id,
@@ -337,8 +366,9 @@ async fn wait_for_done_backup(
     auth_token: Option<&str>,
 ) -> Result<()> {
     let status_url = format!(
-        "{}/backup/{}/status",
+        "{}{}/{}",
         server_address.trim_end_matches('/'),
+        BACKUPS_API_PATH,
         task_id
     );
     let mut in_progress_logged = false;
@@ -402,11 +432,12 @@ async fn download_backup(
 ) -> Result<()> {
     // Step 1: Get download token
     let token_url = format!(
-        "{}/backup/{}/download_token",
+        "{}{}/{}/download-tokens",
         server_address.trim_end_matches('/'),
+        BACKUPS_API_PATH,
         task_id
     );
-    let mut token_req = client.get(&token_url);
+    let mut token_req = client.post(&token_url);
     if is_defined(&_auth_token.as_ref().map(|s| s.to_string())) {
         token_req = token_req.header("Authorization", format!("Bearer {}", _auth_token.unwrap()));
     }
@@ -426,8 +457,9 @@ async fn download_backup(
 
     // Step 2: Download using token
     let download_url = format!(
-        "{}/backup/{}/download?token={}",
+        "{}{}/{}/download?token={}",
         server_address.trim_end_matches('/'),
+        BACKUPS_API_PATH,
         task_id,
         urlencoding::encode(download_token)
     );
@@ -485,7 +517,11 @@ async fn download_backup(
 async fn list_server_backups(server_address: &str) -> Result<()> {
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
     let client = Client::new();
-    let url = format!("{}/backups", server_address.trim_end_matches('/'));
+    let url = format!(
+        "{}{}",
+        server_address.trim_end_matches('/'),
+        BACKUPS_API_PATH
+    );
     let mut req = client.get(&url);
     if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
         req = req.header(
