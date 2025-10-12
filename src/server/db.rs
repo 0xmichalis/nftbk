@@ -262,6 +262,25 @@ impl Db {
         Ok(())
     }
 
+    pub async fn update_protection_job_storage_mode(
+        &self,
+        task_id: &str,
+        storage_mode: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE protection_jobs
+            SET storage_mode = $2, updated_at = NOW()
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .bind(storage_mode)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn retry_backup(
         &self,
         task_id: &str,

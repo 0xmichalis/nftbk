@@ -6,39 +6,41 @@ use axum::{
 use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
-use crate::server::{AppState, BackupJobOrShutdown, DeletionJob, JobType};
+use crate::server::AppState;
 
-/// Delete a backup job for the authenticated user. This will queue a deletion job that will
-/// delete the backup archive files (if the backup used filesystem storage), unpin any IPFS content
-/// (if the backup used IPFS storage), and remove the metadata from the database.
-/// The deletion is processed asynchronously by workers.
+/// Delete only the archive (filesystem) data for a backup job.
+/// If the backup has storage mode "both", it will update the storage mode to "ipfs".
+/// If the backup has storage mode "filesystem", it will delete the entire backup.
+/// If the backup has storage mode "ipfs", it will return an error.
 #[utoipa::path(
     delete,
-    path = "/v1/backups/{task_id}",
+    path = "/v1/backups/{task_id}/archive",
     params(
         ("task_id" = String, Path, description = "Unique identifier for the backup task")
     ),
     responses(
-        (status = 202, description = "Backup deletion job queued successfully"),
+        (status = 202, description = "Archive deletion job queued successfully"),
         (status = 400, description = "Bad request", body = ApiProblem, content_type = "application/problem+json"),
         (status = 403, description = "Requestor does not match task owner", body = ApiProblem, content_type = "application/problem+json"),
         (status = 404, description = "Task not found", body = ApiProblem, content_type = "application/problem+json"),
         (status = 409, description = "Can only delete completed tasks", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 422, description = "Backup does not use filesystem storage", body = ApiProblem, content_type = "application/problem+json"),
         (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
     tag = "backups",
     security(("bearer_auth" = []))
 )]
-pub async fn handle_backup_delete(
+pub async fn handle_backup_delete_archive(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
     Extension(requestor): Extension<Option<String>>,
 ) -> impl IntoResponse {
-    handle_backup_delete_core(&*state.db, &state.backup_job_sender, &task_id, requestor).await
+    handle_backup_delete_archive_core(&*state.db, &state.backup_job_sender, &task_id, requestor)
+        .await
 }
 
 // Minimal trait to mock DB calls
-pub trait DeleteDb {
+pub trait DeleteArchiveDb {
     fn get_protection_job<'a>(
         &'a self,
         task_id: &'a str,
@@ -53,24 +55,18 @@ pub trait DeleteDb {
                 + 'a,
         >,
     >;
+    fn update_protection_job_storage_mode<'a>(
+        &'a self,
+        task_id: &'a str,
+        storage_mode: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>;
     fn delete_protection_job<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>;
-    fn get_pin_requests_by_task_id<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<Vec<crate::server::db::PinRequestRow>, sqlx::Error>,
-                > + Send
-                + 'a,
-        >,
-    >;
 }
 
-impl DeleteDb for crate::server::db::Db {
+impl DeleteArchiveDb for crate::server::db::Db {
     fn get_protection_job<'a>(
         &'a self,
         task_id: &'a str,
@@ -87,6 +83,17 @@ impl DeleteDb for crate::server::db::Db {
     > {
         Box::pin(async move { crate::server::db::Db::get_protection_job(self, task_id).await })
     }
+    fn update_protection_job_storage_mode<'a>(
+        &'a self,
+        task_id: &'a str,
+        storage_mode: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            crate::server::db::Db::update_protection_job_storage_mode(self, task_id, storage_mode)
+                .await
+        })
+    }
     fn delete_protection_job<'a>(
         &'a self,
         task_id: &'a str,
@@ -94,24 +101,9 @@ impl DeleteDb for crate::server::db::Db {
     {
         Box::pin(async move { crate::server::db::Db::delete_protection_job(self, task_id).await })
     }
-    fn get_pin_requests_by_task_id<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<Vec<crate::server::db::PinRequestRow>, sqlx::Error>,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(
-            async move { crate::server::db::Db::get_pin_requests_by_task_id(self, task_id).await },
-        )
-    }
 }
 
-impl DeleteDb for std::sync::Arc<crate::server::db::Db> {
+impl DeleteArchiveDb for std::sync::Arc<crate::server::db::Db> {
     fn get_protection_job<'a>(
         &'a self,
         task_id: &'a str,
@@ -128,6 +120,17 @@ impl DeleteDb for std::sync::Arc<crate::server::db::Db> {
     > {
         Box::pin(async move { crate::server::db::Db::get_protection_job(self, task_id).await })
     }
+    fn update_protection_job_storage_mode<'a>(
+        &'a self,
+        task_id: &'a str,
+        storage_mode: &'a str,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
+    {
+        Box::pin(async move {
+            crate::server::db::Db::update_protection_job_storage_mode(self, task_id, storage_mode)
+                .await
+        })
+    }
     fn delete_protection_job<'a>(
         &'a self,
         task_id: &'a str,
@@ -135,26 +138,11 @@ impl DeleteDb for std::sync::Arc<crate::server::db::Db> {
     {
         Box::pin(async move { crate::server::db::Db::delete_protection_job(self, task_id).await })
     }
-    fn get_pin_requests_by_task_id<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<Vec<crate::server::db::PinRequestRow>, sqlx::Error>,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(
-            async move { crate::server::db::Db::get_pin_requests_by_task_id(self, task_id).await },
-        )
-    }
 }
 
-async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
+async fn handle_backup_delete_archive_core<DB: DeleteArchiveDb + ?Sized>(
     db: &DB,
-    backup_job_sender: &tokio::sync::mpsc::Sender<BackupJobOrShutdown>,
+    backup_job_sender: &tokio::sync::mpsc::Sender<crate::server::BackupJobOrShutdown>,
     task_id: &str,
     requestor: Option<String>,
 ) -> axum::response::Response {
@@ -164,7 +152,7 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
             let problem = ProblemJson::from_status(
                 StatusCode::BAD_REQUEST,
                 Some("Requestor required".to_string()),
-                Some(format!("/v1/backups/{}", task_id)),
+                Some(format!("/v1/backups/{}/archive", task_id)),
             );
             return problem.into_response();
         }
@@ -177,7 +165,7 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
             let problem = ProblemJson::from_status(
                 StatusCode::NOT_FOUND,
                 Some("Nothing found to delete".to_string()),
-                Some(format!("/v1/backups/{}", task_id)),
+                Some(format!("/v1/backups/{}/archive", task_id)),
             );
             return problem.into_response();
         }
@@ -185,7 +173,7 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
             let problem = ProblemJson::from_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Some(format!("Failed to read metadata: {}", e)),
-                Some(format!("/v1/backups/{}", task_id)),
+                Some(format!("/v1/backups/{}/archive", task_id)),
             );
             return problem.into_response();
         }
@@ -196,7 +184,7 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
         let problem = ProblemJson::from_status(
             StatusCode::FORBIDDEN,
             Some("Requestor does not match task owner".to_string()),
-            Some(format!("/v1/backups/{}", task_id)),
+            Some(format!("/v1/backups/{}/archive", task_id)),
         );
         return problem.into_response();
     }
@@ -206,38 +194,52 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
         let problem = ProblemJson::from_status(
             StatusCode::CONFLICT,
             Some("Can only delete completed tasks".to_string()),
-            Some(format!("/v1/backups/{}", task_id)),
+            Some(format!("/v1/backups/{}/archive", task_id)),
         );
         return problem.into_response();
     }
 
-    // Create deletion job and queue it
-    let deletion_job = DeletionJob {
+    // Check if backup uses filesystem storage
+    if meta.storage_mode == "ipfs" {
+        let problem = ProblemJson::from_status(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Some("Backup does not use filesystem storage".to_string()),
+            Some(format!("/v1/backups/{}/archive", task_id)),
+        );
+        return problem.into_response();
+    }
+
+    // Enqueue deletion job with ArchiveOnly scope and return 202
+    let deletion_job = crate::server::DeletionJob {
         task_id: task_id.to_string(),
         requestor: Some(requestor_str),
-        scope: crate::server::DeletionScope::Full,
+        scope: crate::server::DeletionScope::ArchiveOnly,
     };
-
     if let Err(e) = backup_job_sender
-        .send(BackupJobOrShutdown::Job(JobType::Deletion(deletion_job)))
+        .send(crate::server::BackupJobOrShutdown::Job(
+            crate::server::JobType::Deletion(deletion_job),
+        ))
         .await
     {
-        error!("Failed to enqueue deletion job for task {}: {}", task_id, e);
+        error!(
+            "Failed to enqueue archive-only deletion job for task {}: {}",
+            task_id, e
+        );
         let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             Some("Failed to enqueue deletion job".to_string()),
-            Some(format!("/v1/backups/{}", task_id)),
+            Some(format!("/v1/backups/{}/archive", task_id)),
         );
         return problem.into_response();
     }
 
-    info!("Queued deletion job for backup {}", task_id);
+    info!("Queued archive-only deletion job for backup {}", task_id);
     (StatusCode::ACCEPTED, ()).into_response()
 }
 
 #[cfg(test)]
-mod handle_backup_delete_core_tests {
-    use super::{handle_backup_delete_core, DeleteDb};
+mod handle_backup_delete_archive_core_tests {
+    use super::{handle_backup_delete_archive_core, DeleteArchiveDb};
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
@@ -245,11 +247,13 @@ mod handle_backup_delete_core_tests {
     struct MockDb {
         meta: Option<crate::server::db::ProtectionJobWithBackup>,
         get_error: bool,
+        update_error: bool,
         delete_error: bool,
-        pin_requests: Vec<crate::server::db::PinRequestRow>,
+        update_calls: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        delete_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     }
 
-    impl DeleteDb for MockDb {
+    impl DeleteArchiveDb for MockDb {
         fn get_protection_job<'a>(
             &'a self,
             _task_id: &'a str,
@@ -274,33 +278,41 @@ mod handle_backup_delete_core_tests {
                 }
             })
         }
-        fn delete_protection_job<'a>(
+        fn update_protection_job_storage_mode<'a>(
             &'a self,
-            _task_id: &'a str,
+            task_id: &'a str,
+            storage_mode: &'a str,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
         {
+            let update_calls = self.update_calls.clone();
+            let task_id = task_id.to_string();
+            let storage_mode = storage_mode.to_string();
+            let err = self.update_error;
+            Box::pin(async move {
+                if err {
+                    Err(sqlx::Error::PoolTimedOut)
+                } else {
+                    update_calls.lock().unwrap().push((task_id, storage_mode));
+                    Ok(())
+                }
+            })
+        }
+        fn delete_protection_job<'a>(
+            &'a self,
+            task_id: &'a str,
+        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
+        {
+            let delete_calls = self.delete_calls.clone();
+            let task_id = task_id.to_string();
             let err = self.delete_error;
             Box::pin(async move {
                 if err {
                     Err(sqlx::Error::PoolTimedOut)
                 } else {
+                    delete_calls.lock().unwrap().push(task_id);
                     Ok(())
                 }
             })
-        }
-        fn get_pin_requests_by_task_id<'a>(
-            &'a self,
-            _task_id: &'a str,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<Vec<crate::server::db::PinRequestRow>, sqlx::Error>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            let pin_requests = self.pin_requests.clone();
-            Box::pin(async move { Ok(pin_requests) })
         }
     }
 
@@ -335,7 +347,7 @@ mod handle_backup_delete_core_tests {
     async fn returns_400_when_missing_requestor() {
         let db = MockDb::default();
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let resp = handle_backup_delete_core(&db, &tx, "t1", None)
+        let resp = handle_backup_delete_archive_core(&db, &tx, "t1", None)
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -346,11 +358,13 @@ mod handle_backup_delete_core_tests {
         let db = MockDb {
             meta: None,
             get_error: false,
+            update_error: false,
             delete_error: false,
-            pin_requests: Vec::new(),
+            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let resp = handle_backup_delete_core(&db, &tx, "t1", Some("did:me".to_string()))
+        let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::NOT_FOUND);
@@ -361,11 +375,13 @@ mod handle_backup_delete_core_tests {
         let db = MockDb {
             meta: None,
             get_error: true,
+            update_error: false,
             delete_error: false,
-            pin_requests: Vec::new(),
+            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let resp = handle_backup_delete_core(&db, &tx, "t1", Some("did:me".to_string()))
+        let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -373,14 +389,17 @@ mod handle_backup_delete_core_tests {
 
     #[tokio::test]
     async fn returns_403_on_owner_mismatch() {
+        // owner mismatch should return 403
         let db = MockDb {
             meta: Some(sample_meta("did:other", "done", "filesystem")),
             get_error: false,
+            update_error: false,
             delete_error: false,
-            pin_requests: Vec::new(),
+            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let resp = handle_backup_delete_core(&db, &tx, "t1", Some("did:me".to_string()))
+        let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
@@ -391,26 +410,68 @@ mod handle_backup_delete_core_tests {
         let db = MockDb {
             meta: Some(sample_meta("did:me", "in_progress", "filesystem")),
             get_error: false,
+            update_error: false,
             delete_error: false,
-            pin_requests: Vec::new(),
+            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let resp = handle_backup_delete_core(&db, &tx, "t1", Some("did:me".to_string()))
+        let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::CONFLICT);
     }
 
     #[tokio::test]
-    async fn returns_202_on_success_and_queues_deletion() {
+    async fn returns_422_when_ipfs_only() {
+        let db = MockDb {
+            meta: Some(sample_meta("did:me", "done", "ipfs")),
+            get_error: false,
+            update_error: false,
+            delete_error: false,
+            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    #[tokio::test]
+    async fn deletes_filesystem_job_on_success() {
         let db = MockDb {
             meta: Some(sample_meta("did:me", "done", "filesystem")),
             get_error: false,
+            update_error: false,
             delete_error: false,
-            pin_requests: Vec::new(),
+            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
-        let resp = handle_backup_delete_core(&db, &tx, "t1", Some("did:me".to_string()))
+        let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+
+        // Verify that a deletion job was queued
+        let job = rx.try_recv();
+        assert!(job.is_ok());
+    }
+
+    #[tokio::test]
+    async fn updates_storage_mode_for_both_job() {
+        let db = MockDb {
+            meta: Some(sample_meta("did:me", "done", "both")),
+            get_error: false,
+            update_error: false,
+            delete_error: false,
+            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let (tx, mut rx) = tokio::sync::mpsc::channel(1);
+        let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
