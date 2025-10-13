@@ -138,7 +138,8 @@ impl IpfsPinningProvider for IpfsPinningClient {
             id: parsed.requestid,
             cid: parsed.pin.cid,
             status: Self::convert_status(parsed.status),
-            provider: self.provider_name().to_string(),
+            provider_type: self.provider_type().to_string(),
+            provider_url: self.provider_url().to_string(),
             metadata: parsed.pin.meta.map(|m| m.0),
         })
     }
@@ -164,7 +165,8 @@ impl IpfsPinningProvider for IpfsPinningClient {
             id: parsed.requestid,
             cid: parsed.pin.cid,
             status: Self::convert_status(parsed.status),
-            provider: self.provider_name().to_string(),
+            provider_type: self.provider_type().to_string(),
+            provider_url: self.provider_url().to_string(),
             metadata: parsed.pin.meta.map(|m| m.0),
         })
     }
@@ -182,7 +184,8 @@ impl IpfsPinningProvider for IpfsPinningClient {
                 id: pin_status.requestid,
                 cid: pin_status.pin.cid,
                 status: Self::convert_status(pin_status.status),
-                provider: self.provider_name().to_string(),
+                provider_type: self.provider_type().to_string(),
+                provider_url: self.provider_url().to_string(),
                 metadata: pin_status.pin.meta.map(|m| m.0),
             })
             .collect();
@@ -206,8 +209,12 @@ impl IpfsPinningProvider for IpfsPinningClient {
         Ok(())
     }
 
-    fn provider_name(&self) -> &str {
+    fn provider_type(&self) -> &str {
         "pinning-service"
+    }
+
+    fn provider_url(&self) -> &str {
+        &self.base_url
     }
 }
 
@@ -259,7 +266,7 @@ mod tests {
             .await;
 
         let base = server.uri();
-        let client = IpfsPinningClient::new(base, Some("token123".into()));
+        let client = IpfsPinningClient::new(base.clone(), Some("token123".into()));
         let request = PinRequest {
             cid: "bafy...".into(),
             name: Some("my".into()),
@@ -270,7 +277,7 @@ mod tests {
         assert_eq!(res.id, "req-123");
         assert_eq!(res.cid, "bafybeigdyrzt5v276s3jvq7j4q6vti7"); // CID from server response
         assert!(matches!(res.status, PinResponseStatus::Pinned));
-        assert_eq!(res.provider, "pinning-service");
+        assert_eq!(res.provider_url, base);
     }
 
     #[tokio::test]
@@ -285,12 +292,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = IpfsPinningClient::new(server.uri(), None);
+        let base = server.uri();
+        let client = IpfsPinningClient::new(base.clone(), None);
         let res = client.get_pin("req-123").await.unwrap();
         assert_eq!(res.id, "req-123");
         assert_eq!(res.cid, "bafybeigdyrzt5v276s3jvq7j4q6vti7");
         assert!(matches!(res.status, PinResponseStatus::Pinned));
-        assert_eq!(res.provider, "pinning-service");
+        assert_eq!(res.provider_url, base);
     }
 
     #[tokio::test]

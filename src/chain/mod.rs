@@ -92,20 +92,20 @@ where
     for provider in providers {
         info!(
             "Requesting to pin {cid} for {token} to provider {}",
-            provider.provider_name()
+            provider.provider_type()
         );
         if let Some(response) = process(
             provider.create_pin(&pin_request).await,
             format!(
                 "Failed to request pinning {cid} for {token} to provider {}",
-                provider.provider_name()
+                provider.provider_type()
             ),
             exit_on_error,
             errors,
         )? {
             info!(
                 "Requested to pin {cid} for {token} to provider {} (request id: {})",
-                provider.provider_name(),
+                provider.provider_type(),
                 response.id
             );
             pin_responses.push(response);
@@ -1097,7 +1097,8 @@ mod pin_cid_tests {
                 id: request.name.clone().unwrap_or_default(),
                 cid: request.cid.clone(),
                 status: crate::ipfs::PinResponseStatus::Queued,
-                provider: self.provider_name().to_string(),
+                provider_type: self.provider_type().to_string(),
+                provider_url: self.provider_url().to_string(),
                 metadata: None,
             })
         }
@@ -1114,7 +1115,11 @@ mod pin_cid_tests {
             unimplemented!()
         }
 
-        fn provider_name(&self) -> &str {
+        fn provider_type(&self) -> &str {
+            self.0
+        }
+
+        fn provider_url(&self) -> &str {
             self.0
         }
     }
@@ -1250,7 +1255,7 @@ mod pin_cid_tests {
         assert_eq!(res.len(), 2);
         assert!(res.iter().all(|r| r.id == "x"));
         let providers: std::collections::HashSet<_> =
-            res.iter().map(|r| r.provider.as_str()).collect();
+            res.iter().map(|r| r.provider_url.as_str()).collect();
         assert!(providers.contains("p1") && providers.contains("p2"));
     }
 }

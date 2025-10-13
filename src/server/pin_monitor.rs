@@ -61,12 +61,13 @@ pub async fn monitor_pin_requests<DB: PinMonitorDb + ?Sized>(
         // Find the appropriate provider for this pin request
         let provider = providers
             .iter()
-            .find(|p| p.provider_name() == pin_request.provider);
+            .find(|p| pin_request.provider_url.as_deref() == Some(p.provider_url()));
 
         let Some(provider) = provider else {
             warn!(
-                "No provider found for pin request {} (provider: {})",
-                pin_request.id, pin_request.provider
+                "No provider found for pin request {} (provider_url: {})",
+                pin_request.id,
+                pin_request.provider_url.as_deref().unwrap_or("")
             );
             continue;
         };
@@ -186,7 +187,11 @@ mod tests {
 
     #[async_trait]
     impl IpfsPinningProvider for TestIpfsProvider {
-        fn provider_name(&self) -> &str {
+        fn provider_type(&self) -> &str {
+            &self.name
+        }
+
+        fn provider_url(&self) -> &str {
             &self.name
         }
 
@@ -293,14 +298,15 @@ mod tests {
 
     fn create_test_pin_request_row(
         id: i64,
-        provider: &str,
+        provider_url: &str,
         request_id: &str,
         status: &str,
     ) -> PinRequestRow {
         PinRequestRow {
             id,
             task_id: "test-task".to_string(),
-            provider: provider.to_string(),
+            provider_type: "test-type".to_string(),
+            provider_url: Some(provider_url.to_string()),
             cid: "QmTestCid".to_string(),
             request_id: request_id.to_string(),
             status: status.to_string(),
@@ -313,7 +319,8 @@ mod tests {
             id: id.to_string(),
             cid: "QmTestCid".to_string(),
             status,
-            provider: "test-provider".to_string(),
+            provider_type: "test-provider".to_string(),
+            provider_url: "test-provider".to_string(),
             metadata: None,
         }
     }

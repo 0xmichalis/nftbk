@@ -19,8 +19,10 @@ pub struct PinResponse {
     pub cid: String,
     /// Status of the pin operation
     pub status: PinResponseStatus,
-    /// Name of the provider (e.g., "pinning-service", "pinata")
-    pub provider: String,
+    /// Type of the provider (e.g., "pinning-service", "pinata")
+    pub provider_type: String,
+    /// Base URL of the provider used
+    pub provider_url: String,
     /// Optional user-defined metadata associated with the pin
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
@@ -38,8 +40,11 @@ pub enum PinResponseStatus {
 /// Trait for IPFS pinning providers
 #[async_trait]
 pub trait IpfsPinningProvider: Send + Sync {
-    /// Get the name of the provider (e.g., "pinning-service", "pinata")
-    fn provider_name(&self) -> &str;
+    /// Get the type of the provider (e.g., "pinning-service", "pinata")
+    fn provider_type(&self) -> &str;
+
+    /// Get the base URL used to talk to this provider
+    fn provider_url(&self) -> &str;
 
     /// Pin a CID to the IPFS network
     async fn create_pin(&self, request: &PinRequest) -> Result<PinResponse>;

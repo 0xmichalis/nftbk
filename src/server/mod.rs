@@ -158,8 +158,9 @@ impl AppState {
             match config.create_provider() {
                 Ok(provider) => {
                     info!(
-                        "Successfully created IPFS provider: {}",
-                        provider.provider_name()
+                        "Successfully created IPFS provider {} ({})",
+                        provider.provider_type(),
+                        provider.provider_url()
                     );
                     ipfs_provider_instances.push(Arc::from(provider));
                 }
@@ -727,12 +728,13 @@ async fn delete_ipfs_pins(
     for pin_request in pin_requests {
         let provider = provider_instances
             .iter()
-            .find(|provider| provider.provider_name() == pin_request.provider);
+            .find(|provider| pin_request.provider_url.as_deref() == Some(provider.provider_url()));
 
         let provider = provider.ok_or_else(|| {
             format!(
-                "No provider instance found for provider {} when unpinning {}",
-                pin_request.provider, pin_request.cid
+                "No provider instance found for provider URL {} when unpinning {}",
+                pin_request.provider_url.as_deref().unwrap_or(""),
+                pin_request.cid
             )
         })?;
 
@@ -742,14 +744,17 @@ async fn delete_ipfs_pins(
             .map_err(|e| {
                 format!(
                     "Failed to unpin {} from provider {} for task {}: {}",
-                    pin_request.cid, pin_request.provider, task_id, e
+                    pin_request.cid,
+                    pin_request.provider_url.as_deref().unwrap_or(""),
+                    task_id,
+                    e
                 )
             })?;
 
         tracing::info!(
             "Successfully unpinned {} from provider {} for task {}",
             pin_request.cid,
-            pin_request.provider,
+            pin_request.provider_url.as_deref().unwrap_or(""),
             task_id
         );
         deleted_anything = true;
@@ -1030,7 +1035,10 @@ mod deletion_utils_tests {
 
     #[async_trait::async_trait]
     impl crate::ipfs::IpfsPinningProvider for MockProvider {
-        fn provider_name(&self) -> &str {
+        fn provider_type(&self) -> &str {
+            self.name
+        }
+        fn provider_url(&self) -> &str {
             self.name
         }
         async fn create_pin(
@@ -1064,7 +1072,8 @@ mod deletion_utils_tests {
             crate::server::db::PinRequestRow {
                 id: 1,
                 task_id: "t".into(),
-                provider: "mock".into(),
+                provider_type: "mock".into(),
+                provider_url: Some("mock".into()),
                 cid: "cid1".into(),
                 request_id: "rid1".into(),
                 status: "pinned".into(),
@@ -1073,7 +1082,8 @@ mod deletion_utils_tests {
             crate::server::db::PinRequestRow {
                 id: 2,
                 task_id: "t".into(),
-                provider: "mock".into(),
+                provider_type: "mock".into(),
+                provider_url: Some("mock".into()),
                 cid: "cid2".into(),
                 request_id: "rid2".into(),
                 status: "pinned".into(),
@@ -1093,7 +1103,8 @@ mod deletion_utils_tests {
         let rows = vec![crate::server::db::PinRequestRow {
             id: 1,
             task_id: "t".into(),
-            provider: "unknown".into(),
+            provider_type: "unknown".into(),
+            provider_url: Some("https://unknown".into()),
             cid: "cid".into(),
             request_id: "rid".into(),
             status: "pinned".into(),

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT id, task_id, provider, cid, request_id, status, requestor\n            FROM pin_requests\n            WHERE status IN ('queued', 'pinning')\n            ORDER BY id\n            ",
+  "query": "\n            SELECT id, task_id, provider_type, provider_url, cid, request_id, status, requestor\n            FROM pin_requests\n            WHERE status IN ('queued', 'pinning')\n            ORDER BY id\n            ",
   "describe": {
     "columns": [
       {
@@ -15,26 +15,31 @@
       },
       {
         "ordinal": 2,
-        "name": "provider",
+        "name": "provider_type",
         "type_info": "Varchar"
       },
       {
         "ordinal": 3,
+        "name": "provider_url",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
         "name": "cid",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 4,
+        "ordinal": 5,
         "name": "request_id",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 5,
+        "ordinal": 6,
         "name": "status",
         "type_info": "Varchar"
       },
       {
-        "ordinal": 6,
+        "ordinal": 7,
         "name": "requestor",
         "type_info": "Varchar"
       }
@@ -46,11 +51,12 @@
       false,
       false,
       false,
+      true,
       false,
       false,
       false,
       false
     ]
   },
-  "hash": "947892aaa4ddc23fa2e7a0bf065c2bf3ea374236da4010fe43fac814b18c6058"
+  "hash": "a564f0adfa9a1c749cb59d0962791afb0d9570da17adc462a48fdab3032f331e"
 }
