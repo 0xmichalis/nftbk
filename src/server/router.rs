@@ -73,8 +73,8 @@ use crate::server::AppState;
 - **Use Case**: Request a backup, track backup progress, view backup history, monitor failures
 
 ### Pin Management (`/pins`)
-- **Purpose**: Enable users to request and manage IPFS pinning of NFTs
-- **Use Case**: Request a pin, check pin status, verify content is pinned",
+- **Purpose**: Enable users to manage IPFS pins
+- **Use Case**: Check pin status and verify content is pinned",
         contact(
             name = "nftbk",
             url = "https://github.com/0xmichalis/nftbk"
