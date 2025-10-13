@@ -150,7 +150,7 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
     requestor: Option<String>,
 ) -> axum::response::Response {
     let requestor_str = match requestor {
-        Some(ref s) if !s.is_empty() => s.clone(),
+        Some(s) if !s.is_empty() => s,
         _ => {
             let problem = ProblemJson::from_status(
                 StatusCode::BAD_REQUEST,
