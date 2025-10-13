@@ -232,20 +232,19 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         }
     };
 
-    // Determine archive format if necessary
-    let archive_format = if storage_mode == StorageMode::Ipfs {
-        String::new()
+    // Determine archive format if necessary (None for IPFS-only)
+    let archive_format_opt: Option<String> = if storage_mode == StorageMode::Ipfs {
+        None
     } else {
-        negotiate_archive_format(
+        Some(negotiate_archive_format(
             headers.get("accept").and_then(|v| v.to_str().ok()),
             headers.get("user-agent").and_then(|v| v.to_str().ok()),
-        )
+        ))
     };
 
     // Write metadata to DB
     let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum::<usize>() as i32;
     let tokens_json = serde_json::to_value(&req.tokens).unwrap();
-    let is_ipfs_only = storage_mode == StorageMode::Ipfs;
     if let Err(e) = db
         .insert_protection_job(
             &task_id,
@@ -253,11 +252,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
             nft_count,
             &tokens_json,
             storage_mode.as_str(),
-            if is_ipfs_only {
-                None
-            } else {
-                Some(&archive_format)
-            },
+            archive_format_opt.as_deref(),
             Some(pruner_retention_days),
         )
         .await
@@ -275,11 +270,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         request: req.clone(),
         force: false,
         storage_mode: storage_mode.clone(),
-        archive_format: if is_ipfs_only {
-            None
-        } else {
-            Some(archive_format.clone())
-        },
+        archive_format: archive_format_opt.clone(),
         requestor: Some(requestor_str.clone()),
     };
     if let Err(e) = backup_job_sender
@@ -296,11 +287,11 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
     }
 
     info!(
-        "Created backup task {} (requestor: {}, count: {}, archive_format: {})",
+        "Created backup task {} (requestor: {}, count: {}, archive_format: {:?})",
         task_id,
         requestor.unwrap_or_default(),
         nft_count,
-        archive_format
+        archive_format_opt
     );
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
