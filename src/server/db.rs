@@ -365,7 +365,7 @@ impl Db {
 
     pub async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query!(
-            r#"UPDATE backup_tasks SET status = 'in_progress', deleted_at = NOW(), updated_at = NOW() WHERE task_id = $1"#,
+            r#"UPDATE backup_tasks SET deleted_at = NOW(), updated_at = NOW() WHERE task_id = $1"#,
             task_id
         )
         .execute(&self.pool)

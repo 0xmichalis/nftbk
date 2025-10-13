@@ -152,7 +152,7 @@ impl BackupDb for Db {
     }
 }
 
-async fn handle_backup_core<DB: BackupDb + ?Sized>(
+async fn handle_backup_core<DB: BackupDb + ?Sized + crate::server::BackupTaskDb>(
     db: &DB,
     backup_task_sender: &tokio::sync::mpsc::Sender<BackupTaskOrShutdown>,
     requestor: Option<String>,
@@ -175,8 +175,18 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
 
     let task_id = compute_task_id(&req.tokens, Some(&requestor_str));
 
-    if let Ok(Some(status)) = db.get_backup_status(&task_id).await {
-        match status.as_str() {
+    if let Ok(Some(task_meta)) = db.get_backup_task(&task_id).await {
+        // Check if task is being deleted
+        if task_meta.deleted_at.is_some() {
+            let problem = ProblemJson::from_status(
+                StatusCode::CONFLICT,
+                Some("Task is being deleted and cannot be started".to_string()),
+                Some(format!("/v1/backups/{task_id}")),
+            );
+            return problem.into_response();
+        }
+
+        match task_meta.status.as_str() {
             "in_progress" => {
                 debug!(
                     "Duplicate backup request, returning existing task_id {}",
@@ -195,7 +205,8 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
                 let problem = ProblemJson::from_status(
                     StatusCode::CONFLICT,
                     Some(format!(
-                        "Backup in status {status} cannot be started. Use retry."
+                        "Backup in status {} cannot be started. Use retry.",
+                        task_meta.status
                     )),
                     Some(format!("/v1/backups/{task_id}")),
                 );
@@ -510,9 +521,76 @@ mod handle_backup_core_tests {
 
     #[derive(Clone, Default)]
     struct MockDb {
-        status: Option<String>,
+        task_meta: Option<crate::server::db::BackupTask>,
         inserted: std::sync::Arc<std::sync::Mutex<bool>>,
         last_archive_format: std::sync::Arc<std::sync::Mutex<Option<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::server::BackupTaskDb for MockDb {
+        async fn clear_backup_errors(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn set_backup_error(&self, _task_id: &str, _error: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn insert_pin_requests_with_tokens(
+            &self,
+            _task_id: &str,
+            _requestor: &str,
+            _token_pin_mappings: &[crate::TokenPinMapping],
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn update_backup_task_error_log(
+            &self,
+            _task_id: &str,
+            _error_log: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn update_backup_task_status(
+            &self,
+            _task_id: &str,
+            _status: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn get_backup_task(
+            &self,
+            _task_id: &str,
+        ) -> Result<Option<crate::server::db::BackupTask>, sqlx::Error> {
+            Ok(self.task_meta.clone())
+        }
+
+        async fn start_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn start_archive_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn start_ipfs_pins_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn delete_backup_task(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn complete_archive_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn complete_ipfs_pins_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
     }
 
     impl BackupDb for MockDb {
@@ -522,9 +600,10 @@ mod handle_backup_core_tests {
         ) -> std::pin::Pin<
             Box<dyn std::future::Future<Output = Result<Option<String>, sqlx::Error>> + Send + 'a>,
         > {
-            let status = self.status.clone();
+            let status = self.task_meta.as_ref().map(|meta| meta.status.clone());
             Box::pin(async move { Ok(status) })
         }
+
         fn insert_backup_task<'a>(
             &'a self,
             _task_id: &'a str,
@@ -601,9 +680,61 @@ mod handle_backup_core_tests {
     }
 
     #[tokio::test]
+    async fn returns_409_when_being_deleted() {
+        let db = MockDb {
+            task_meta: Some(crate::server::db::BackupTask {
+                task_id: "test".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                requestor: "test".to_string(),
+                nft_count: 0,
+                tokens: serde_json::Value::Null,
+                status: "done".to_string(),
+                error_log: None,
+                fatal_error: None,
+                storage_mode: "archive".to_string(),
+                deleted_at: Some(chrono::Utc::now()),
+                archive_format: None,
+                expires_at: None,
+            }),
+            inserted: Default::default(),
+            last_archive_format: Default::default(),
+        };
+        let (tx, _rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+            create_archive: true,
+        };
+        let headers = HeaderMap::new();
+        let resp =
+            super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
+                .await
+                .into_response();
+        assert_eq!(resp.status(), StatusCode::CONFLICT);
+    }
+
+    #[tokio::test]
     async fn returns_200_when_in_progress() {
         let db = MockDb {
-            status: Some("in_progress".to_string()),
+            task_meta: Some(crate::server::db::BackupTask {
+                task_id: "test".to_string(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+                requestor: "test".to_string(),
+                nft_count: 0,
+                tokens: serde_json::Value::Null,
+                status: "in_progress".to_string(),
+                error_log: None,
+                fatal_error: None,
+                storage_mode: "archive".to_string(),
+                deleted_at: None,
+                archive_format: None,
+                expires_at: None,
+            }),
             inserted: Default::default(),
             last_archive_format: Default::default(),
         };

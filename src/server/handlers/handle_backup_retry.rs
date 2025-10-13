@@ -121,11 +121,21 @@ async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
         }
     };
 
-    // Check if task is in progress
+    // Check if task is in progress or being deleted
     if meta.status == "in_progress" {
         let problem = ProblemJson::from_status(
             StatusCode::BAD_REQUEST,
             Some("Task is already in progress".to_string()),
+            Some(format!("/v1/backups/{task_id}/retry")),
+        );
+        return problem.into_response();
+    }
+
+    // Check if task is being deleted
+    if meta.deleted_at.is_some() {
+        let problem = ProblemJson::from_status(
+            StatusCode::BAD_REQUEST,
+            Some("Task is being deleted and cannot be retried".to_string()),
             Some(format!("/v1/backups/{task_id}/retry")),
         );
         return problem.into_response();
@@ -295,6 +305,21 @@ mod handle_backup_retry_core_tests {
     async fn returns_400_when_in_progress() {
         let db = MockDb {
             meta: Some(sample_meta("did:me", "in_progress")),
+            ..Default::default()
+        };
+        let (tx, _rx) = mpsc::channel(1);
+        let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
+            .await
+            .into_response();
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn returns_400_when_being_deleted() {
+        let mut meta = sample_meta("did:me", "done");
+        meta.deleted_at = Some(chrono::Utc::now());
+        let db = MockDb {
+            meta: Some(meta),
             ..Default::default()
         };
         let (tx, _rx) = mpsc::channel(1);
