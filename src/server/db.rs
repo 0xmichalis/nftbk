@@ -373,6 +373,16 @@ impl Db {
         Ok(())
     }
 
+    pub async fn start_downgrade(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"UPDATE backup_tasks SET status = 'in_progress', updated_at = NOW() WHERE task_id = $1"#,
+            task_id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn get_backup_task(&self, task_id: &str) -> Result<Option<BackupTask>, sqlx::Error> {
         let row = sqlx::query(
             r#"
@@ -913,7 +923,7 @@ impl Db {
         sqlx::query(
             r#"
             UPDATE backup_tasks
-            SET storage_mode = 'ipfs', updated_at = NOW()
+            SET storage_mode = 'ipfs', status = 'done', updated_at = NOW()
             WHERE task_id = $1
             "#,
         )
@@ -938,7 +948,7 @@ impl Db {
         sqlx::query(
             r#"
             UPDATE backup_tasks
-            SET storage_mode = 'archive', updated_at = NOW()
+            SET storage_mode = 'archive', status = 'done', updated_at = NOW()
             WHERE task_id = $1
             "#,
         )

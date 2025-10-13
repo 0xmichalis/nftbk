@@ -430,6 +430,7 @@ pub trait BackupTaskDb {
         task_id: &str,
     ) -> Result<Option<crate::server::db::BackupTask>, sqlx::Error>;
     async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn start_downgrade(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error>;
@@ -484,6 +485,10 @@ impl BackupTaskDb for Db {
 
     async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
         Db::start_deletion(self, task_id).await
+    }
+
+    async fn start_downgrade(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::start_downgrade(self, task_id).await
     }
 
     async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error> {
@@ -813,11 +818,37 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
         return;
     }
 
-    // Set status to in_progress for deletion
-    if let Err(e) = db.start_deletion(&task_id).await {
-        error!("Failed to start deletion for task {}: {}", task_id, e);
+    // Set status to in_progress for deletion or downgrade
+    let start_result = if task.scope == StorageMode::Full {
+        db.start_deletion(&task_id).await
+    } else {
+        db.start_downgrade(&task_id).await
+    };
+
+    if let Err(e) = start_result {
+        error!(
+            "Failed to start {} for task {}: {}",
+            if task.scope == StorageMode::Full {
+                "deletion"
+            } else {
+                "downgrade"
+            },
+            task_id,
+            e
+        );
         let _ = db
-            .set_backup_error(&task_id, &format!("Failed to start deletion: {}", e))
+            .set_backup_error(
+                &task_id,
+                &format!(
+                    "Failed to start {}: {}",
+                    if task.scope == StorageMode::Full {
+                        "deletion"
+                    } else {
+                        "downgrade"
+                    },
+                    e
+                ),
+            )
             .await;
         return;
     }
