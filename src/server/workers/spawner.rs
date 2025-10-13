@@ -3,7 +3,9 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::info;
 
-use crate::server::{run_backup_task, run_deletion_task, AppState, BackupTaskOrShutdown, TaskType};
+use super::creation::run_backup_task;
+use super::deletion::run_deletion_task;
+use crate::server::{AppState, BackupTaskOrShutdown, TaskType};
 
 pub fn spawn_backup_workers(
     parallelism: usize,
