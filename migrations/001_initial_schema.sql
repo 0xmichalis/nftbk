@@ -1,11 +1,11 @@
 -- NFT Protection Service - Initial Schema
 -- This migration creates the complete schema for the NFT protection service
--- with support for three storage modes: filesystem, ipfs, and both
+-- reflecting the latest table names and constraints
 
 BEGIN;
 
--- Core protection jobs table (renamed from backup_metadata)
-CREATE TABLE IF NOT EXISTS protection_jobs (
+-- Core backup tasks table
+CREATE TABLE IF NOT EXISTS backup_tasks (
     task_id VARCHAR(255) PRIMARY KEY,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -15,12 +15,13 @@ CREATE TABLE IF NOT EXISTS protection_jobs (
     status VARCHAR(12) NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress', 'done', 'error', 'expired')),
     error_log TEXT,
     fatal_error TEXT,
-    storage_mode VARCHAR(20) NOT NULL DEFAULT 'both' CHECK (storage_mode IN ('filesystem', 'ipfs', 'both'))
+    storage_mode VARCHAR(20) NOT NULL DEFAULT 'full' CHECK (storage_mode IN ('archive', 'ipfs', 'full')),
+    deleted_at TIMESTAMPTZ
 );
 
--- Filesystem-specific backup requests table
-CREATE TABLE IF NOT EXISTS backup_requests (
-    task_id VARCHAR(255) PRIMARY KEY REFERENCES protection_jobs(task_id) ON DELETE CASCADE,
+-- Archive requests table
+CREATE TABLE IF NOT EXISTS archive_requests (
+    task_id VARCHAR(255) PRIMARY KEY REFERENCES backup_tasks(task_id) ON DELETE CASCADE,
     archive_format VARCHAR(8) NOT NULL CHECK (archive_format IN ('zip', 'tar.gz')),
     expires_at TIMESTAMPTZ
 );
@@ -28,7 +29,7 @@ CREATE TABLE IF NOT EXISTS backup_requests (
 -- IPFS pin requests table
 CREATE TABLE IF NOT EXISTS pin_requests (
     id BIGSERIAL PRIMARY KEY,
-    task_id VARCHAR(255) NOT NULL REFERENCES protection_jobs(task_id) ON DELETE CASCADE,
+    task_id VARCHAR(255) NOT NULL REFERENCES backup_tasks(task_id) ON DELETE CASCADE,
     provider VARCHAR(64) NOT NULL,
     cid VARCHAR(255) NOT NULL,
     request_id VARCHAR(255) NOT NULL,
@@ -45,13 +46,14 @@ CREATE TABLE IF NOT EXISTS pinned_tokens (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Indexes for protection_jobs
-CREATE INDEX IF NOT EXISTS idx_protection_jobs_requestor ON protection_jobs (requestor);
-CREATE INDEX IF NOT EXISTS idx_protection_jobs_tokens_gin ON protection_jobs USING GIN (tokens);
-CREATE INDEX IF NOT EXISTS idx_protection_jobs_status ON protection_jobs (status);
+-- Indexes for backup_tasks
+CREATE INDEX IF NOT EXISTS idx_backup_tasks_requestor ON backup_tasks (requestor);
+CREATE INDEX IF NOT EXISTS idx_backup_tasks_tokens_gin ON backup_tasks USING GIN (tokens);
+CREATE INDEX IF NOT EXISTS idx_backup_tasks_status ON backup_tasks (status);
+CREATE INDEX IF NOT EXISTS idx_backup_tasks_deleted_at ON backup_tasks (deleted_at);
 
--- Indexes for backup_requests
-CREATE INDEX IF NOT EXISTS idx_backup_requests_expires_at ON backup_requests (expires_at);
+-- Indexes for archive_requests
+CREATE INDEX IF NOT EXISTS idx_archive_requests_expires_at ON archive_requests (expires_at);
 
 -- Indexes for pin_requests
 CREATE INDEX IF NOT EXISTS idx_pin_requests_task_id ON pin_requests (task_id);
