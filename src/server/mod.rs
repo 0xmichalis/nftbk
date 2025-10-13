@@ -45,19 +45,19 @@ pub use handlers::handle_status::handle_status;
 pub use workers::spawn_backup_workers;
 
 #[derive(Debug, Clone)]
-pub enum BackupJobOrShutdown {
-    Job(JobType),
+pub enum BackupTaskOrShutdown {
+    Task(TaskType),
     Shutdown,
 }
 
 #[derive(Debug, Clone)]
-pub enum JobType {
-    Creation(BackupJob),
-    Deletion(DeletionJob),
+pub enum TaskType {
+    Creation(BackupTask),
+    Deletion(DeletionTask),
 }
 
 #[derive(Debug, Clone)]
-pub struct BackupJob {
+pub struct BackupTask {
     pub task_id: String,
     pub request: BackupRequest,
     pub force: bool,
@@ -67,7 +67,7 @@ pub struct BackupJob {
 }
 
 #[derive(Debug, Clone)]
-pub struct DeletionJob {
+pub struct DeletionTask {
     pub task_id: String,
     pub requestor: Option<String>,
     /// Determines which parts of the backup to delete (e.g., only the archive, only the IPFS pins, or both).
@@ -113,7 +113,7 @@ pub struct AppState {
     pub pruner_enabled: bool,
     pub pruner_retention_days: u64,
     pub download_tokens: Arc<Mutex<HashMap<String, (String, u64)>>>,
-    pub backup_job_sender: mpsc::Sender<BackupJobOrShutdown>,
+    pub backup_task_sender: mpsc::Sender<BackupTaskOrShutdown>,
     pub db: Arc<Db>,
     pub shutdown_flag: Arc<AtomicBool>,
     pub ipfs_providers: Vec<IpfsProviderConfig>,
@@ -135,7 +135,7 @@ impl AppState {
         auth_token: Option<String>,
         pruner_enabled: bool,
         pruner_retention_days: u64,
-        backup_job_sender: mpsc::Sender<BackupJobOrShutdown>,
+        backup_task_sender: mpsc::Sender<BackupTaskOrShutdown>,
         db_url: &str,
         max_connections: u32,
         shutdown_flag: Arc<AtomicBool>,
@@ -180,7 +180,7 @@ impl AppState {
             pruner_enabled,
             pruner_retention_days,
             download_tokens: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            backup_job_sender,
+            backup_task_sender,
             db,
             shutdown_flag,
             ipfs_providers,
@@ -263,13 +263,13 @@ fn sync_files(files_written: &[std::path::PathBuf]) {
 // Trait for database operations needed by recovery
 #[async_trait::async_trait]
 pub trait RecoveryDb {
-    async fn get_incomplete_protection_jobs(&self) -> Result<Vec<RecoveryJob>, sqlx::Error>;
+    async fn get_incomplete_backup_tasks(&self) -> Result<Vec<RecoveryTask>, sqlx::Error>;
     async fn set_backup_error(&self, task_id: &str, error: &str) -> Result<(), sqlx::Error>;
 }
 
-// Recovery job struct that matches the database schema
+// Recovery task struct that matches the database schema
 #[derive(Debug, Clone)]
-pub struct RecoveryJob {
+pub struct RecoveryTask {
     pub task_id: String,
     pub requestor: String,
     pub tokens: serde_json::Value,
@@ -280,16 +280,16 @@ pub struct RecoveryJob {
 // Implement the trait for the real Db
 #[async_trait::async_trait]
 impl RecoveryDb for Db {
-    async fn get_incomplete_protection_jobs(&self) -> Result<Vec<RecoveryJob>, sqlx::Error> {
-        let jobs = Db::get_incomplete_protection_jobs(self).await?;
-        Ok(jobs
+    async fn get_incomplete_backup_tasks(&self) -> Result<Vec<RecoveryTask>, sqlx::Error> {
+        let tasks = Db::get_incomplete_backup_tasks(self).await?;
+        Ok(tasks
             .into_iter()
-            .map(|job| RecoveryJob {
-                task_id: job.task_id,
-                requestor: job.requestor,
-                tokens: job.tokens,
-                storage_mode: job.storage_mode,
-                archive_format: job.archive_format,
+            .map(|task| RecoveryTask {
+                task_id: task.task_id,
+                requestor: task.requestor,
+                tokens: task.tokens,
+                storage_mode: task.storage_mode,
+                archive_format: task.archive_format,
             })
             .collect())
     }
@@ -302,16 +302,16 @@ impl RecoveryDb for Db {
 // Implement the trait for Arc<Db> to support the AppState usage
 #[async_trait::async_trait]
 impl RecoveryDb for std::sync::Arc<Db> {
-    async fn get_incomplete_protection_jobs(&self) -> Result<Vec<RecoveryJob>, sqlx::Error> {
-        let jobs = self.as_ref().get_incomplete_protection_jobs().await?;
-        Ok(jobs
+    async fn get_incomplete_backup_tasks(&self) -> Result<Vec<RecoveryTask>, sqlx::Error> {
+        let tasks = self.as_ref().get_incomplete_backup_tasks().await?;
+        Ok(tasks
             .into_iter()
-            .map(|job| RecoveryJob {
-                task_id: job.task_id,
-                requestor: job.requestor,
-                tokens: job.tokens,
-                storage_mode: job.storage_mode,
-                archive_format: job.archive_format,
+            .map(|task| RecoveryTask {
+                task_id: task.task_id,
+                requestor: task.requestor,
+                tokens: task.tokens,
+                storage_mode: task.storage_mode,
+                archive_format: task.archive_format,
             })
             .collect())
     }
@@ -321,40 +321,40 @@ impl RecoveryDb for std::sync::Arc<Db> {
     }
 }
 
-/// Recover incomplete backup jobs from the database and enqueue them for processing
-/// This is called on server startup to handle jobs that were interrupted by server shutdown
-pub async fn recover_incomplete_jobs<DB: RecoveryDb + ?Sized>(
+/// Recover incomplete backup tasks from the database and enqueue them for processing
+/// This is called on server startup to handle tasks that were interrupted by server shutdown
+pub async fn recover_incomplete_tasks<DB: RecoveryDb + ?Sized>(
     db: &DB,
-    backup_job_sender: &mpsc::Sender<BackupJobOrShutdown>,
+    backup_task_sender: &mpsc::Sender<BackupTaskOrShutdown>,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    debug!("Recovering incomplete protection jobs from database...");
+    debug!("Recovering incomplete protection tasks from database...");
 
-    let incomplete_jobs = db.get_incomplete_protection_jobs().await?;
-    let job_count = incomplete_jobs.len();
+    let incomplete_tasks = db.get_incomplete_backup_tasks().await?;
+    let task_count = incomplete_tasks.len();
 
-    if job_count == 0 {
-        debug!("No incomplete protection jobs found");
+    if task_count == 0 {
+        debug!("No incomplete protection tasks found");
         return Ok(0);
     }
 
     debug!(
-        "Found {} incomplete protection jobs, re-queueing for processing",
-        job_count
+        "Found {} incomplete protection tasks, re-queueing for processing",
+        task_count
     );
 
-    for job_meta in incomplete_jobs {
+    for task_meta in incomplete_tasks {
         // Parse the tokens JSON back to Vec<Tokens>
-        let tokens: Vec<Tokens> = match serde_json::from_value(job_meta.tokens.clone()) {
+        let tokens: Vec<Tokens> = match serde_json::from_value(task_meta.tokens.clone()) {
             Ok(tokens) => tokens,
             Err(e) => {
                 warn!(
-                    "Failed to parse tokens for job {}: {}, skipping",
-                    job_meta.task_id, e
+                    "Failed to parse tokens for task {}: {}, skipping",
+                    task_meta.task_id, e
                 );
-                // Mark this job as error since we can't process it
+                // Mark this task as error since we can't process it
                 let _ = db
                     .set_backup_error(
-                        &job_meta.task_id,
+                        &task_meta.task_id,
                         &format!("Failed to parse tokens during recovery: {e}"),
                     )
                     .await;
@@ -362,12 +362,12 @@ pub async fn recover_incomplete_jobs<DB: RecoveryDb + ?Sized>(
             }
         };
 
-        let storage_mode = job_meta.storage_mode.parse().unwrap_or(StorageMode::Full);
+        let storage_mode = task_meta.storage_mode.parse().unwrap_or(StorageMode::Full);
         let pin_on_ipfs = storage_mode != StorageMode::Archive;
         let create_archive = storage_mode != StorageMode::Ipfs;
 
-        let backup_job = BackupJob {
-            task_id: job_meta.task_id.clone(),
+        let backup_task = BackupTask {
+            task_id: task_meta.task_id.clone(),
             request: BackupRequest {
                 tokens,
                 pin_on_ipfs,
@@ -375,37 +375,37 @@ pub async fn recover_incomplete_jobs<DB: RecoveryDb + ?Sized>(
             },
             force: true, // Force recovery to ensure backup actually runs
             storage_mode,
-            archive_format: job_meta.archive_format,
-            requestor: Some(job_meta.requestor),
+            archive_format: task_meta.archive_format,
+            requestor: Some(task_meta.requestor),
         };
 
-        // Try to enqueue the job
-        if let Err(e) = backup_job_sender
-            .send(BackupJobOrShutdown::Job(JobType::Creation(backup_job)))
+        // Try to enqueue the task
+        if let Err(e) = backup_task_sender
+            .send(BackupTaskOrShutdown::Task(TaskType::Creation(backup_task)))
             .await
         {
             warn!(
-                "Failed to enqueue recovered job {}: {}",
-                job_meta.task_id, e
+                "Failed to enqueue recovered task {}: {}",
+                task_meta.task_id, e
             );
             // Mark as error if we can't enqueue it
             let _ = db
                 .set_backup_error(
-                    &job_meta.task_id,
+                    &task_meta.task_id,
                     &format!("Failed to enqueue during recovery: {e}"),
                 )
                 .await;
         } else {
-            debug!("Re-queued backup job: {}", job_meta.task_id);
+            debug!("Re-queued backup task: {}", task_meta.task_id);
         }
     }
 
-    Ok(job_count)
+    Ok(task_count)
 }
 
-// Trait for database operations needed by backup and deletion jobs
+// Trait for database operations needed by backup and deletion tasks
 #[async_trait::async_trait]
-pub trait BackupJobDb {
+pub trait BackupTaskDb {
     async fn clear_backup_errors(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn set_backup_error(&self, task_id: &str, error: &str) -> Result<(), sqlx::Error>;
     async fn insert_pin_requests_with_tokens(
@@ -414,29 +414,33 @@ pub trait BackupJobDb {
         requestor: &str,
         token_pin_mappings: &[crate::TokenPinMapping],
     ) -> Result<(), sqlx::Error>;
-    async fn update_protection_job_error_log(
+    async fn update_protection_task_error_log(
         &self,
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error>;
-    async fn update_protection_job_status(
+    async fn update_protection_task_status(
         &self,
         task_id: &str,
         status: &str,
     ) -> Result<(), sqlx::Error>;
-    async fn get_protection_job(
+    async fn get_protection_task(
         &self,
         task_id: &str,
-    ) -> Result<Option<crate::server::db::ProtectionJobWithBackup>, sqlx::Error>;
+    ) -> Result<Option<crate::server::db::BackupTask>, sqlx::Error>;
     async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
-    async fn delete_protection_job(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn delete_protection_task(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error>;
 }
+// Backwards-compat alias
+// Backwards-compat trait alias: allow older bounds to compile
+pub trait BackuptaskDb: BackupTaskDb {}
+impl<T: BackupTaskDb + ?Sized> BackuptaskDb for T {}
 
-// Implement BackupJobDb trait for the real Db
+// Implement BackuptaskDb trait for the real Db
 #[async_trait::async_trait]
-impl BackupJobDb for Db {
+impl BackupTaskDb for Db {
     async fn clear_backup_errors(&self, task_id: &str) -> Result<(), sqlx::Error> {
         Db::clear_backup_errors(self, task_id).await
     }
@@ -454,35 +458,35 @@ impl BackupJobDb for Db {
         Db::insert_pin_requests_with_tokens(self, task_id, requestor, token_pin_mappings).await
     }
 
-    async fn update_protection_job_error_log(
+    async fn update_protection_task_error_log(
         &self,
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error> {
-        Db::update_protection_job_error_log(self, task_id, error_log).await
+        Db::update_protection_task_error_log(self, task_id, error_log).await
     }
 
-    async fn update_protection_job_status(
+    async fn update_protection_task_status(
         &self,
         task_id: &str,
         status: &str,
     ) -> Result<(), sqlx::Error> {
-        Db::update_protection_job_status(self, task_id, status).await
+        Db::update_protection_task_status(self, task_id, status).await
     }
 
-    async fn get_protection_job(
+    async fn get_protection_task(
         &self,
         task_id: &str,
-    ) -> Result<Option<crate::server::db::ProtectionJobWithBackup>, sqlx::Error> {
-        Db::get_protection_job(self, task_id).await
+    ) -> Result<Option<crate::server::db::BackupTask>, sqlx::Error> {
+        Db::get_protection_task(self, task_id).await
     }
 
     async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
         Db::start_deletion(self, task_id).await
     }
 
-    async fn delete_protection_job(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::delete_protection_job(self, task_id).await
+    async fn delete_protection_task(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::delete_protection_task(self, task_id).await
     }
 
     async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error> {
@@ -494,13 +498,17 @@ impl BackupJobDb for Db {
     }
 }
 
-async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: BackupJob, db: &DB) {
-    let task_id = job.task_id.clone();
-    let tokens = job.request.tokens.clone();
-    let force = job.force;
-    let storage_mode = job.storage_mode.clone();
+async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
+    state: AppState,
+    task: BackupTask,
+    db: &DB,
+) {
+    let task_id = task.task_id.clone();
+    let tokens = task.request.tokens.clone();
+    let force = task.force;
+    let storage_mode = task.storage_mode.clone();
     info!(
-        "Running protection job for task {} (storage_mode: {})",
+        "Running protection task for task {} (storage_mode: {})",
         task_id,
         storage_mode.as_str()
     );
@@ -550,7 +558,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
             shutdown_flag: shutdown_flag.clone(),
         },
     };
-    let span = tracing::info_span!("protection_job", task_id = %task_id);
+    let span = tracing::info_span!("protection_task", task_id = %task_id);
     let backup_result = backup_from_config(backup_cfg, Some(span)).await;
 
     // Check backup result
@@ -575,16 +583,18 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
 
     // Persist token-pin request mappings atomically, if any
     if !token_pin_mappings.is_empty() {
-        let req = job.requestor.as_deref().unwrap_or("");
+        let req = task.requestor.as_deref().unwrap_or("");
         let _ = db
-            .insert_pin_requests_with_tokens(&job.task_id, req, &token_pin_mappings)
+            .insert_pin_requests_with_tokens(&task.task_id, req, &token_pin_mappings)
             .await;
     }
 
     // Store non-fatal error log in DB if present
     if !error_log.is_empty() {
         let log_str = error_log.join("\n");
-        let _ = db.update_protection_job_error_log(&task_id, &log_str).await;
+        let _ = db
+            .update_protection_task_error_log(&task_id, &log_str)
+            .await;
     }
 
     // Handle archiving based on storage mode
@@ -608,7 +618,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
             );
 
             // Archive the output dir
-            let archive_fmt = job.archive_format.as_deref().unwrap_or("zip");
+            let archive_fmt = task.archive_format.as_deref().unwrap_or("zip");
             let (zip_pathbuf, checksum_path) =
                 get_zipped_backup_paths(&state.base_dir, &task_id, archive_fmt);
             info!("Archiving backup to {}", zip_pathbuf.display());
@@ -642,7 +652,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
                         let _ = db.set_backup_error(&task_id, &error_msg).await;
                         return;
                     }
-                    let _ = db.update_protection_job_status(&task_id, "done").await;
+                    let _ = db.update_protection_task_status(&task_id, "done").await;
                 }
                 Err(e) => {
                     let err_str = e.to_string();
@@ -665,7 +675,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
         }
         StorageMode::Ipfs => {
             // IPFS-only mode: no filesystem operations needed
-            let _ = db.update_protection_job_status(&task_id, "done").await;
+            let _ = db.update_protection_task_status(&task_id, "done").await;
             info!("IPFS pinning for {} complete", task_id);
         }
     }
@@ -750,16 +760,16 @@ async fn delete_ipfs_pins(
     Ok(deleted_anything)
 }
 
-async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
+async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
     state: AppState,
-    job: DeletionJob,
+    task: DeletionTask,
     db: &DB,
 ) {
-    let task_id = job.task_id.clone();
-    info!("Running deletion job for task {}", task_id);
+    let task_id = task.task_id.clone();
+    info!("Running deletion task for task {}", task_id);
 
-    // Get the protection job metadata
-    let meta = match db.get_protection_job(&task_id).await {
+    // Get the protection task metadata
+    let meta = match db.get_protection_task(&task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
             error!("Task {} not found for deletion", task_id);
@@ -778,7 +788,7 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
     };
 
     // Verify requestor matches (if provided)
-    if let Some(requestor) = &job.requestor {
+    if let Some(requestor) = &task.requestor {
         if meta.requestor != *requestor {
             error!(
                 "Requestor {} does not match task owner {} for task {}",
@@ -810,7 +820,7 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
     }
 
     // Handle archive cleanup if requested
-    if job.scope == StorageMode::Full || job.scope == StorageMode::Archive {
+    if task.scope == StorageMode::Full || task.scope == StorageMode::Archive {
         if !(meta.storage_mode == "archive" || meta.storage_mode == "full") {
             info!(
                 "Skipping archive cleanup for task {} (no archive data)",
@@ -829,14 +839,14 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
                 }
                 Err(e) => {
                     error!("Archive deletion failed for task {}: {}", task_id, e);
-                    // Log the error but continue with deletion - don't fail the job
+                    // Log the error but continue with deletion - don't fail the task
                 }
             }
         }
     }
 
     // Handle IPFS pin deletion if requested
-    if job.scope == StorageMode::Full || job.scope == StorageMode::Ipfs {
+    if task.scope == StorageMode::Full || task.scope == StorageMode::Ipfs {
         if !(meta.storage_mode == "ipfs" || meta.storage_mode == "full") {
             info!(
                 "Skipping IPFS pin cleanup for task {} (no IPFS pins)",
@@ -856,16 +866,16 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
                 }
                 Err(e) => {
                     error!("IPFS pin deletion failed for task {}: {}", task_id, e);
-                    // Log the error but continue with deletion - don't fail the job
+                    // Log the error but continue with deletion - don't fail the task
                 }
             }
         }
     }
 
-    // Delete or update the protection job metadata depending on scope and storage mode
-    match job.scope {
+    // Delete or update the protection task metadata depending on scope and storage mode
+    match task.scope {
         StorageMode::Full => {
-            if let Err(e) = db.delete_protection_job(&task_id).await {
+            if let Err(e) = db.delete_protection_task(&task_id).await {
                 error!("Database deletion failed for task {}: {}", task_id, e);
                 let _ = db
                     .set_backup_error(
@@ -885,9 +895,9 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
                     );
                 }
             } else if meta.storage_mode == "archive" {
-                if let Err(e) = db.delete_protection_job(&task_id).await {
+                if let Err(e) = db.delete_protection_task(&task_id).await {
                     error!(
-                        "Failed to delete protection job for task {}: {}",
+                        "Failed to delete protection task for task {}: {}",
                         task_id, e
                     );
                 }
@@ -902,9 +912,9 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
                     );
                 }
             } else if meta.storage_mode == "ipfs" {
-                if let Err(e) = db.delete_protection_job(&task_id).await {
+                if let Err(e) = db.delete_protection_task(&task_id).await {
                     error!(
-                        "Failed to delete protection job for task {}: {}",
+                        "Failed to delete protection task for task {}: {}",
                         task_id, e
                     );
                 }
@@ -915,35 +925,13 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
     info!("Successfully deleted backup {}", task_id);
 }
 
-pub async fn run_backup_job(state: AppState, job: BackupJob) {
-    let task_id = job.task_id.clone();
-    let state_clone = state.clone();
-    let task_id_clone = task_id.clone();
-
-    let fut = AssertUnwindSafe(run_backup_job_inner(state.clone(), job, &*state.db)).catch_unwind();
-
-    let result = fut.await;
-    if let Err(panic) = result {
-        let panic_msg = if let Some(s) = panic.downcast_ref::<&str>() {
-            s.to_string()
-        } else if let Some(s) = panic.downcast_ref::<String>() {
-            s.clone()
-        } else {
-            "Unknown panic".to_string()
-        };
-        let error_msg = format!("Backup job for task {task_id_clone} panicked: {panic_msg}");
-        error!("{error_msg}");
-        let _ = BackupJobDb::set_backup_error(&*state_clone.db, &task_id_clone, &error_msg).await;
-    }
-}
-
-pub async fn run_deletion_job(state: AppState, job: DeletionJob) {
-    let task_id = job.task_id.clone();
+pub async fn run_backup_task(state: AppState, task: BackupTask) {
+    let task_id = task.task_id.clone();
     let state_clone = state.clone();
     let task_id_clone = task_id.clone();
 
     let fut =
-        AssertUnwindSafe(run_deletion_job_inner(state.clone(), job, &*state.db)).catch_unwind();
+        AssertUnwindSafe(run_backup_task_inner(state.clone(), task, &*state.db)).catch_unwind();
 
     let result = fut.await;
     if let Err(panic) = result {
@@ -954,9 +942,32 @@ pub async fn run_deletion_job(state: AppState, job: DeletionJob) {
         } else {
             "Unknown panic".to_string()
         };
-        let error_msg = format!("Deletion job for task {task_id_clone} panicked: {panic_msg}");
+        let error_msg = format!("Backup task for task {task_id_clone} panicked: {panic_msg}");
         error!("{error_msg}");
-        let _ = BackupJobDb::set_backup_error(&*state_clone.db, &task_id_clone, &error_msg).await;
+        let _ = BackupTaskDb::set_backup_error(&*state_clone.db, &task_id_clone, &error_msg).await;
+    }
+}
+
+pub async fn run_deletion_task(state: AppState, task: DeletionTask) {
+    let task_id = task.task_id.clone();
+    let state_clone = state.clone();
+    let task_id_clone = task_id.clone();
+
+    let fut =
+        AssertUnwindSafe(run_deletion_task_inner(state.clone(), task, &*state.db)).catch_unwind();
+
+    let result = fut.await;
+    if let Err(panic) = result {
+        let panic_msg = if let Some(s) = panic.downcast_ref::<&str>() {
+            s.to_string()
+        } else if let Some(s) = panic.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "Unknown panic".to_string()
+        };
+        let error_msg = format!("Deletion task for task {task_id_clone} panicked: {panic_msg}");
+        error!("{error_msg}");
+        let _ = BackupTaskDb::set_backup_error(&*state_clone.db, &task_id_clone, &error_msg).await;
     }
 }
 
@@ -1102,7 +1113,7 @@ mod deletion_utils_tests {
 }
 
 #[cfg(test)]
-mod recover_incomplete_jobs_tests {
+mod recover_incomplete_tasks_tests {
     use super::*;
     use serde_json::json;
     use std::sync::Arc;
@@ -1110,24 +1121,24 @@ mod recover_incomplete_jobs_tests {
 
     // Mock implementation of RecoveryDb for testing
     struct MockRecoveryDb {
-        jobs: Vec<RecoveryJob>,
-        should_fail_get_jobs: bool,
+        tasks: Vec<RecoveryTask>,
+        should_fail_get_tasks: bool,
         should_fail_set_error: bool,
         set_error_calls: Arc<std::sync::Mutex<Vec<(String, String)>>>,
     }
 
     impl MockRecoveryDb {
-        fn new(jobs: Vec<RecoveryJob>) -> Self {
+        fn new(tasks: Vec<RecoveryTask>) -> Self {
             Self {
-                jobs,
-                should_fail_get_jobs: false,
+                tasks,
+                should_fail_get_tasks: false,
                 should_fail_set_error: false,
                 set_error_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
             }
         }
 
-        fn with_get_jobs_failure(mut self) -> Self {
-            self.should_fail_get_jobs = true;
+        fn with_get_tasks_failure(mut self) -> Self {
+            self.should_fail_get_tasks = true;
             self
         }
 
@@ -1138,11 +1149,11 @@ mod recover_incomplete_jobs_tests {
 
     #[async_trait::async_trait]
     impl RecoveryDb for MockRecoveryDb {
-        async fn get_incomplete_protection_jobs(&self) -> Result<Vec<RecoveryJob>, sqlx::Error> {
-            if self.should_fail_get_jobs {
+        async fn get_incomplete_backup_tasks(&self) -> Result<Vec<RecoveryTask>, sqlx::Error> {
+            if self.should_fail_get_tasks {
                 return Err(sqlx::Error::Configuration("Mock error".into()));
             }
-            Ok(self.jobs.clone())
+            Ok(self.tasks.clone())
         }
 
         async fn set_backup_error(&self, task_id: &str, error: &str) -> Result<(), sqlx::Error> {
@@ -1158,26 +1169,26 @@ mod recover_incomplete_jobs_tests {
     }
 
     #[tokio::test]
-    async fn test_recover_incomplete_jobs_no_jobs() {
+    async fn test_recover_incomplete_tasks_no_tasks() {
         let mock_db = MockRecoveryDb::new(vec![]);
         let (tx, _rx) = mpsc::channel(10);
 
-        let result = recover_incomplete_jobs(&mock_db, &tx).await;
+        let result = recover_incomplete_tasks(&mock_db, &tx).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 0);
     }
 
     #[tokio::test]
-    async fn test_recover_incomplete_jobs_success() {
-        let jobs = vec![
-            RecoveryJob {
+    async fn test_recover_incomplete_tasks_success() {
+        let tasks = vec![
+            RecoveryTask {
                 task_id: "task1".to_string(),
                 requestor: "user1".to_string(),
                 tokens: json!([{"chain": "ethereum", "tokens": ["0x123"]}]),
                 storage_mode: "archive".to_string(),
                 archive_format: Some("zip".to_string()),
             },
-            RecoveryJob {
+            RecoveryTask {
                 task_id: "task2".to_string(),
                 requestor: "user2".to_string(),
                 tokens: json!([{"chain": "tezos", "tokens": ["KT1ABC"]}]),
@@ -1185,60 +1196,60 @@ mod recover_incomplete_jobs_tests {
                 archive_format: None,
             },
         ];
-        let mock_db = MockRecoveryDb::new(jobs);
+        let mock_db = MockRecoveryDb::new(tasks);
         let (tx, mut rx) = mpsc::channel(10);
 
-        let result = recover_incomplete_jobs(&mock_db, &tx).await;
+        let result = recover_incomplete_tasks(&mock_db, &tx).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 2);
 
-        // Check that jobs were enqueued (order-independent)
+        // Check that tasks were enqueued (order-independent)
         let j1 = rx.recv().await.unwrap();
         let j2 = rx.recv().await.unwrap();
         let mut seen_task1 = false;
         let mut seen_task2 = false;
-        for job in [j1, j2] {
-            match job {
-                BackupJobOrShutdown::Job(JobType::Creation(job)) => {
-                    if job.task_id == "task1" {
+        for task in [j1, j2] {
+            match task {
+                BackupTaskOrShutdown::Task(TaskType::Creation(task)) => {
+                    if task.task_id == "task1" {
                         seen_task1 = true;
-                        assert!(job.force);
-                        assert_eq!(job.storage_mode, StorageMode::Archive);
-                        assert_eq!(job.archive_format, Some("zip".to_string()));
-                        assert_eq!(job.requestor, Some("user1".to_string()));
-                    } else if job.task_id == "task2" {
+                        assert!(task.force);
+                        assert_eq!(task.storage_mode, StorageMode::Archive);
+                        assert_eq!(task.archive_format, Some("zip".to_string()));
+                        assert_eq!(task.requestor, Some("user1".to_string()));
+                    } else if task.task_id == "task2" {
                         seen_task2 = true;
-                        assert!(job.force);
-                        assert_eq!(job.storage_mode, StorageMode::Full);
-                        assert_eq!(job.archive_format, None);
-                        assert_eq!(job.requestor, Some("user2".to_string()));
+                        assert!(task.force);
+                        assert_eq!(task.storage_mode, StorageMode::Full);
+                        assert_eq!(task.archive_format, None);
+                        assert_eq!(task.requestor, Some("user2".to_string()));
                     } else {
                         panic!("Unexpected task id");
                     }
                 }
-                _ => panic!("Expected backup job"),
+                _ => panic!("Expected backup task"),
             }
         }
         assert!(seen_task1 && seen_task2);
     }
 
     #[tokio::test]
-    async fn test_recover_incomplete_jobs_invalid_tokens() {
-        let jobs = vec![RecoveryJob {
+    async fn test_recover_incomplete_tasks_invalid_tokens() {
+        let tasks = vec![RecoveryTask {
             task_id: "task1".to_string(),
             requestor: "user1".to_string(),
             tokens: json!("invalid tokens"), // Invalid JSON for tokens
             storage_mode: "archive".to_string(),
             archive_format: None,
         }];
-        let mock_db = MockRecoveryDb::new(jobs);
+        let mock_db = MockRecoveryDb::new(tasks);
         let (tx, mut rx) = mpsc::channel(10);
 
-        let result = recover_incomplete_jobs(&mock_db, &tx).await;
+        let result = recover_incomplete_tasks(&mock_db, &tx).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 1);
 
-        // Should not enqueue any jobs
+        // Should not enqueue any tasks
         assert!(rx.try_recv().is_err());
 
         // Should have called set_backup_error
@@ -1251,38 +1262,38 @@ mod recover_incomplete_jobs_tests {
     }
 
     #[tokio::test]
-    async fn test_recover_incomplete_jobs_db_error() {
-        let mock_db = MockRecoveryDb::new(vec![]).with_get_jobs_failure();
+    async fn test_recover_incomplete_tasks_db_error() {
+        let mock_db = MockRecoveryDb::new(vec![]).with_get_tasks_failure();
         let (tx, _rx) = mpsc::channel(10);
 
-        let result = recover_incomplete_jobs(&mock_db, &tx).await;
+        let result = recover_incomplete_tasks(&mock_db, &tx).await;
         assert!(result.is_err());
     }
 
     #[tokio::test]
-    async fn test_recover_incomplete_jobs_storage_mode_parsing() {
-        let jobs = vec![RecoveryJob {
+    async fn test_recover_incomplete_tasks_storage_mode_parsing() {
+        let tasks = vec![RecoveryTask {
             task_id: "task1".to_string(),
             requestor: "user1".to_string(),
             tokens: json!([{"chain": "ethereum", "tokens": ["0x123"]}]),
             storage_mode: "invalid_mode".to_string(), // Invalid storage mode
             archive_format: None,
         }];
-        let mock_db = MockRecoveryDb::new(jobs);
+        let mock_db = MockRecoveryDb::new(tasks);
         let (tx, mut rx) = mpsc::channel(10);
 
-        let result = recover_incomplete_jobs(&mock_db, &tx).await;
+        let result = recover_incomplete_tasks(&mock_db, &tx).await;
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 1);
 
         // Should default to StorageMode::Full for invalid mode
-        let job = rx.recv().await.unwrap();
-        match job {
-            BackupJobOrShutdown::Job(JobType::Creation(job)) => {
-                assert_eq!(job.storage_mode, StorageMode::Full);
-                assert!(job.request.pin_on_ipfs); // Both includes IPFS
+        let task = rx.recv().await.unwrap();
+        match task {
+            BackupTaskOrShutdown::Task(TaskType::Creation(task)) => {
+                assert_eq!(task.storage_mode, StorageMode::Full);
+                assert!(task.request.pin_on_ipfs); // Both includes IPFS
             }
-            _ => panic!("Expected backup job"),
+            _ => panic!("Expected backup task"),
         }
     }
 }

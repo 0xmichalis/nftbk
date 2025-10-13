@@ -15,7 +15,7 @@ use crate::envvar::is_defined;
 use crate::server::api::{
     ApiProblem, BackupRequest, BackupResponse, ProblemJson, StatusResponse, Tokens,
 };
-use crate::server::db::{PinInfo, ProtectionJobWithBackup, TokenWithPins};
+use crate::server::db::{BackupTask, PinInfo, TokenWithPins};
 use crate::server::handlers::handle_backup::{__path_handle_backup, handle_backup};
 use crate::server::handlers::handle_backup_delete::{
     __path_handle_backup_delete, handle_backup_delete,
@@ -55,7 +55,7 @@ use crate::server::AppState;
         handle_pins,
     ),
     components(
-        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinsResponse, ProtectionJobWithBackup, TokenWithPins, PinInfo, ApiProblem)
+        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinsResponse, BackupTask, TokenWithPins, PinInfo, ApiProblem)
     ),
     tags(
         (name = "backups", description = "General backup operations"),

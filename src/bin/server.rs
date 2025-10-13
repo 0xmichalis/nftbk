@@ -16,7 +16,9 @@ use nftbk::logging::LogLevel;
 use nftbk::server::pin_monitor::run_pin_monitor;
 use nftbk::server::pruner::run_pruner;
 use nftbk::server::router::build_router;
-use nftbk::server::{recover_incomplete_jobs, spawn_backup_workers, AppState, BackupJobOrShutdown};
+use nftbk::server::{
+    recover_incomplete_tasks, spawn_backup_workers, AppState, BackupTaskOrShutdown,
+};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -65,7 +67,7 @@ struct Args {
     #[arg(long, default_value_t = 4)]
     backup_parallelism: usize,
 
-    /// Maximum number of backup jobs to queue before blocking
+    /// Maximum number of backup tasks to queue before blocking
     #[arg(long, default_value_t = 10000)]
     backup_queue_size: usize,
 
@@ -168,8 +170,8 @@ async fn main() {
         }
     };
 
-    let (backup_job_sender, backup_job_receiver) =
-        mpsc::channel::<BackupJobOrShutdown>(args.backup_queue_size);
+    let (backup_task_sender, backup_task_receiver) =
+        mpsc::channel::<BackupTaskOrShutdown>(args.backup_queue_size);
     let db_url =
         std::env::var("DATABASE_URL").expect("DATABASE_URL env var must be set for Postgres");
     let shutdown_flag = Arc::new(AtomicBool::new(false));
@@ -180,7 +182,7 @@ async fn main() {
         auth_token.clone(),
         args.enable_pruner,
         args.pruner_retention_days,
-        backup_job_sender.clone(),
+        backup_task_sender.clone(),
         &db_url,
         (args.backup_queue_size + 1) as u32,
         shutdown_flag.clone(),
@@ -199,19 +201,19 @@ async fn main() {
         privy_credentials.len()
     );
 
-    // Spawn worker pool for backup jobs
+    // Spawn worker pool for backup tasks
     let worker_handles =
-        spawn_backup_workers(args.backup_parallelism, backup_job_receiver, state.clone());
+        spawn_backup_workers(args.backup_parallelism, backup_task_receiver, state.clone());
 
-    // Recover incomplete backup jobs from previous server runs
-    match recover_incomplete_jobs(&state.db, &state.backup_job_sender).await {
+    // Recover incomplete backup tasks from previous server runs
+    match recover_incomplete_tasks(&state.db, &state.backup_task_sender).await {
         Ok(count) => {
             if count > 0 {
-                info!("Successfully recovered {} incomplete backup jobs", count);
+                info!("Successfully recovered {} incomplete backup tasks", count);
             }
         }
         Err(e) => {
-            error!("Failed to recover incomplete backup jobs: {}", e);
+            error!("Failed to recover incomplete backup tasks: {}", e);
             // Don't exit the server, just log the error and continue
         }
     }
@@ -293,13 +295,13 @@ async fn main() {
     // On shutdown, send one Shutdown message per worker
     for _ in 0..args.backup_parallelism {
         let _ = state
-            .backup_job_sender
-            .send(BackupJobOrShutdown::Shutdown)
+            .backup_task_sender
+            .send(BackupTaskOrShutdown::Shutdown)
             .await;
     }
     // Drop the last sender to close the channel and signal workers to exit
-    drop(state.backup_job_sender);
-    info!("Backup job sender has exited");
+    drop(state.backup_task_sender);
+    info!("Backup task sender has exited");
 
     // Wait for all workers to finish
     for handle in worker_handles {

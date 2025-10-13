@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::server::api::{ApiProblem, ProblemJson, StatusResponse};
-use crate::server::db::{Db, ProtectionJobWithBackup};
+use crate::server::db::{BackupTask, Db};
 use crate::server::AppState;
 
 /// Get the status of a backup task
@@ -40,30 +40,22 @@ pub async fn handle_status(
 
 // Minimal trait to mock DB calls for unit tests
 pub trait StatusDb {
-    fn get_protection_job<'a>(
+    fn get_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<Option<ProtectionJobWithBackup>, sqlx::Error>>
-                + Send
-                + 'a,
-        >,
+        Box<dyn std::future::Future<Output = Result<Option<BackupTask>, sqlx::Error>> + Send + 'a>,
     >;
 }
 
 impl StatusDb for Db {
-    fn get_protection_job<'a>(
+    fn get_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<Option<ProtectionJobWithBackup>, sqlx::Error>>
-                + Send
-                + 'a,
-        >,
+        Box<dyn std::future::Future<Output = Result<Option<BackupTask>, sqlx::Error>> + Send + 'a>,
     > {
-        Box::pin(async move { Db::get_protection_job(self, task_id).await })
+        Box::pin(async move { Db::get_backup_task(self, task_id).await })
     }
 }
 
@@ -71,7 +63,7 @@ async fn handle_status_core<DB: StatusDb + ?Sized>(
     db: &DB,
     task_id: &str,
 ) -> Result<Json<StatusResponse>, AxumStatusCode> {
-    let meta = match db.get_protection_job(task_id).await {
+    let meta = match db.get_backup_task(task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => return Err(AxumStatusCode::NOT_FOUND),
         Err(_) => return Err(AxumStatusCode::INTERNAL_SERVER_ERROR),
@@ -87,25 +79,24 @@ async fn handle_status_core<DB: StatusDb + ?Sized>(
 mod handle_status_core_tests {
     use super::{handle_status_core, StatusDb};
     use crate::server::api::StatusResponse;
-    use crate::server::db::ProtectionJobWithBackup;
+    use crate::server::db::BackupTask;
     use axum::http::StatusCode as AxumStatusCode;
     use chrono::{TimeZone, Utc};
 
     #[derive(Default)]
     struct MockDb {
-        pub meta: Option<ProtectionJobWithBackup>,
+        pub meta: Option<BackupTask>,
         pub error: bool,
     }
 
     impl StatusDb for MockDb {
-        fn get_protection_job<'a>(
+        fn get_backup_task<'a>(
             &'a self,
             _task_id: &'a str,
         ) -> std::pin::Pin<
             Box<
-                dyn std::future::Future<
-                        Output = Result<Option<ProtectionJobWithBackup>, sqlx::Error>,
-                    > + Send
+                dyn std::future::Future<Output = Result<Option<BackupTask>, sqlx::Error>>
+                    + Send
                     + 'a,
             >,
         > {
@@ -121,8 +112,8 @@ mod handle_status_core_tests {
         }
     }
 
-    fn sample_meta() -> ProtectionJobWithBackup {
-        ProtectionJobWithBackup {
+    fn sample_meta() -> BackupTask {
+        BackupTask {
             task_id: "t1".to_string(),
             created_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
             updated_at: Utc.timestamp_opt(1_700_000_100, 0).unwrap(),

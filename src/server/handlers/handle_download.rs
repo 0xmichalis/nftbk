@@ -14,7 +14,7 @@ use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 
 use crate::server::api::{ApiProblem, ProblemJson};
-use crate::server::db::{Db, ProtectionJobWithBackup};
+use crate::server::db::{BackupTask, Db};
 use crate::server::{check_backup_on_disk, AppState};
 
 #[derive(serde::Deserialize, utoipa::ToSchema)]
@@ -130,30 +130,22 @@ pub async fn handle_download(
 
 // Minimal trait to mock DB calls
 pub trait DownloadDb {
-    fn get_protection_job<'a>(
+    fn get_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<Option<ProtectionJobWithBackup>, sqlx::Error>>
-                + Send
-                + 'a,
-        >,
+        Box<dyn std::future::Future<Output = Result<Option<BackupTask>, sqlx::Error>> + Send + 'a>,
     >;
 }
 
 impl DownloadDb for Db {
-    fn get_protection_job<'a>(
+    fn get_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<Option<ProtectionJobWithBackup>, sqlx::Error>>
-                + Send
-                + 'a,
-        >,
+        Box<dyn std::future::Future<Output = Result<Option<BackupTask>, sqlx::Error>> + Send + 'a>,
     > {
-        Box::pin(async move { Db::get_protection_job(self, task_id).await })
+        Box::pin(async move { Db::get_backup_task(self, task_id).await })
     }
 }
 
@@ -163,7 +155,7 @@ async fn serve_zip_file_for_token_core<DB: DownloadDb + ?Sized>(
     task_id: &str,
 ) -> Response {
     // Read archive_format and status from the database
-    let meta = match db.get_protection_job(task_id).await {
+    let meta = match db.get_backup_task(task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
             return ProblemJson::from_status(
@@ -191,16 +183,14 @@ async fn serve_zip_file_for_token_core<DB: DownloadDb + ?Sized>(
         .into_response();
     }
 
-    // Check if this job has an archive backup
+    // Check if this task has an archive backup
     let archive_format = match &meta.archive_format {
         Some(fmt) => fmt,
         None => {
-            // IPFS-only job - no download available
+            // IPFS-only task - no download available
             return ProblemJson::from_status(
                 StatusCode::BAD_REQUEST,
-                Some(
-                    "This protection job is IPFS-only and has no downloadable archive".to_string(),
-                ),
+                Some("This backup task is IPFS-only and has no downloadable archive".to_string()),
                 Some(format!("/v1/backups/{task_id}/download")),
             )
             .into_response();
@@ -301,7 +291,7 @@ mod handle_download_tests {
             pruner_enabled: false,
             pruner_retention_days: 7,
             download_tokens: Arc::new(Mutex::new(HashMap::new())),
-            backup_job_sender: mpsc::channel(1).0,
+            backup_task_sender: mpsc::channel(1).0,
             db,
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ipfs_providers: Vec::new(),

@@ -3,35 +3,35 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::info;
 
-use crate::server::{run_backup_job, run_deletion_job, AppState, BackupJobOrShutdown, JobType};
+use crate::server::{run_backup_task, run_deletion_task, AppState, BackupTaskOrShutdown, TaskType};
 
 pub fn spawn_backup_workers(
     parallelism: usize,
-    backup_job_receiver: mpsc::Receiver<BackupJobOrShutdown>,
+    task_receiver: mpsc::Receiver<BackupTaskOrShutdown>,
     state: AppState,
 ) -> Vec<JoinHandle<()>> {
     let mut worker_handles = Vec::with_capacity(parallelism);
-    let backup_job_receiver = Arc::new(tokio::sync::Mutex::new(backup_job_receiver));
+    let task_receiver = Arc::new(tokio::sync::Mutex::new(task_receiver));
     for i in 0..parallelism {
-        let backup_job_receiver = backup_job_receiver.clone();
+        let task_receiver = task_receiver.clone();
         let state_clone = state.clone();
         let handle = tokio::spawn(async move {
             info!("Worker {} started", i);
             loop {
-                let job = {
-                    let mut rx = backup_job_receiver.lock().await;
+                let task_or_shutdown = {
+                    let mut rx = task_receiver.lock().await;
                     rx.recv().await
                 };
-                match job {
-                    Some(BackupJobOrShutdown::Job(job_type)) => match job_type {
-                        JobType::Creation(backup_job) => {
-                            run_backup_job(state_clone.clone(), backup_job).await;
+                match task_or_shutdown {
+                    Some(BackupTaskOrShutdown::Task(task_type)) => match task_type {
+                        TaskType::Creation(backup_task) => {
+                            run_backup_task(state_clone.clone(), backup_task).await;
                         }
-                        JobType::Deletion(deletion_job) => {
-                            run_deletion_job(state_clone.clone(), deletion_job).await;
+                        TaskType::Deletion(deletion_task) => {
+                            run_deletion_task(state_clone.clone(), deletion_task).await;
                         }
                     },
-                    Some(BackupJobOrShutdown::Shutdown) | None => break,
+                    Some(BackupTaskOrShutdown::Shutdown) | None => break,
                 }
             }
             info!("Worker {} stopped", i);

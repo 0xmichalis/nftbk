@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE backup_tasks SET status = 'in_progress', deleted_at = NOW(), updated_at = NOW() WHERE task_id = $1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "250eed78719e80f483dad97bb55d544d2172e180d2bedf93ddfeb170212e05c0"
+}

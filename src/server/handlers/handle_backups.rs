@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::server::api::{ApiProblem, ProblemJson};
-use crate::server::db::{Db, ProtectionJobWithBackup};
+use crate::server::db::{BackupTask, Db};
 use crate::server::AppState;
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -35,7 +35,7 @@ fn default_limit() -> u32 {
     50
 }
 
-/// List all backup jobs for the authenticated user
+/// List all backup tasks for the authenticated user
 #[utoipa::path(
     get,
     path = "/v1/backups",
@@ -45,8 +45,8 @@ fn default_limit() -> u32 {
         ("limit" = Option<u32>, Query, description = "Items per page, max 100 (default 50)")
     ),
     responses(
-        (status = 200, description = "List of backup jobs for the authenticated user. Returns job metadata including task_id, status, timestamps, and optionally token details.", 
-         body = Vec<ProtectionJobWithBackup>,
+        (status = 200, description = "List of backup tasks for the authenticated user. Returns task metadata including task_id, status, timestamps, and optionally token details.", 
+         body = Vec<BackupTask>,
          headers(
              ("Link" = String, description = "Pagination links per RFC 5988: rel=prev,next"),
              ("X-Total-Count" = u32, description = "Total number of items before pagination")
@@ -87,7 +87,7 @@ pub async fn handle_backups(
 // Minimal trait and core function for mocking
 pub trait BackupsDb {
     #[allow(clippy::type_complexity)]
-    fn list_requestor_protection_jobs_paginated<'a>(
+    fn list_requestor_backup_tasks_paginated<'a>(
         &'a self,
         requestor: &'a str,
         include_tokens: bool,
@@ -95,9 +95,8 @@ pub trait BackupsDb {
         offset: i64,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<(Vec<ProtectionJobWithBackup>, u32), sqlx::Error>,
-                > + Send
+            dyn std::future::Future<Output = Result<(Vec<BackupTask>, u32), sqlx::Error>>
+                + Send
                 + 'a,
         >,
     >;
@@ -105,7 +104,7 @@ pub trait BackupsDb {
 
 impl BackupsDb for Db {
     #[allow(clippy::type_complexity)]
-    fn list_requestor_protection_jobs_paginated<'a>(
+    fn list_requestor_backup_tasks_paginated<'a>(
         &'a self,
         requestor: &'a str,
         include_tokens: bool,
@@ -113,14 +112,13 @@ impl BackupsDb for Db {
         offset: i64,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<(Vec<ProtectionJobWithBackup>, u32), sqlx::Error>,
-                > + Send
+            dyn std::future::Future<Output = Result<(Vec<BackupTask>, u32), sqlx::Error>>
+                + Send
                 + 'a,
         >,
     > {
         Box::pin(async move {
-            Db::list_requestor_protection_jobs_paginated(
+            Db::list_requestor_backup_tasks_paginated(
                 self,
                 requestor,
                 include_tokens,
@@ -143,7 +141,7 @@ async fn handle_backups_core<DB: BackupsDb + ?Sized>(
     let page = page.max(1);
     let offset = ((page - 1) * limit) as i64;
     match db
-        .list_requestor_protection_jobs_paginated(user_did, include_tokens, limit as i64, offset)
+        .list_requestor_backup_tasks_paginated(user_did, include_tokens, limit as i64, offset)
         .await
     {
         Ok((items, total)) => {
@@ -192,12 +190,12 @@ mod handle_backups_core_mockdb_tests {
 
     #[derive(Default)]
     struct MockDb {
-        records: Vec<crate::server::db::ProtectionJobWithBackup>,
+        records: Vec<crate::server::db::BackupTask>,
         error: bool,
     }
 
     impl BackupsDb for MockDb {
-        fn list_requestor_protection_jobs_paginated<'a>(
+        fn list_requestor_backup_tasks_paginated<'a>(
             &'a self,
             _requestor: &'a str,
             _include_tokens: bool,
@@ -206,10 +204,7 @@ mod handle_backups_core_mockdb_tests {
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<
-                        Output = Result<
-                            (Vec<crate::server::db::ProtectionJobWithBackup>, u32),
-                            sqlx::Error,
-                        >,
+                        Output = Result<(Vec<crate::server::db::BackupTask>, u32), sqlx::Error>,
                     > + Send
                     + 'a,
             >,
@@ -255,7 +250,7 @@ mod handle_backups_core_mockdb_tests {
         // Build 5 fake records with distinct task_ids
         let mut recs = Vec::new();
         for i in 0..5 {
-            recs.push(crate::server::db::ProtectionJobWithBackup {
+            recs.push(crate::server::db::BackupTask {
                 task_id: format!("t{}", i + 1),
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),

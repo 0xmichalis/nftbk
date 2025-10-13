@@ -11,7 +11,7 @@ use crate::server::api::{ApiProblem, BackupRequest, BackupResponse, ProblemJson}
 use crate::server::archive::negotiate_archive_format;
 use crate::server::db::Db;
 use crate::server::hashing::compute_task_id;
-use crate::server::{AppState, BackupJob, BackupJobOrShutdown, JobType, StorageMode};
+use crate::server::{AppState, BackupTask, BackupTaskOrShutdown, StorageMode, TaskType};
 
 fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), String> {
     validate_backup_request_impl(&state.chain_config, state.ipfs_providers.len(), req)
@@ -45,7 +45,7 @@ fn validate_backup_request_impl(
     Ok(())
 }
 
-/// Create a backup job for the authenticated user. This job will be processed asynchronously and the result will be available in the /v1/backups/{task_id} endpoint.
+/// Create a backup task for the authenticated user. This task will be processed asynchronously and the result will be available in the /v1/backups/{task_id} endpoint.
 /// By default, this endpoint creates an archive file with metadata and content from all tokens to be downloaded by the user. The archive format depends on the user-agent (zip or tar.gz).
 /// The user can optionally request to pin content that is stored on IPFS.
 #[utoipa::path(
@@ -82,7 +82,7 @@ pub async fn handle_backup(
     }
     let response = handle_backup_core(
         &*state.db,
-        &state.backup_job_sender,
+        &state.backup_task_sender,
         requestor,
         &headers,
         req,
@@ -102,7 +102,7 @@ pub trait BackupDb {
     >;
 
     #[allow(clippy::too_many_arguments)]
-    fn insert_protection_job<'a>(
+    fn insert_backup_task<'a>(
         &'a self,
         task_id: &'a str,
         requestor: &'a str,
@@ -125,7 +125,7 @@ impl BackupDb for Db {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn insert_protection_job<'a>(
+    fn insert_backup_task<'a>(
         &'a self,
         task_id: &'a str,
         requestor: &'a str,
@@ -137,7 +137,7 @@ impl BackupDb for Db {
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
     {
         Box::pin(async move {
-            Db::insert_protection_job(
+            Db::insert_backup_task(
                 self,
                 task_id,
                 requestor,
@@ -154,7 +154,7 @@ impl BackupDb for Db {
 
 async fn handle_backup_core<DB: BackupDb + ?Sized>(
     db: &DB,
-    backup_job_sender: &tokio::sync::mpsc::Sender<BackupJobOrShutdown>,
+    backup_task_sender: &tokio::sync::mpsc::Sender<BackupTaskOrShutdown>,
     requestor: Option<String>,
     headers: &HeaderMap,
     req: BackupRequest,
@@ -246,7 +246,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
     let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum::<usize>() as i32;
     let tokens_json = serde_json::to_value(&req.tokens).unwrap();
     if let Err(e) = db
-        .insert_protection_job(
+        .insert_backup_task(
             &task_id,
             &requestor_str,
             nft_count,
@@ -265,7 +265,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         return problem.into_response();
     }
 
-    let backup_job = BackupJob {
+    let backup_task = BackupTask {
         task_id: task_id.clone(),
         request: req.clone(),
         force: false,
@@ -273,25 +273,25 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         archive_format: archive_format_opt.clone(),
         requestor: Some(requestor_str.clone()),
     };
-    if let Err(e) = backup_job_sender
-        .send(BackupJobOrShutdown::Job(JobType::Creation(backup_job)))
+    if let Err(e) = backup_task_sender
+        .send(BackupTaskOrShutdown::Task(TaskType::Creation(backup_task)))
         .await
     {
-        error!("Failed to enqueue backup job: {}", e);
+        error!("Failed to enqueue backup task: {}", e);
         let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Some("Failed to enqueue backup job".to_string()),
+            Some("Failed to enqueue backup task".to_string()),
             Some(format!("/v1/backups/{}", task_id)),
         );
         return problem.into_response();
     }
 
     info!(
-        "Created backup task {} (requestor: {}, count: {}, archive_format: {:?})",
+        "Created backup task {} (requestor: {}, count: {}, storage_mode: {})",
         task_id,
         requestor.unwrap_or_default(),
         nft_count,
-        archive_format_opt
+        storage_mode.as_str()
     );
     let mut headers = axum::http::HeaderMap::new();
     headers.insert(
@@ -437,7 +437,7 @@ mod handle_backup_endpoint_tests {
             pruner_enabled: false,
             pruner_retention_days: 7,
             download_tokens: Arc::new(Mutex::new(HashMap::new())),
-            backup_job_sender: tx,
+            backup_task_sender: tx,
             db,
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ipfs_providers,
@@ -525,7 +525,7 @@ mod handle_backup_core_tests {
             let status = self.status.clone();
             Box::pin(async move { Ok(status) })
         }
-        fn insert_protection_job<'a>(
+        fn insert_backup_task<'a>(
             &'a self,
             _task_id: &'a str,
             _requestor: &'a str,
@@ -595,9 +595,9 @@ mod handle_backup_core_tests {
         let v: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         let task_id = v.get("task_id").and_then(|t| t.as_str()).unwrap();
         assert_eq!(location, format!("/v1/backups/{task_id}"));
-        // Ensure job enqueued
-        let msg = rx.try_recv();
-        assert!(msg.is_ok());
+        // Ensure task enqueued
+        let task = rx.try_recv();
+        assert!(task.is_ok());
     }
 
     #[tokio::test]
@@ -751,8 +751,8 @@ mod handle_backup_core_tests {
         // Ensure no archive format was chosen when not creating an archive
         let chosen = db.last_archive_format.lock().unwrap().clone();
         assert_eq!(chosen, None);
-        // Ensure job enqueued
-        let msg = rx.try_recv();
-        assert!(msg.is_ok());
+        // Ensure task enqueued
+        let task = rx.try_recv();
+        assert!(task.is_ok());
     }
 }

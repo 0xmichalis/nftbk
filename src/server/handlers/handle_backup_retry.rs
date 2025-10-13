@@ -9,13 +9,13 @@ use axum::{
 use crate::server::api::BackupResponse;
 use crate::server::api::{ApiProblem, BackupRequest, ProblemJson};
 use crate::server::AppState;
-use crate::server::BackupJob;
-use crate::server::BackupJobOrShutdown;
-use crate::server::JobType;
+use crate::server::BackupTask;
+use crate::server::BackupTaskOrShutdown;
+use crate::server::TaskType;
 use crate::server::Tokens;
 use tracing::{error, info};
 
-/// Retry a backup job for the authenticated user. This job will be processed asynchronously and the result will be available in the /v1/backups/{task_id} endpoint.
+/// Retry a backup task for the authenticated user. This task will be processed asynchronously and the result will be available in the /v1/backups/{task_id} endpoint.
 #[utoipa::path(
     post,
     path = "/v1/backups/{task_id}/retry",
@@ -39,7 +39,7 @@ pub async fn handle_backup_retry(
 ) -> impl IntoResponse {
     handle_backup_retry_core(
         &*state.db,
-        &state.backup_job_sender,
+        &state.backup_task_sender,
         &task_id,
         requestor,
         state.pruner_retention_days,
@@ -49,16 +49,13 @@ pub async fn handle_backup_retry(
 
 // Minimal trait to mock DB calls
 pub trait RetryDb {
-    fn get_protection_job<'a>(
+    fn get_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<
-                        Option<crate::server::db::ProtectionJobWithBackup>,
-                        sqlx::Error,
-                    >,
+                    Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
                 > + Send
                 + 'a,
         >,
@@ -71,21 +68,18 @@ pub trait RetryDb {
 }
 
 impl RetryDb for crate::server::db::Db {
-    fn get_protection_job<'a>(
+    fn get_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<
-                        Option<crate::server::db::ProtectionJobWithBackup>,
-                        sqlx::Error,
-                    >,
+                    Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
                 > + Send
                 + 'a,
         >,
     > {
-        Box::pin(async move { crate::server::db::Db::get_protection_job(self, task_id).await })
+        Box::pin(async move { crate::server::db::Db::get_backup_task(self, task_id).await })
     }
     fn retry_backup<'a>(
         &'a self,
@@ -101,13 +95,13 @@ impl RetryDb for crate::server::db::Db {
 
 async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
     db: &DB,
-    backup_job_sender: &tokio::sync::mpsc::Sender<BackupJobOrShutdown>,
+    backup_task_sender: &tokio::sync::mpsc::Sender<BackupTaskOrShutdown>,
     task_id: &str,
     requestor: Option<String>,
     retention_days: u64,
 ) -> axum::response::Response {
     // Fetch metadata from DB once
-    let meta = match db.get_protection_job(task_id).await {
+    let meta = match db.get_backup_task(task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
             let problem = ProblemJson::from_status(
@@ -151,7 +145,7 @@ async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
 
     let _ = db.retry_backup(task_id, retention_days).await;
 
-    // Re-run backup job
+    // Re-run backup task
     let tokens: Vec<Tokens> = serde_json::from_value(meta.tokens.clone()).unwrap_or_default();
     let storage_mode = meta
         .storage_mode
@@ -160,7 +154,7 @@ async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
     let pin_on_ipfs = storage_mode != crate::server::StorageMode::Archive;
     let create_archive = storage_mode != crate::server::StorageMode::Ipfs;
 
-    let backup_job = BackupJob {
+    let backup_task = BackupTask {
         task_id: task_id.to_string(),
         request: BackupRequest {
             tokens,
@@ -172,14 +166,14 @@ async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
         archive_format: meta.archive_format.clone(),
         requestor: requestor.clone(),
     };
-    if let Err(e) = backup_job_sender
-        .send(BackupJobOrShutdown::Job(JobType::Creation(backup_job)))
+    if let Err(e) = backup_task_sender
+        .send(BackupTaskOrShutdown::Task(TaskType::Creation(backup_task)))
         .await
     {
-        error!("Failed to enqueue backup job: {}", e);
+        error!("Failed to enqueue backup task: {}", e);
         let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Some("Failed to enqueue backup job".to_string()),
+            Some("Failed to enqueue backup task".to_string()),
             Some(format!("/v1/backups/{task_id}/retry")),
         );
         return problem.into_response();
@@ -207,22 +201,19 @@ mod handle_backup_retry_core_tests {
 
     #[derive(Clone, Default)]
     struct MockDb {
-        meta: Option<crate::server::db::ProtectionJobWithBackup>,
+        meta: Option<crate::server::db::BackupTask>,
         get_error: bool,
         retry_error: bool,
     }
 
     impl RetryDb for MockDb {
-        fn get_protection_job<'a>(
+        fn get_backup_task<'a>(
             &'a self,
             _task_id: &'a str,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<
-                        Output = Result<
-                            Option<crate::server::db::ProtectionJobWithBackup>,
-                            sqlx::Error,
-                        >,
+                        Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
                     > + Send
                     + 'a,
             >,
@@ -254,9 +245,9 @@ mod handle_backup_retry_core_tests {
         }
     }
 
-    fn sample_meta(owner: &str, status: &str) -> crate::server::db::ProtectionJobWithBackup {
+    fn sample_meta(owner: &str, status: &str) -> crate::server::db::BackupTask {
         use chrono::{TimeZone, Utc};
-        crate::server::db::ProtectionJobWithBackup {
+        crate::server::db::BackupTask {
             task_id: "t1".to_string(),
             created_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
             updated_at: Utc.timestamp_opt(1_700_000_100, 0).unwrap(),
@@ -351,8 +342,8 @@ mod handle_backup_retry_core_tests {
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
-        // Ensure job enqueued
-        let msg = rx.try_recv();
-        assert!(msg.is_ok());
+        // Ensure task enqueued
+        let task = rx.try_recv();
+        assert!(task.is_ok());
     }
 }

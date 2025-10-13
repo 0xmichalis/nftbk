@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE archive_requests\n            SET expires_at = NOW() + ($2 || ' days')::interval\n            WHERE task_id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f84cfd5ab5409fc3db71c3451c54f3e7716b80bd68b1e785d89805d8f0fce6e8"
+}
