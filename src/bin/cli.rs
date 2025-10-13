@@ -299,6 +299,7 @@ async fn request_backup(
     let mut backup_req = BackupRequest {
         tokens: Vec::new(),
         pin_on_ipfs,
+        create_archive: true,
     };
     for (chain, tokens) in &token_config.chains {
         backup_req.tokens.push(Tokens {

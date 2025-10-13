@@ -31,9 +31,6 @@ use crate::server::handlers::handle_backup_retry::{
 };
 use crate::server::handlers::handle_backups::BackupsQuery;
 use crate::server::handlers::handle_backups::{__path_handle_backups, handle_backups};
-use crate::server::handlers::handle_create_pins::{
-    __path_handle_create_pins, handle_create_pins, PinRequest,
-};
 use crate::server::handlers::handle_download::{DownloadQuery, DownloadTokenResponse};
 use crate::server::handlers::handle_download::{
     __path_handle_download, __path_handle_download_token, handle_download, handle_download_token,
@@ -55,11 +52,10 @@ use crate::server::AppState;
         handle_backup_delete_archive,
         handle_backup_delete_pins,
         handle_backups,
-        handle_create_pins,
         handle_pins,
     ),
     components(
-        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinRequest, PinsResponse, ProtectionJobWithBackup, TokenWithPins, PinInfo, ApiProblem)
+        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinsResponse, ProtectionJobWithBackup, TokenWithPins, PinInfo, ApiProblem)
     ),
     tags(
         (name = "backups", description = "General backup operations"),
@@ -215,7 +211,7 @@ pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -
             "/v1/backups/:task_id/pins",
             delete(handle_backup_delete_pins),
         )
-        .route("/v1/pins", get(handle_pins).post(handle_create_pins))
+        .route("/v1/pins", get(handle_pins))
         .with_state(state.clone());
 
     let auth_state = AuthState {

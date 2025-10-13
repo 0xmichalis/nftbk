@@ -34,6 +34,10 @@ fn validate_backup_request_impl(
         let msg = format!("Unknown chains requested: {}", unknown_chains.join(", "));
         return Err(msg);
     }
+    // Validate requested operation is meaningful
+    if !req.create_archive && !req.pin_on_ipfs {
+        return Err("Either create_archive must be true or pin_on_ipfs must be true".to_string());
+    }
     // Validate IPFS pinning configuration
     if req.pin_on_ipfs && ipfs_providers_len == 0 {
         return Err("pin_on_ipfs requested but no IPFS provider configured".to_string());
@@ -212,22 +216,36 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         }
     }
 
-    // Determine storage mode based on pin_on_ipfs flag
-    let storage_mode = if req.pin_on_ipfs {
-        StorageMode::Full
-    } else {
-        StorageMode::Archive
+    // Determine storage mode based on flags
+    let storage_mode = match (req.create_archive, req.pin_on_ipfs) {
+        (true, true) => StorageMode::Full,
+        (true, false) => StorageMode::Archive,
+        (false, true) => StorageMode::Ipfs,
+        (false, false) => {
+            // Should be prevented by validation; return error defensively
+            let problem = ProblemJson::from_status(
+                StatusCode::BAD_REQUEST,
+                Some("Either create_archive must be true or pin_on_ipfs must be true".to_string()),
+                Some("/v1/backups".to_string()),
+            );
+            return problem.into_response();
+        }
     };
 
-    // Determine archive format from Accept header or user-agent; fallback to zip
-    let archive_format = negotiate_archive_format(
-        headers.get("accept").and_then(|v| v.to_str().ok()),
-        headers.get("user-agent").and_then(|v| v.to_str().ok()),
-    );
+    // Determine archive format if necessary
+    let archive_format = if storage_mode == StorageMode::Ipfs {
+        String::new()
+    } else {
+        negotiate_archive_format(
+            headers.get("accept").and_then(|v| v.to_str().ok()),
+            headers.get("user-agent").and_then(|v| v.to_str().ok()),
+        )
+    };
 
     // Write metadata to DB
     let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum::<usize>() as i32;
     let tokens_json = serde_json::to_value(&req.tokens).unwrap();
+    let is_ipfs_only = storage_mode == StorageMode::Ipfs;
     if let Err(e) = db
         .insert_protection_job(
             &task_id,
@@ -235,7 +253,11 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
             nft_count,
             &tokens_json,
             storage_mode.as_str(),
-            Some(&archive_format),
+            if is_ipfs_only {
+                None
+            } else {
+                Some(&archive_format)
+            },
             Some(pruner_retention_days),
         )
         .await
@@ -252,8 +274,12 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
         task_id: task_id.clone(),
         request: req.clone(),
         force: false,
-        storage_mode,
-        archive_format: Some(archive_format.clone()),
+        storage_mode: storage_mode.clone(),
+        archive_format: if is_ipfs_only {
+            None
+        } else {
+            Some(archive_format.clone())
+        },
         requestor: Some(requestor_str.clone()),
     };
     if let Err(e) = backup_job_sender
@@ -312,6 +338,7 @@ mod validate_backup_request_impl_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: false,
+            create_archive: true,
         };
         let result = validate_backup_request_impl(&chain_config, 1, &req);
         assert!(result.is_err());
@@ -328,6 +355,7 @@ mod validate_backup_request_impl_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: true,
+            create_archive: true,
         };
         let result = validate_backup_request_impl(&chain_config, 0, &req);
         assert!(result.is_err());
@@ -346,6 +374,7 @@ mod validate_backup_request_impl_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: true,
+            create_archive: true,
         };
         let result = validate_backup_request_impl(&chain_config, 2, &req);
         assert!(result.is_ok());
@@ -360,9 +389,27 @@ mod validate_backup_request_impl_tests {
                 tokens: vec!["KT1abc:1".to_string()],
             }],
             pin_on_ipfs: false,
+            create_archive: true,
         };
         let result = validate_backup_request_impl(&chain_config, 0, &req);
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn rejects_when_both_create_archive_and_pin_false() {
+        let chain_config = make_chain_config(&["ethereum"]);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+            create_archive: false,
+        };
+        let result = validate_backup_request_impl(&chain_config, 1, &req);
+        assert!(result.is_err());
+        let err = result.err().unwrap();
+        assert!(err.contains("Either create_archive must be true or pin_on_ipfs must be true"));
     }
 }
 
@@ -445,6 +492,7 @@ mod handle_backup_endpoint_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: true,
+            create_archive: true,
         };
         let request = Request::builder()
             .method("POST")
@@ -517,6 +565,7 @@ mod handle_backup_core_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: false,
+            create_archive: true,
         };
         let headers = HeaderMap::new();
         let resp = super::handle_backup_core(&db, &tx, None, &headers, req, 7)
@@ -535,6 +584,7 @@ mod handle_backup_core_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: false,
+            create_archive: true,
         };
         let headers = HeaderMap::new();
         let resp =
@@ -573,6 +623,7 @@ mod handle_backup_core_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: false,
+            create_archive: true,
         };
         let headers = HeaderMap::new();
         let resp =
@@ -592,6 +643,7 @@ mod handle_backup_core_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: false,
+            create_archive: true,
         };
         let mut headers = HeaderMap::new();
         headers.insert("accept", "application/zip".parse().unwrap());
@@ -612,6 +664,7 @@ mod handle_backup_core_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: false,
+            create_archive: true,
         };
         let mut headers = HeaderMap::new();
         headers.insert("accept", "application/gzip".parse().unwrap());
@@ -632,6 +685,7 @@ mod handle_backup_core_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: false,
+            create_archive: true,
         };
         let mut headers = HeaderMap::new();
         headers.insert("accept", "application/json".parse().unwrap());
@@ -652,6 +706,7 @@ mod handle_backup_core_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: false,
+            create_archive: true,
         };
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "Linux".parse().unwrap());
@@ -672,6 +727,7 @@ mod handle_backup_core_tests {
                 tokens: vec!["0xabc:1".to_string()],
             }],
             pin_on_ipfs: false,
+            create_archive: true,
         };
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "Linux TarPreferred".parse().unwrap());
@@ -681,5 +737,31 @@ mod handle_backup_core_tests {
             .into_response();
         let chosen = db.last_archive_format.lock().unwrap().clone();
         assert_eq!(chosen.as_deref(), Some("zip"));
+    }
+
+    #[tokio::test]
+    async fn ipfs_only_mode_sets_no_archive_and_accepts() {
+        let db = MockDb::default();
+        let (tx, mut rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: true,
+            create_archive: false,
+        };
+        let headers = HeaderMap::new();
+        let resp =
+            super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
+                .await
+                .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        // Ensure no archive format was chosen when not creating an archive
+        let chosen = db.last_archive_format.lock().unwrap().clone();
+        assert_eq!(chosen, None);
+        // Ensure job enqueued
+        let msg = rx.try_recv();
+        assert!(msg.is_ok());
     }
 }

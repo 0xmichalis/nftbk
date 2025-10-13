@@ -363,13 +363,15 @@ pub async fn recover_incomplete_jobs<DB: RecoveryDb + ?Sized>(
         };
 
         let storage_mode = job_meta.storage_mode.parse().unwrap_or(StorageMode::Full);
-        let pin_on_ipfs = storage_mode == StorageMode::Ipfs || storage_mode == StorageMode::Full;
+        let pin_on_ipfs = storage_mode != StorageMode::Archive;
+        let create_archive = storage_mode != StorageMode::Ipfs;
 
         let backup_job = BackupJob {
             task_id: job_meta.task_id.clone(),
             request: BackupRequest {
                 tokens,
                 pin_on_ipfs,
+                create_archive,
             },
             force: true, // Force recovery to ensure backup actually runs
             storage_mode,

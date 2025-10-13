@@ -157,14 +157,15 @@ async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
         .storage_mode
         .parse()
         .unwrap_or(crate::server::StorageMode::Full);
-    let pin_on_ipfs = storage_mode == crate::server::StorageMode::Ipfs
-        || storage_mode == crate::server::StorageMode::Full;
+    let pin_on_ipfs = storage_mode != crate::server::StorageMode::Archive;
+    let create_archive = storage_mode != crate::server::StorageMode::Ipfs;
 
     let backup_job = BackupJob {
         task_id: task_id.to_string(),
         request: BackupRequest {
             tokens,
             pin_on_ipfs,
+            create_archive,
         },
         force: true,
         storage_mode,
