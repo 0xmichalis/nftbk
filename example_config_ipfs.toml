@@ -19,6 +19,3 @@ bearer_token_env = "PINATA_TOKEN"
 #base_url = "https://my-ipfs-service.example.com"
 #bearer_token_env = "PINNING_SERVICE_BACKUP_TOKEN"
 
-# Note: You can also embed tokens directly (not recommended for production):
-# bearer_token = "your_actual_token_here"
-# If both bearer_token and bearer_token_env are provided, bearer_token_env takes precedence

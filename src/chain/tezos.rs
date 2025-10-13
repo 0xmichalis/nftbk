@@ -394,7 +394,6 @@ mod ipfs_providers_tests {
             prune_redundant: false,
             ipfs_providers: vec![crate::ipfs::IpfsProviderConfig::IpfsPinningService {
                 base_url: "http://example.com".to_string(),
-                bearer_token: None,
                 bearer_token_env: None,
             }],
         };

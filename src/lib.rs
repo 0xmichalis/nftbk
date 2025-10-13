@@ -221,7 +221,6 @@ mod tests {
                 prune_redundant: false,
                 ipfs_providers: vec![ipfs::IpfsProviderConfig::IpfsPinningService {
                     base_url: "http://example.com".to_string(),
-                    bearer_token: None,
                     bearer_token_env: None,
                 }],
             },
@@ -261,7 +260,6 @@ mod tests {
                 prune_redundant: false,
                 ipfs_providers: vec![ipfs::IpfsProviderConfig::IpfsPinningService {
                     base_url: "http://example.com".to_string(),
-                    bearer_token: None,
                     bearer_token_env: None,
                 }],
             },

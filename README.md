@@ -58,11 +58,11 @@ There is support for pinning IPFS content using multiple providers. Both the [IP
 Both the server and CLI can be configured to pin CIDs on IPFS via a TOML file passed with the `--ipfs-config` flag. Example `config_ipfs.toml`:
 
 ```toml
-# Pin to a standard IPFS Pinning Service
+# Pin to Filebase (supports the IPFS Pinning Service API)
 [[ipfs_provider]]
 type = "pinning-service"
-base_url = "https://my-ipfs-service.example.com"
-bearer_token_env = "IPFS_PINNING_SERVICE_TOKEN"
+base_url = "https://api.filebase.io/v1/ipfs"
+bearer_token_env = "FILEBASE_TOKEN"
 
 # Pin to Pinata
 [[ipfs_provider]]
@@ -70,8 +70,6 @@ type = "pinata"
 base_url = "https://api.pinata.cloud"
 bearer_token_env = "PINATA_TOKEN"
 ```
-
-**Security best practice**: Use `bearer_token_env` to reference environment variables for API keys rather than embedding tokens directly in the config file. If both `bearer_token` and `bearer_token_env` are provided, `bearer_token_env` takes precedence.
 
 ## Run
 
