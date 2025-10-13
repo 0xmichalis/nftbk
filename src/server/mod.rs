@@ -428,11 +428,8 @@ pub trait BackupJobDb {
     ) -> Result<Option<crate::server::db::ProtectionJobWithBackup>, sqlx::Error>;
     async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn delete_protection_job(&self, task_id: &str) -> Result<(), sqlx::Error>;
-    async fn update_protection_job_storage_mode(
-        &self,
-        task_id: &str,
-        storage_mode: &str,
-    ) -> Result<(), sqlx::Error>;
+    async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error>;
 }
 
 // Implement BackupJobDb trait for the real Db
@@ -486,12 +483,12 @@ impl BackupJobDb for Db {
         Db::delete_protection_job(self, task_id).await
     }
 
-    async fn update_protection_job_storage_mode(
-        &self,
-        task_id: &str,
-        storage_mode: &str,
-    ) -> Result<(), sqlx::Error> {
-        Db::update_protection_job_storage_mode(self, task_id, storage_mode).await
+    async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::downgrade_full_to_ipfs(self, task_id).await
+    }
+
+    async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::downgrade_full_to_archive(self, task_id).await
     }
 }
 
@@ -879,11 +876,11 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
         }
         StorageMode::Archive => {
             if meta.storage_mode == "full" {
-                if let Err(e) = db
-                    .update_protection_job_storage_mode(&task_id, "ipfs")
-                    .await
-                {
-                    error!("Failed to update storage mode for task {}: {}", task_id, e);
+                if let Err(e) = db.downgrade_full_to_ipfs(&task_id).await {
+                    error!(
+                        "Failed to downgrade storage mode for task {}: {}",
+                        task_id, e
+                    );
                 }
             } else if meta.storage_mode == "archive" {
                 if let Err(e) = db.delete_protection_job(&task_id).await {
@@ -896,11 +893,11 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
         }
         StorageMode::Ipfs => {
             if meta.storage_mode == "full" {
-                if let Err(e) = db
-                    .update_protection_job_storage_mode(&task_id, "archive")
-                    .await
-                {
-                    error!("Failed to update storage mode for task {}: {}", task_id, e);
+                if let Err(e) = db.downgrade_full_to_archive(&task_id).await {
+                    error!(
+                        "Failed to downgrade storage mode for task {}: {}",
+                        task_id, e
+                    );
                 }
             } else if meta.storage_mode == "ipfs" {
                 if let Err(e) = db.delete_protection_job(&task_id).await {

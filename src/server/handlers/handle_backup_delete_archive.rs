@@ -55,11 +55,6 @@ pub trait DeleteArchiveDb {
                 + 'a,
         >,
     >;
-    fn update_protection_job_storage_mode<'a>(
-        &'a self,
-        task_id: &'a str,
-        storage_mode: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>;
     fn delete_protection_job<'a>(
         &'a self,
         task_id: &'a str,
@@ -82,17 +77,6 @@ impl DeleteArchiveDb for crate::server::db::Db {
         >,
     > {
         Box::pin(async move { crate::server::db::Db::get_protection_job(self, task_id).await })
-    }
-    fn update_protection_job_storage_mode<'a>(
-        &'a self,
-        task_id: &'a str,
-        storage_mode: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            crate::server::db::Db::update_protection_job_storage_mode(self, task_id, storage_mode)
-                .await
-        })
     }
     fn delete_protection_job<'a>(
         &'a self,
@@ -119,17 +103,6 @@ impl DeleteArchiveDb for std::sync::Arc<crate::server::db::Db> {
         >,
     > {
         Box::pin(async move { crate::server::db::Db::get_protection_job(self, task_id).await })
-    }
-    fn update_protection_job_storage_mode<'a>(
-        &'a self,
-        task_id: &'a str,
-        storage_mode: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            crate::server::db::Db::update_protection_job_storage_mode(self, task_id, storage_mode)
-                .await
-        })
     }
     fn delete_protection_job<'a>(
         &'a self,
@@ -247,9 +220,7 @@ mod handle_backup_delete_archive_core_tests {
     struct MockDb {
         meta: Option<crate::server::db::ProtectionJobWithBackup>,
         get_error: bool,
-        update_error: bool,
         delete_error: bool,
-        update_calls: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
         delete_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     }
 
@@ -275,25 +246,6 @@ mod handle_backup_delete_archive_core_tests {
                     Err(sqlx::Error::PoolTimedOut)
                 } else {
                     Ok(meta)
-                }
-            })
-        }
-        fn update_protection_job_storage_mode<'a>(
-            &'a self,
-            task_id: &'a str,
-            storage_mode: &'a str,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
-        {
-            let update_calls = self.update_calls.clone();
-            let task_id = task_id.to_string();
-            let storage_mode = storage_mode.to_string();
-            let err = self.update_error;
-            Box::pin(async move {
-                if err {
-                    Err(sqlx::Error::PoolTimedOut)
-                } else {
-                    update_calls.lock().unwrap().push((task_id, storage_mode));
-                    Ok(())
                 }
             })
         }
@@ -358,9 +310,7 @@ mod handle_backup_delete_archive_core_tests {
         let db = MockDb {
             meta: None,
             get_error: false,
-            update_error: false,
             delete_error: false,
-            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
@@ -375,9 +325,7 @@ mod handle_backup_delete_archive_core_tests {
         let db = MockDb {
             meta: None,
             get_error: true,
-            update_error: false,
             delete_error: false,
-            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
@@ -393,9 +341,7 @@ mod handle_backup_delete_archive_core_tests {
         let db = MockDb {
             meta: Some(sample_meta("did:other", "done", "archive")),
             get_error: false,
-            update_error: false,
             delete_error: false,
-            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
@@ -410,9 +356,7 @@ mod handle_backup_delete_archive_core_tests {
         let db = MockDb {
             meta: Some(sample_meta("did:me", "in_progress", "archive")),
             get_error: false,
-            update_error: false,
             delete_error: false,
-            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
@@ -427,9 +371,7 @@ mod handle_backup_delete_archive_core_tests {
         let db = MockDb {
             meta: Some(sample_meta("did:me", "done", "ipfs")),
             get_error: false,
-            update_error: false,
             delete_error: false,
-            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
@@ -444,9 +386,7 @@ mod handle_backup_delete_archive_core_tests {
         let db = MockDb {
             meta: Some(sample_meta("did:me", "done", "archive")),
             get_error: false,
-            update_error: false,
             delete_error: false,
-            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
@@ -465,9 +405,7 @@ mod handle_backup_delete_archive_core_tests {
         let db = MockDb {
             meta: Some(sample_meta("did:me", "done", "full")),
             get_error: false,
-            update_error: false,
             delete_error: false,
-            update_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
             delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
         };
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);

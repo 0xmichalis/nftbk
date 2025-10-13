@@ -262,25 +262,6 @@ impl Db {
         Ok(())
     }
 
-    pub async fn update_protection_job_storage_mode(
-        &self,
-        task_id: &str,
-        storage_mode: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            UPDATE protection_jobs
-            SET storage_mode = $2, updated_at = NOW()
-            WHERE task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(storage_mode)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
     pub async fn retry_backup(
         &self,
         task_id: &str,
@@ -899,6 +880,55 @@ impl Db {
             .execute(&mut *tx)
             .await?;
         }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Atomically downgrade from full to ipfs: remove archive request row and update storage_mode
+    pub async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(r#"DELETE FROM backup_requests WHERE task_id = $1"#)
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE protection_jobs
+            SET storage_mode = 'ipfs', updated_at = NOW()
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Atomically downgrade from full to archive: remove IPFS pin rows and update storage_mode
+    pub async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        // pinned_tokens will cascade on pin_requests delete
+        sqlx::query(r#"DELETE FROM pin_requests WHERE task_id = $1"#)
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE protection_jobs
+            SET storage_mode = 'archive', updated_at = NOW()
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
 
         tx.commit().await?;
         Ok(())
