@@ -188,17 +188,11 @@ async fn handle_backup_core<DB: BackupDb + ?Sized + crate::server::BackupTaskDb>
 
         match task_meta.status.as_str() {
             "in_progress" => {
-                debug!(
-                    "Duplicate backup request, returning existing task_id {}",
-                    task_id
-                );
+                debug!("Duplicate backup request, returning existing task_id {task_id}");
                 return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
             }
             "done" => {
-                debug!(
-                    "Backup already completed, returning existing task_id {}",
-                    task_id
-                );
+                debug!("Backup already completed, returning existing task_id {task_id}");
                 return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
             }
             "error" | "expired" => {
@@ -213,10 +207,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized + crate::server::BackupTaskDb>
                 return problem.into_response();
             }
             other => {
-                error!(
-                    "Unknown backup status '{}' for task {} when handling /backup",
-                    other, task_id
-                );
+                error!("Unknown backup status '{other}' for task {task_id} when handling /backup");
                 let problem = ProblemJson::from_status(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Some("Unknown backup status".to_string()),
@@ -270,7 +261,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized + crate::server::BackupTaskDb>
     {
         let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Some(format!("Failed to write metadata to DB: {}", e)),
+            Some(format!("Failed to write metadata to DB: {e}")),
             Some(format!("/v1/backups/{}", task_id)),
         );
         return problem.into_response();
@@ -288,7 +279,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized + crate::server::BackupTaskDb>
         .send(BackupTaskOrShutdown::Task(TaskType::Creation(backup_task)))
         .await
     {
-        error!("Failed to enqueue backup task: {}", e);
+        error!("Failed to enqueue backup task: {e}");
         let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             Some("Failed to enqueue backup task".to_string()),
