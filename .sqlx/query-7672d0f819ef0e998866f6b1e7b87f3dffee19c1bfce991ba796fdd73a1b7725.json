@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT COUNT(*) as count FROM backup_tasks pj WHERE pj.requestor = $1",
+  "query": "SELECT COUNT(*) as count FROM backup_tasks b WHERE b.requestor = $1",
   "describe": {
     "columns": [
       {
@@ -18,5 +18,5 @@
       null
     ]
   },
-  "hash": "716ef5ff3d9066f53d2df0f5bcbbd0235113cf7e3c039d998ce7694b03a348a5"
+  "hash": "7672d0f819ef0e998866f6b1e7b87f3dffee19c1bfce991ba796fdd73a1b7725"
 }

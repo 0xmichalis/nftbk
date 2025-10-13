@@ -455,11 +455,11 @@ impl Db {
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<BackupTask>, u32), sqlx::Error> {
-        let tokens_field = if include_tokens { "pj.tokens," } else { "" };
+        let tokens_field = if include_tokens { "b.tokens," } else { "" };
 
         // Total count
         let total_row = sqlx::query!(
-            r#"SELECT COUNT(*) as count FROM backup_tasks pj WHERE pj.requestor = $1"#,
+            r#"SELECT COUNT(*) as count FROM backup_tasks b WHERE b.requestor = $1"#,
             requestor
         )
         .fetch_one(&self.pool)
