@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE pin_requests \n            SET deleted_at = NOW() \n            WHERE task_id = $1 AND deleted_at IS NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "f3104f049958cad3bef75d3fd5b73bfe1bc358a11d19db760ef77a995ad05555"
+}

@@ -373,9 +373,29 @@ impl Db {
         Ok(())
     }
 
-    pub async fn start_downgrade(&self, task_id: &str) -> Result<(), sqlx::Error> {
+    /// Mark archive as being deleted (similar to start_deletion but for archive subresource)
+    pub async fn start_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query!(
-            r#"UPDATE backup_tasks SET status = 'in_progress', updated_at = NOW() WHERE task_id = $1"#,
+            r#"
+            UPDATE archive_requests 
+            SET deleted_at = NOW() 
+            WHERE task_id = $1 AND deleted_at IS NULL
+            "#,
+            task_id
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Mark IPFS pins as being deleted (similar to start_deletion but for IPFS pins subresource)
+    pub async fn start_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query!(
+            r#"
+            UPDATE pin_requests 
+            SET deleted_at = NOW() 
+            WHERE task_id = $1 AND deleted_at IS NULL
+            "#,
             task_id
         )
         .execute(&self.pool)
@@ -911,52 +931,33 @@ impl Db {
         Ok(())
     }
 
-    /// Atomically downgrade from full to ipfs: remove archive request row and update storage_mode
-    pub async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-
-        sqlx::query(r#"DELETE FROM archive_requests WHERE task_id = $1"#)
-            .bind(task_id)
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query(
+    /// Complete archive deletion by updating storage mode to ipfs
+    pub async fn complete_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query!(
             r#"
             UPDATE backup_tasks
-            SET storage_mode = 'ipfs', status = 'done', updated_at = NOW()
+            SET storage_mode = 'ipfs', updated_at = NOW()
             WHERE task_id = $1
             "#,
+            task_id
         )
-        .bind(task_id)
-        .execute(&mut *tx)
+        .execute(&self.pool)
         .await?;
-
-        tx.commit().await?;
         Ok(())
     }
 
-    /// Atomically downgrade from full to archive: remove IPFS pin rows and update storage_mode
-    pub async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-
-        // pinned_tokens will cascade on pin_requests delete
-        sqlx::query(r#"DELETE FROM pin_requests WHERE task_id = $1"#)
-            .bind(task_id)
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query(
+    /// Complete IPFS pins deletion by updating storage mode to archive
+    pub async fn complete_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        sqlx::query!(
             r#"
             UPDATE backup_tasks
-            SET storage_mode = 'archive', status = 'done', updated_at = NOW()
+            SET storage_mode = 'archive', updated_at = NOW()
             WHERE task_id = $1
             "#,
+            task_id
         )
-        .bind(task_id)
-        .execute(&mut *tx)
+        .execute(&self.pool)
         .await?;
-
-        tx.commit().await?;
         Ok(())
     }
 }

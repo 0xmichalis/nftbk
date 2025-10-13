@@ -430,10 +430,11 @@ pub trait BackupTaskDb {
         task_id: &str,
     ) -> Result<Option<crate::server::db::BackupTask>, sqlx::Error>;
     async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
-    async fn start_downgrade(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn start_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn start_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error>;
-    async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error>;
-    async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn complete_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn complete_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
 }
 // Backwards-compat alias
 // Backwards-compat trait alias: allow older bounds to compile
@@ -487,20 +488,24 @@ impl BackupTaskDb for Db {
         Db::start_deletion(self, task_id).await
     }
 
-    async fn start_downgrade(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::start_downgrade(self, task_id).await
+    async fn start_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::start_archive_deletion(self, task_id).await
+    }
+
+    async fn start_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::start_ipfs_pins_deletion(self, task_id).await
     }
 
     async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error> {
         Db::delete_backup_task(self, task_id).await
     }
 
-    async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::downgrade_full_to_ipfs(self, task_id).await
+    async fn complete_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::complete_archive_deletion(self, task_id).await
     }
 
-    async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::downgrade_full_to_archive(self, task_id).await
+    async fn complete_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::complete_ipfs_pins_deletion(self, task_id).await
     }
 }
 
@@ -685,6 +690,70 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
     }
 }
 
+/// Helper function to determine which start deletion function to call based on scope and storage mode
+pub async fn start_deletion_for_scope<DB: BackupTaskDb + ?Sized>(
+    db: &DB,
+    task_id: &str,
+    scope: &StorageMode,
+    storage_mode: &str,
+) -> Result<(), sqlx::Error> {
+    match scope {
+        StorageMode::Full => db.start_deletion(task_id).await,
+        StorageMode::Archive => {
+            if storage_mode == "full" {
+                db.start_archive_deletion(task_id).await
+            } else if storage_mode == "archive" {
+                db.start_deletion(task_id).await
+            } else {
+                // No-op for other storage modes
+                Ok(())
+            }
+        }
+        StorageMode::Ipfs => {
+            if storage_mode == "full" {
+                db.start_ipfs_pins_deletion(task_id).await
+            } else if storage_mode == "ipfs" {
+                db.start_deletion(task_id).await
+            } else {
+                // No-op for other storage modes
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Helper function to determine which complete deletion function to call based on scope and storage mode
+pub async fn complete_deletion_for_scope<DB: BackupTaskDb + ?Sized>(
+    db: &DB,
+    task_id: &str,
+    scope: &StorageMode,
+    storage_mode: &str,
+) -> Result<(), sqlx::Error> {
+    match scope {
+        StorageMode::Full => db.delete_backup_task(task_id).await,
+        StorageMode::Archive => {
+            if storage_mode == "full" {
+                db.complete_archive_deletion(task_id).await
+            } else if storage_mode == "archive" {
+                db.delete_backup_task(task_id).await
+            } else {
+                // No-op for other storage modes
+                Ok(())
+            }
+        }
+        StorageMode::Ipfs => {
+            if storage_mode == "full" {
+                db.complete_ipfs_pins_deletion(task_id).await
+            } else if storage_mode == "ipfs" {
+                db.delete_backup_task(task_id).await
+            } else {
+                // No-op for other storage modes
+                Ok(())
+            }
+        }
+    }
+}
+
 async fn delete_dir_and_archive_for_task(
     base_dir: &str,
     task_id: &str,
@@ -774,23 +843,17 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
     db: &DB,
 ) {
     let task_id = task.task_id.clone();
-    info!("Running deletion task for task {}", task_id);
+    info!("Running deletion task for task {task_id}");
 
     // Get the backup task metadata
     let meta = match db.get_backup_task(&task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
-            error!("Backup task {} not found for deletion", task_id);
-            let _ = db
-                .set_backup_error(&task_id, "Task not found for deletion")
-                .await;
+            error!("Backup task {task_id} not found for deletion");
             return;
         }
         Err(e) => {
-            error!("Failed to read metadata for task {}: {}", task_id, e);
-            let _ = db
-                .set_backup_error(&task_id, &format!("Failed to read metadata: {}", e))
-                .await;
+            error!("Failed to read metadata for task {task_id}: {e}");
             return;
         }
     };
@@ -799,67 +862,32 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
     if let Some(requestor) = &task.requestor {
         if meta.requestor != *requestor {
             error!(
-                "Requestor {} does not match task owner {} for task {}",
-                requestor, meta.requestor, task_id
+                "Requestor {requestor} does not match task owner {} for task {task_id}",
+                meta.requestor
             );
-            let _ = db
-                .set_backup_error(&task_id, "Requestor does not match task owner")
-                .await;
             return;
         }
     }
 
     // Check if task is in progress
     if meta.status == "in_progress" {
-        error!("Cannot delete task {} that is in progress", task_id);
-        let _ = db
-            .set_backup_error(&task_id, "Can only delete completed tasks")
-            .await;
+        error!("Cannot delete task {task_id} that is in progress");
         return;
     }
 
-    // Set status to in_progress for deletion or downgrade
-    let start_result = if task.scope == StorageMode::Full {
-        db.start_deletion(&task_id).await
-    } else {
-        db.start_downgrade(&task_id).await
-    };
-
-    if let Err(e) = start_result {
+    // Mark resources as being deleted based on scope and storage mode
+    if let Err(e) = start_deletion_for_scope(db, &task_id, &task.scope, &meta.storage_mode).await {
         error!(
-            "Failed to start {} for task {}: {}",
-            if task.scope == StorageMode::Full {
-                "deletion"
-            } else {
-                "downgrade"
-            },
-            task_id,
-            e
+            "Failed to start deletion for task {task_id} with scope {:?} and storage mode {}: {e}",
+            task.scope, meta.storage_mode
         );
-        let _ = db
-            .set_backup_error(
-                &task_id,
-                &format!(
-                    "Failed to start {}: {}",
-                    if task.scope == StorageMode::Full {
-                        "deletion"
-                    } else {
-                        "downgrade"
-                    },
-                    e
-                ),
-            )
-            .await;
         return;
     }
 
     // Handle archive cleanup if requested
     if task.scope == StorageMode::Full || task.scope == StorageMode::Archive {
         if !(meta.storage_mode == "archive" || meta.storage_mode == "full") {
-            info!(
-                "Skipping archive cleanup for task {} (no archive data)",
-                task_id
-            );
+            info!("Skipping archive cleanup for task {task_id} (no archive data)");
         } else {
             match delete_dir_and_archive_for_task(
                 &state.base_dir,
@@ -869,10 +897,10 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
             .await
             {
                 Ok(_) => {
-                    info!("Archive cleanup completed for task {}", task_id);
+                    info!("Archive cleanup completed for task {task_id}");
                 }
                 Err(e) => {
-                    error!("Archive deletion failed for task {}: {}", task_id, e);
+                    error!("Archive deletion failed for task {task_id}: {e}");
                     // Log the error but continue with deletion - don't fail the task
                 }
             }
@@ -882,75 +910,38 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
     // Handle IPFS pin deletion if requested
     if task.scope == StorageMode::Full || task.scope == StorageMode::Ipfs {
         if !(meta.storage_mode == "ipfs" || meta.storage_mode == "full") {
-            info!(
-                "Skipping IPFS pin cleanup for task {} (no IPFS pins)",
-                task_id
-            );
+            info!("Skipping IPFS pin cleanup for task {task_id} (no IPFS pins)");
         } else {
             let pin_requests = match state.db.get_pin_requests_by_task_id(&task_id).await {
                 Ok(v) => v,
                 Err(e) => {
-                    error!("Failed to get pin requests for task {}: {}", task_id, e);
+                    error!("Failed to get pin requests for task {task_id}: {e}");
                     Vec::new()
                 }
             };
             match delete_ipfs_pins(&state.ipfs_provider_instances, &task_id, &pin_requests).await {
                 Ok(_) => {
-                    info!("IPFS pin cleanup completed for task {}", task_id);
+                    info!("IPFS pin cleanup completed for task {task_id}");
                 }
                 Err(e) => {
-                    error!("IPFS pin deletion failed for task {}: {}", task_id, e);
+                    error!("IPFS pin deletion failed for task {task_id}: {e}");
                     // Log the error but continue with deletion - don't fail the task
                 }
             }
         }
     }
 
-    // Delete or update the backup task metadata depending on scope and storage mode
-    match task.scope {
-        StorageMode::Full => {
-            if let Err(e) = db.delete_backup_task(&task_id).await {
-                error!("Database deletion failed for task {}: {}", task_id, e);
-                let _ = db
-                    .set_backup_error(
-                        &task_id,
-                        &format!("Failed to delete metadata from database: {}", e),
-                    )
-                    .await;
-                return;
-            }
-        }
-        StorageMode::Archive => {
-            if meta.storage_mode == "full" {
-                if let Err(e) = db.downgrade_full_to_ipfs(&task_id).await {
-                    error!(
-                        "Failed to downgrade storage mode for task {}: {}",
-                        task_id, e
-                    );
-                }
-            } else if meta.storage_mode == "archive" {
-                if let Err(e) = db.delete_backup_task(&task_id).await {
-                    error!("Failed to delete backup task for task {}: {}", task_id, e);
-                }
-            }
-        }
-        StorageMode::Ipfs => {
-            if meta.storage_mode == "full" {
-                if let Err(e) = db.downgrade_full_to_archive(&task_id).await {
-                    error!(
-                        "Failed to downgrade storage mode for task {}: {}",
-                        task_id, e
-                    );
-                }
-            } else if meta.storage_mode == "ipfs" {
-                if let Err(e) = db.delete_backup_task(&task_id).await {
-                    error!("Failed to delete backup task for task {}: {}", task_id, e);
-                }
-            }
-        }
+    // Complete the deletion based on scope and storage mode
+    if let Err(e) = complete_deletion_for_scope(db, &task_id, &task.scope, &meta.storage_mode).await
+    {
+        error!(
+            "Failed to complete deletion for task {task_id} with scope {:?} and storage mode {}: {e}",
+            task.scope, meta.storage_mode
+        );
+        return;
     }
 
-    info!("Successfully deleted backup {}", task_id);
+    info!("Successfully deleted backup {task_id}");
 }
 
 pub async fn run_backup_task(state: AppState, task: BackupTask) {
@@ -1329,5 +1320,409 @@ mod recover_incomplete_tasks_tests {
             }
             _ => panic!("Expected backup task"),
         }
+    }
+}
+
+#[cfg(test)]
+mod deletion_scope_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    // Mock implementation of BackupTaskDb for testing
+    struct MockDb {
+        start_deletion_calls: Arc<std::sync::Mutex<Vec<String>>>,
+        start_archive_deletion_calls: Arc<std::sync::Mutex<Vec<String>>>,
+        start_ipfs_pins_deletion_calls: Arc<std::sync::Mutex<Vec<String>>>,
+        delete_backup_task_calls: Arc<std::sync::Mutex<Vec<String>>>,
+        complete_archive_deletion_calls: Arc<std::sync::Mutex<Vec<String>>>,
+        complete_ipfs_pins_deletion_calls: Arc<std::sync::Mutex<Vec<String>>>,
+        should_fail_start_deletion: bool,
+        should_fail_start_archive_deletion: bool,
+        should_fail_start_ipfs_pins_deletion: bool,
+        should_fail_delete_backup_task: bool,
+        should_fail_complete_archive_deletion: bool,
+        should_fail_complete_ipfs_pins_deletion: bool,
+    }
+
+    impl MockDb {
+        fn new() -> Self {
+            Self {
+                start_deletion_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+                start_archive_deletion_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+                start_ipfs_pins_deletion_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+                delete_backup_task_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+                complete_archive_deletion_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+                complete_ipfs_pins_deletion_calls: Arc::new(std::sync::Mutex::new(Vec::new())),
+                should_fail_start_deletion: false,
+                should_fail_start_archive_deletion: false,
+                should_fail_start_ipfs_pins_deletion: false,
+                should_fail_delete_backup_task: false,
+                should_fail_complete_archive_deletion: false,
+                should_fail_complete_ipfs_pins_deletion: false,
+            }
+        }
+
+        fn with_start_deletion_failure(mut self) -> Self {
+            self.should_fail_start_deletion = true;
+            self
+        }
+
+        fn with_delete_backup_task_failure(mut self) -> Self {
+            self.should_fail_delete_backup_task = true;
+            self
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl BackupTaskDb for MockDb {
+        async fn clear_backup_errors(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn set_backup_error(&self, _task_id: &str, _error: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn insert_pin_requests_with_tokens(
+            &self,
+            _task_id: &str,
+            _requestor: &str,
+            _token_pin_mappings: &[crate::TokenPinMapping],
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn update_backup_task_error_log(
+            &self,
+            _task_id: &str,
+            _error_log: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn update_backup_task_status(
+            &self,
+            _task_id: &str,
+            _status: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn get_backup_task(
+            &self,
+            _task_id: &str,
+        ) -> Result<Option<crate::server::db::BackupTask>, sqlx::Error> {
+            Ok(None)
+        }
+
+        async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+            if self.should_fail_start_deletion {
+                return Err(sqlx::Error::Configuration("Mock error".into()));
+            }
+            self.start_deletion_calls
+                .lock()
+                .unwrap()
+                .push(task_id.to_string());
+            Ok(())
+        }
+
+        async fn start_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+            if self.should_fail_start_archive_deletion {
+                return Err(sqlx::Error::Configuration("Mock error".into()));
+            }
+            self.start_archive_deletion_calls
+                .lock()
+                .unwrap()
+                .push(task_id.to_string());
+            Ok(())
+        }
+
+        async fn start_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+            if self.should_fail_start_ipfs_pins_deletion {
+                return Err(sqlx::Error::Configuration("Mock error".into()));
+            }
+            self.start_ipfs_pins_deletion_calls
+                .lock()
+                .unwrap()
+                .push(task_id.to_string());
+            Ok(())
+        }
+
+        async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error> {
+            if self.should_fail_delete_backup_task {
+                return Err(sqlx::Error::Configuration("Mock error".into()));
+            }
+            self.delete_backup_task_calls
+                .lock()
+                .unwrap()
+                .push(task_id.to_string());
+            Ok(())
+        }
+
+        async fn complete_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+            if self.should_fail_complete_archive_deletion {
+                return Err(sqlx::Error::Configuration("Mock error".into()));
+            }
+            self.complete_archive_deletion_calls
+                .lock()
+                .unwrap()
+                .push(task_id.to_string());
+            Ok(())
+        }
+
+        async fn complete_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+            if self.should_fail_complete_ipfs_pins_deletion {
+                return Err(sqlx::Error::Configuration("Mock error".into()));
+            }
+            self.complete_ipfs_pins_deletion_calls
+                .lock()
+                .unwrap()
+                .push(task_id.to_string());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_start_deletion_for_scope_full() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result = start_deletion_for_scope(&mock_db, task_id, &StorageMode::Full, "full").await;
+        assert!(result.is_ok());
+
+        let calls = mock_db.start_deletion_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], task_id);
+    }
+
+    #[tokio::test]
+    async fn test_start_deletion_for_scope_archive_full_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result =
+            start_deletion_for_scope(&mock_db, task_id, &StorageMode::Archive, "full").await;
+        assert!(result.is_ok());
+
+        let archive_calls = mock_db.start_archive_deletion_calls.lock().unwrap();
+        assert_eq!(archive_calls.len(), 1);
+        assert_eq!(archive_calls[0], task_id);
+
+        let start_calls = mock_db.start_deletion_calls.lock().unwrap();
+        assert_eq!(start_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_start_deletion_for_scope_archive_archive_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result =
+            start_deletion_for_scope(&mock_db, task_id, &StorageMode::Archive, "archive").await;
+        assert!(result.is_ok());
+
+        let start_calls = mock_db.start_deletion_calls.lock().unwrap();
+        assert_eq!(start_calls.len(), 1);
+        assert_eq!(start_calls[0], task_id);
+
+        let archive_calls = mock_db.start_archive_deletion_calls.lock().unwrap();
+        assert_eq!(archive_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_start_deletion_for_scope_archive_ipfs_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result =
+            start_deletion_for_scope(&mock_db, task_id, &StorageMode::Archive, "ipfs").await;
+        assert!(result.is_ok());
+
+        let start_calls = mock_db.start_deletion_calls.lock().unwrap();
+        assert_eq!(start_calls.len(), 0);
+
+        let archive_calls = mock_db.start_archive_deletion_calls.lock().unwrap();
+        assert_eq!(archive_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_start_deletion_for_scope_ipfs_full_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result = start_deletion_for_scope(&mock_db, task_id, &StorageMode::Ipfs, "full").await;
+        assert!(result.is_ok());
+
+        let ipfs_calls = mock_db.start_ipfs_pins_deletion_calls.lock().unwrap();
+        assert_eq!(ipfs_calls.len(), 1);
+        assert_eq!(ipfs_calls[0], task_id);
+
+        let start_calls = mock_db.start_deletion_calls.lock().unwrap();
+        assert_eq!(start_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_start_deletion_for_scope_ipfs_ipfs_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result = start_deletion_for_scope(&mock_db, task_id, &StorageMode::Ipfs, "ipfs").await;
+        assert!(result.is_ok());
+
+        let start_calls = mock_db.start_deletion_calls.lock().unwrap();
+        assert_eq!(start_calls.len(), 1);
+        assert_eq!(start_calls[0], task_id);
+
+        let ipfs_calls = mock_db.start_ipfs_pins_deletion_calls.lock().unwrap();
+        assert_eq!(ipfs_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_start_deletion_for_scope_ipfs_archive_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result =
+            start_deletion_for_scope(&mock_db, task_id, &StorageMode::Ipfs, "archive").await;
+        assert!(result.is_ok());
+
+        let start_calls = mock_db.start_deletion_calls.lock().unwrap();
+        assert_eq!(start_calls.len(), 0);
+
+        let ipfs_calls = mock_db.start_ipfs_pins_deletion_calls.lock().unwrap();
+        assert_eq!(ipfs_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_start_deletion_for_scope_propagates_errors() {
+        let mock_db = MockDb::new().with_start_deletion_failure();
+        let task_id = "test_task";
+
+        let result = start_deletion_for_scope(&mock_db, task_id, &StorageMode::Full, "full").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_complete_deletion_for_scope_full() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result =
+            complete_deletion_for_scope(&mock_db, task_id, &StorageMode::Full, "full").await;
+        assert!(result.is_ok());
+
+        let calls = mock_db.delete_backup_task_calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], task_id);
+    }
+
+    #[tokio::test]
+    async fn test_complete_deletion_for_scope_archive_full_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result =
+            complete_deletion_for_scope(&mock_db, task_id, &StorageMode::Archive, "full").await;
+        assert!(result.is_ok());
+
+        let archive_calls = mock_db.complete_archive_deletion_calls.lock().unwrap();
+        assert_eq!(archive_calls.len(), 1);
+        assert_eq!(archive_calls[0], task_id);
+
+        let delete_calls = mock_db.delete_backup_task_calls.lock().unwrap();
+        assert_eq!(delete_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_complete_deletion_for_scope_archive_archive_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result =
+            complete_deletion_for_scope(&mock_db, task_id, &StorageMode::Archive, "archive").await;
+        assert!(result.is_ok());
+
+        let delete_calls = mock_db.delete_backup_task_calls.lock().unwrap();
+        assert_eq!(delete_calls.len(), 1);
+        assert_eq!(delete_calls[0], task_id);
+
+        let archive_calls = mock_db.complete_archive_deletion_calls.lock().unwrap();
+        assert_eq!(archive_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_complete_deletion_for_scope_archive_ipfs_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result =
+            complete_deletion_for_scope(&mock_db, task_id, &StorageMode::Archive, "ipfs").await;
+        assert!(result.is_ok());
+
+        let delete_calls = mock_db.delete_backup_task_calls.lock().unwrap();
+        assert_eq!(delete_calls.len(), 0);
+
+        let archive_calls = mock_db.complete_archive_deletion_calls.lock().unwrap();
+        assert_eq!(archive_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_complete_deletion_for_scope_ipfs_full_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result =
+            complete_deletion_for_scope(&mock_db, task_id, &StorageMode::Ipfs, "full").await;
+        assert!(result.is_ok());
+
+        let ipfs_calls = mock_db.complete_ipfs_pins_deletion_calls.lock().unwrap();
+        assert_eq!(ipfs_calls.len(), 1);
+        assert_eq!(ipfs_calls[0], task_id);
+
+        let delete_calls = mock_db.delete_backup_task_calls.lock().unwrap();
+        assert_eq!(delete_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_complete_deletion_for_scope_ipfs_ipfs_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result =
+            complete_deletion_for_scope(&mock_db, task_id, &StorageMode::Ipfs, "ipfs").await;
+        assert!(result.is_ok());
+
+        let delete_calls = mock_db.delete_backup_task_calls.lock().unwrap();
+        assert_eq!(delete_calls.len(), 1);
+        assert_eq!(delete_calls[0], task_id);
+
+        let ipfs_calls = mock_db.complete_ipfs_pins_deletion_calls.lock().unwrap();
+        assert_eq!(ipfs_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_complete_deletion_for_scope_ipfs_archive_storage() {
+        let mock_db = MockDb::new();
+        let task_id = "test_task";
+
+        let result =
+            complete_deletion_for_scope(&mock_db, task_id, &StorageMode::Ipfs, "archive").await;
+        assert!(result.is_ok());
+
+        let delete_calls = mock_db.delete_backup_task_calls.lock().unwrap();
+        assert_eq!(delete_calls.len(), 0);
+
+        let ipfs_calls = mock_db.complete_ipfs_pins_deletion_calls.lock().unwrap();
+        assert_eq!(ipfs_calls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_complete_deletion_for_scope_propagates_errors() {
+        let mock_db = MockDb::new().with_delete_backup_task_failure();
+        let task_id = "test_task";
+
+        let result =
+            complete_deletion_for_scope(&mock_db, task_id, &StorageMode::Full, "full").await;
+        assert!(result.is_err());
     }
 }

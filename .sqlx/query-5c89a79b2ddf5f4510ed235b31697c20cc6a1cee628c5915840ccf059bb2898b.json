@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            UPDATE backup_tasks\n            SET storage_mode = 'ipfs', updated_at = NOW()\n            WHERE task_id = $1\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "5c89a79b2ddf5f4510ed235b31697c20cc6a1cee628c5915840ccf059bb2898b"
+}
