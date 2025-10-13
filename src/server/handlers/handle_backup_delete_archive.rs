@@ -276,6 +276,8 @@ mod handle_backup_delete_archive_core_tests {
             },
             expires_at: None,
             deleted_at: None,
+            archive_deleted_at: None,
+            pins_deleted_at: None,
         }
     }
 

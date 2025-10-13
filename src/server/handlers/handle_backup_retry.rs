@@ -271,6 +271,8 @@ mod handle_backup_retry_core_tests {
             archive_format: Some("zip".to_string()),
             expires_at: None,
             deleted_at: None,
+            archive_deleted_at: None,
+            pins_deleted_at: None,
         }
     }
 

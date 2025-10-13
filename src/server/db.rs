@@ -65,6 +65,12 @@ pub struct BackupTask {
     /// When deletion was started (if applicable)
     #[schema(example = "2024-01-02T10:00:00Z")]
     pub deleted_at: Option<DateTime<Utc>>,
+    /// When archive deletion was started (if applicable)
+    #[schema(example = "2024-01-02T10:00:00Z")]
+    pub archive_deleted_at: Option<DateTime<Utc>>,
+    /// When IPFS pins deletion was started (if applicable)
+    #[schema(example = "2024-01-02T10:00:00Z")]
+    pub pins_deleted_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
@@ -409,9 +415,13 @@ impl Db {
             SELECT 
                 b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
                 b.tokens, b.status, b.error_log, b.fatal_error, b.storage_mode,
-                b.deleted_at, br.archive_format, br.expires_at
+                b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
+                COALESCE(
+                    (SELECT MIN(pr.deleted_at) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.deleted_at IS NOT NULL),
+                    NULL
+                ) as pins_deleted_at
             FROM backup_tasks b
-            LEFT JOIN archive_requests br ON b.task_id = br.task_id
+            LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
             WHERE b.task_id = $1
             "#,
         )
@@ -433,6 +443,8 @@ impl Db {
             archive_format: row.get("archive_format"),
             expires_at: row.get("expires_at"),
             deleted_at: row.get("deleted_at"),
+            archive_deleted_at: row.get("archive_deleted_at"),
+            pins_deleted_at: row.get("pins_deleted_at"),
         }))
     }
 
@@ -457,13 +469,17 @@ impl Db {
         let query = format!(
             r#"
             SELECT 
-                pj.task_id, pj.created_at, pj.updated_at, pj.requestor, pj.nft_count, 
-                {tokens_field} pj.status, pj.error_log, pj.fatal_error, pj.storage_mode,
-                pj.deleted_at, br.archive_format, br.expires_at
-            FROM backup_tasks pj
-            LEFT JOIN archive_requests br ON pj.task_id = br.task_id
-            WHERE pj.requestor = $1
-            ORDER BY pj.created_at DESC
+                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
+                {tokens_field} b.status, b.error_log, b.fatal_error, b.storage_mode,
+                b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
+                COALESCE(
+                    (SELECT MIN(pr.deleted_at) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.deleted_at IS NOT NULL),
+                    NULL
+                ) as pins_deleted_at
+            FROM backup_tasks b
+            LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
+            WHERE b.requestor = $1
+            ORDER BY b.created_at DESC
             LIMIT $2 OFFSET $3
             "#,
         );
@@ -499,6 +515,8 @@ impl Db {
                     archive_format: row.get("archive_format"),
                     expires_at: row.get("expires_at"),
                     deleted_at: row.get("deleted_at"),
+                    archive_deleted_at: row.get("archive_deleted_at"),
+                    pins_deleted_at: row.get("pins_deleted_at"),
                 }
             })
             .collect();
@@ -539,13 +557,17 @@ impl Db {
         let rows = sqlx::query(
             r#"
             SELECT 
-                pj.task_id, pj.created_at, pj.updated_at, pj.requestor, pj.nft_count, 
-                pj.tokens, pj.status, pj.error_log, pj.fatal_error, pj.storage_mode,
-                pj.deleted_at, br.archive_format, br.expires_at
-            FROM backup_tasks pj
-            LEFT JOIN archive_requests br ON pj.task_id = br.task_id
-            WHERE pj.status = 'in_progress'
-            ORDER BY pj.created_at ASC
+                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
+                b.tokens, b.status, b.error_log, b.fatal_error, b.storage_mode,
+                b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
+                COALESCE(
+                    (SELECT MIN(pr.deleted_at) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.deleted_at IS NOT NULL),
+                    NULL
+                ) as pins_deleted_at
+            FROM backup_tasks b
+            LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
+            WHERE b.status = 'in_progress'
+            ORDER BY b.created_at ASC
             "#,
         )
         .fetch_all(&self.pool)
@@ -567,6 +589,8 @@ impl Db {
                 archive_format: row.get("archive_format"),
                 expires_at: row.get("expires_at"),
                 deleted_at: row.get("deleted_at"),
+                archive_deleted_at: row.get("archive_deleted_at"),
+                pins_deleted_at: row.get("pins_deleted_at"),
             })
             .collect();
 
