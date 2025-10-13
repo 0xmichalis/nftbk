@@ -49,6 +49,40 @@ fn process<T>(
     }
 }
 
+/// Build a pin name for a given token and context.
+/// If any provider is a pinning-service, prefix with chain_address_tokenid_.
+fn build_pin_name<T: ContractTokenInfo>(
+    token: &T,
+    providers: &[Box<dyn IpfsPinningProvider>],
+    is_metadata: bool,
+    fallback_filename: Option<&str>,
+) -> String {
+    let base_name = fallback_filename
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .unwrap_or(if is_metadata {
+            "metadata.json"
+        } else {
+            "content"
+        });
+
+    let needs_unique_prefix = providers
+        .iter()
+        .any(|p| p.provider_type() == "pinning-service");
+
+    if !needs_unique_prefix {
+        return base_name.to_string();
+    }
+
+    format!(
+        "{}_{}_{}_{}",
+        token.chain_name(),
+        token.address(),
+        token.token_id(),
+        base_name
+    )
+}
+
 /// Pin a CID to all configured providers with a standardized name
 async fn pin_cid<C>(
     cid: &str,
@@ -75,17 +109,11 @@ where
         providers.len()
     );
 
-    let name = fallback_filename
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .unwrap_or(if is_metadata {
-            "metadata.json"
-        } else {
-            "content"
-        });
+    // Determine base name (metadata.json/content/fallback) and optionally prefix for uniqueness
+    let name = build_pin_name(token, providers, is_metadata, fallback_filename);
     let pin_request = PinRequest {
         cid: cid.to_string(),
-        name: Some(name.to_string()),
+        name: Some(name),
         metadata: Some(token.to_pin_metadata_map()),
     };
 
@@ -1076,6 +1104,83 @@ mod process_nfts_tests {
                 crate::ipfs::PinResponseStatus::Pinned
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod build_pin_name_tests {
+    use super::*;
+
+    struct MockProvider(&'static str);
+
+    #[async_trait]
+    impl IpfsPinningProvider for MockProvider {
+        async fn create_pin(
+            &self,
+            _request: &PinRequest,
+        ) -> anyhow::Result<crate::ipfs::PinResponse> {
+            unreachable!()
+        }
+        async fn get_pin(&self, _pin_id: &str) -> anyhow::Result<crate::ipfs::PinResponse> {
+            unreachable!()
+        }
+        async fn list_pins(&self) -> anyhow::Result<Vec<crate::ipfs::PinResponse>> {
+            unreachable!()
+        }
+        async fn delete_pin(&self, _request_id: &str) -> anyhow::Result<()> {
+            unreachable!()
+        }
+        fn provider_type(&self) -> &str {
+            self.0
+        }
+        fn provider_url(&self) -> &str {
+            self.0
+        }
+    }
+
+    use crate::chain::common::ContractTokenId;
+
+    fn token() -> ContractTokenId {
+        ContractTokenId {
+            address: "0xabc".into(),
+            token_id: "1".into(),
+            chain_name: "ethereum".into(),
+        }
+    }
+
+    #[test]
+    fn builds_base_name_without_pinning_service() {
+        let providers: Vec<Box<dyn IpfsPinningProvider>> = vec![Box::new(MockProvider("pinata"))];
+        let t = token();
+        let name = build_pin_name(&t, &providers, false, Some("content"));
+        assert_eq!(name, "content");
+    }
+
+    #[test]
+    fn prefixes_when_pinning_service_present() {
+        let providers: Vec<Box<dyn IpfsPinningProvider>> =
+            vec![Box::new(MockProvider("pinning-service"))];
+        let t = token();
+        let name = build_pin_name(&t, &providers, false, Some("content"));
+        assert_eq!(name, "ethereum_0xabc_1_content");
+    }
+
+    #[test]
+    fn uses_metadata_default_name() {
+        let providers: Vec<Box<dyn IpfsPinningProvider>> =
+            vec![Box::new(MockProvider("pinning-service"))];
+        let t = token();
+        let name = build_pin_name(&t, &providers, true, None);
+        assert_eq!(name, "ethereum_0xabc_1_metadata.json");
+    }
+
+    #[test]
+    fn trims_and_ignores_empty_fallback() {
+        let providers: Vec<Box<dyn IpfsPinningProvider>> =
+            vec![Box::new(MockProvider("pinning-service"))];
+        let t = token();
+        let name = build_pin_name(&t, &providers, false, Some("  "));
+        assert_eq!(name, "ethereum_0xabc_1_content");
     }
 }
 
