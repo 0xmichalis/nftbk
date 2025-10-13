@@ -79,6 +79,7 @@ pub struct BackupConfig {
     pub token_config: TokenConfig,
     pub storage_config: StorageConfig,
     pub process_config: ProcessManagementConfig,
+    pub task_id: Option<String>,
 }
 
 pub mod backup {
@@ -144,15 +145,26 @@ pub mod backup {
                         cfg.storage_config.clone(),
                     )?);
                     let process_config = cfg.process_config.clone();
-                    process_nfts(processor, tokens, process_config, |metadata| {
-                        metadata.artifact_uri.as_deref()
-                    })
+                    process_nfts(
+                        processor,
+                        tokens,
+                        process_config,
+                        |metadata| metadata.artifact_uri.as_deref(),
+                        cfg.task_id.clone(),
+                    )
                     .await?
                 } else {
                     let processor =
                         Arc::new(EvmChainProcessor::new(rpc_url, cfg.storage_config.clone())?);
                     let process_config = cfg.process_config.clone();
-                    process_nfts(processor, tokens, process_config, |_metadata| None).await?
+                    process_nfts(
+                        processor,
+                        tokens,
+                        process_config,
+                        |_metadata| None,
+                        cfg.task_id.clone(),
+                    )
+                    .await?
                 };
                 all_files.extend(files);
                 all_errors.extend(errors);
@@ -228,6 +240,7 @@ mod tests {
                 exit_on_error: false,
                 shutdown_flag: None,
             },
+            task_id: None,
         };
         assert!(validate_backup_config(&cfg1).is_ok());
 
@@ -246,6 +259,7 @@ mod tests {
                 exit_on_error: false,
                 shutdown_flag: None,
             },
+            task_id: None,
         };
         assert!(validate_backup_config(&cfg2).is_ok());
 
@@ -267,6 +281,7 @@ mod tests {
                 exit_on_error: false,
                 shutdown_flag: None,
             },
+            task_id: None,
         };
         assert!(validate_backup_config(&cfg3).is_ok());
 
@@ -285,6 +300,7 @@ mod tests {
                 exit_on_error: false,
                 shutdown_flag: None,
             },
+            task_id: None,
         };
         assert!(validate_backup_config(&cfg4).is_err());
     }
@@ -317,6 +333,7 @@ mod tests {
                 exit_on_error: false,
                 shutdown_flag: Some(shutdown_flag.clone()),
             },
+            task_id: None,
         };
 
         // Start the backup

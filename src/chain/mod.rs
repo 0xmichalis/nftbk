@@ -50,12 +50,13 @@ fn process<T>(
 }
 
 /// Build a pin name for a given token and context.
-/// If any provider is a pinning-service, prefix with chain_address_tokenid_.
+/// If any provider is a pinning-service, prefix with task_id_chain_address_tokenid_.
 fn build_pin_name<T: ContractTokenInfo>(
     token: &T,
     providers: &[Box<dyn IpfsPinningProvider>],
     is_metadata: bool,
     fallback_filename: Option<&str>,
+    task_id: Option<&str>,
 ) -> String {
     let base_name = fallback_filename
         .map(|s| s.trim())
@@ -74,16 +75,34 @@ fn build_pin_name<T: ContractTokenInfo>(
         return base_name.to_string();
     }
 
-    format!(
-        "{}_{}_{}_{}",
-        token.chain_name(),
-        token.address(),
-        token.token_id(),
-        base_name
-    )
+    if let Some(task_id) = task_id {
+        // Use only the first 6 characters of the task ID
+        let short_task_id = if task_id.len() > 6 {
+            &task_id[..6]
+        } else {
+            task_id
+        };
+        format!(
+            "{}_{}_{}_{}_{}",
+            short_task_id,
+            token.chain_name(),
+            token.address(),
+            token.token_id(),
+            base_name
+        )
+    } else {
+        format!(
+            "{}_{}_{}_{}",
+            token.chain_name(),
+            token.address(),
+            token.token_id(),
+            base_name
+        )
+    }
 }
 
 /// Pin a CID to all configured providers with a standardized name
+#[allow(clippy::too_many_arguments)]
 async fn pin_cid<C>(
     cid: &str,
     token: &C::ContractTokenId,
@@ -92,6 +111,7 @@ async fn pin_cid<C>(
     errors: &mut Vec<String>,
     is_metadata: bool,
     fallback_filename: Option<&str>,
+    task_id: Option<&str>,
 ) -> anyhow::Result<Vec<crate::ipfs::PinResponse>>
 where
     C: NFTChainProcessor,
@@ -110,7 +130,7 @@ where
     );
 
     // Determine base name (metadata.json/content/fallback) and optionally prefix for uniqueness
-    let name = build_pin_name(token, providers, is_metadata, fallback_filename);
+    let name = build_pin_name(token, providers, is_metadata, fallback_filename, task_id);
     let pin_request = PinRequest {
         cid: cid.to_string(),
         name: Some(name),
@@ -152,6 +172,7 @@ async fn protect_url<C>(
     processor: &C,
     exit_on_error: bool,
     errors: &mut Vec<String>,
+    task_id: Option<&str>,
 ) -> anyhow::Result<(Vec<crate::ipfs::PinResponse>, Option<std::path::PathBuf>)>
 where
     C: NFTChainProcessor,
@@ -170,6 +191,7 @@ where
             errors,
             false,
             fallback,
+            task_id,
         )
         .await?;
     }
@@ -207,6 +229,7 @@ async fn protect_metadata<C>(
     processor: &C,
     exit_on_error: bool,
     errors: &mut Vec<String>,
+    task_id: Option<&str>,
 ) -> anyhow::Result<(Vec<crate::ipfs::PinResponse>, Option<std::path::PathBuf>)>
 where
     C: NFTChainProcessor,
@@ -225,6 +248,7 @@ where
             errors,
             true,
             Some("metadata"),
+            task_id,
         )
         .await?;
         pin_responses.extend(responses);
@@ -280,6 +304,7 @@ pub async fn process_nfts<C, FExtraUri>(
     tokens: Vec<C::ContractTokenId>,
     config: crate::ProcessManagementConfig,
     get_extra_content_uri: FExtraUri,
+    task_id: Option<String>,
 ) -> anyhow::Result<(
     Vec<std::path::PathBuf>,
     Vec<crate::TokenPinMapping>,
@@ -323,6 +348,7 @@ where
             &*processor,
             config.exit_on_error,
             &mut errors,
+            task_id.as_deref(),
         )
         .await?;
 
@@ -354,6 +380,7 @@ where
                 &*processor,
                 config.exit_on_error,
                 &mut errors,
+                task_id.as_deref(),
             )
             .await?;
 
@@ -683,7 +710,7 @@ mod process_nfts_tests {
         let config = create_test_config(false);
         let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
 
-        let result = process_nfts(processor, tokens, config, get_extra_content_uri).await;
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
         let (files, token_pin_mappings, errors) = result.unwrap();
@@ -701,7 +728,7 @@ mod process_nfts_tests {
         let config = create_test_config(false);
         let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
 
-        let result = process_nfts(processor, tokens, config, get_extra_content_uri).await;
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
         let (files, token_pin_mappings, errors) = result.unwrap();
@@ -719,7 +746,7 @@ mod process_nfts_tests {
         let config = create_test_config_with_shutdown(false, shutdown_flag);
         let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
 
-        let result = process_nfts(processor, tokens, config, get_extra_content_uri).await;
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -735,7 +762,7 @@ mod process_nfts_tests {
         let config = create_test_config(true); // exit_on_error = true
         let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
 
-        let result = process_nfts(processor, tokens, config, get_extra_content_uri).await;
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_err());
         let error_msg = result.unwrap_err().to_string();
@@ -752,7 +779,7 @@ mod process_nfts_tests {
         let config = create_test_config(false); // exit_on_error = false
         let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
 
-        let result = process_nfts(processor, tokens, config, get_extra_content_uri).await;
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
         let (files, token_pin_mappings, errors) = result.unwrap();
@@ -772,7 +799,7 @@ mod process_nfts_tests {
         let config = create_test_config(false);
         let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
 
-        let result = process_nfts(processor, tokens, config, get_extra_content_uri).await;
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
         let (files, token_pin_mappings, errors) = result.unwrap();
@@ -798,7 +825,7 @@ mod process_nfts_tests {
         let config = create_test_config(false);
         let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
 
-        let result = process_nfts(processor, tokens, config, get_extra_content_uri).await;
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
         let (files, token_pin_mappings, errors) = result.unwrap();
@@ -826,7 +853,7 @@ mod process_nfts_tests {
         let config = create_test_config(false); // Don't exit on error
         let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
 
-        let result = process_nfts(processor, tokens, config, get_extra_content_uri).await;
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
         let (files, token_pin_mappings, errors) = result.unwrap();
@@ -845,7 +872,7 @@ mod process_nfts_tests {
         let config = create_test_config(false);
         let get_extra_content_uri = get_extra_content_uri_with_url::<MockMetadata>;
 
-        let result = process_nfts(processor, tokens, config, get_extra_content_uri).await;
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
         let (files, token_pin_mappings, errors) = result.unwrap();
@@ -862,7 +889,7 @@ mod process_nfts_tests {
         let config = create_test_config(false);
         let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
 
-        let result = process_nfts(processor, tokens, config, get_extra_content_uri).await;
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
         let (files, token_pin_mappings, errors) = result.unwrap();
@@ -932,7 +959,7 @@ mod process_nfts_tests {
         let config = create_test_config(false);
 
         let (files, token_pin_mappings, errors) =
-            process_nfts(processor, tokens, config, get_no_extra_content_uri)
+            process_nfts(processor, tokens, config, get_no_extra_content_uri, None)
                 .await
                 .unwrap();
 
@@ -1004,7 +1031,7 @@ mod process_nfts_tests {
         let config = create_test_config(false);
 
         let (files, token_pin_mappings, errors) =
-            process_nfts(processor, tokens, config, get_no_extra_content_uri)
+            process_nfts(processor, tokens, config, get_no_extra_content_uri, None)
                 .await
                 .unwrap();
 
@@ -1077,7 +1104,7 @@ mod process_nfts_tests {
         let config = create_test_config(false);
 
         let (files, token_pin_mappings, _errors) =
-            process_nfts(processor, tokens, config, get_no_extra_content_uri)
+            process_nfts(processor, tokens, config, get_no_extra_content_uri, None)
                 .await
                 .unwrap();
 
@@ -1152,7 +1179,7 @@ mod build_pin_name_tests {
     fn builds_base_name_without_pinning_service() {
         let providers: Vec<Box<dyn IpfsPinningProvider>> = vec![Box::new(MockProvider("pinata"))];
         let t = token();
-        let name = build_pin_name(&t, &providers, false, Some("content"));
+        let name = build_pin_name(&t, &providers, false, Some("content"), None);
         assert_eq!(name, "content");
     }
 
@@ -1161,7 +1188,7 @@ mod build_pin_name_tests {
         let providers: Vec<Box<dyn IpfsPinningProvider>> =
             vec![Box::new(MockProvider("pinning-service"))];
         let t = token();
-        let name = build_pin_name(&t, &providers, false, Some("content"));
+        let name = build_pin_name(&t, &providers, false, Some("content"), None);
         assert_eq!(name, "ethereum_0xabc_1_content");
     }
 
@@ -1170,7 +1197,7 @@ mod build_pin_name_tests {
         let providers: Vec<Box<dyn IpfsPinningProvider>> =
             vec![Box::new(MockProvider("pinning-service"))];
         let t = token();
-        let name = build_pin_name(&t, &providers, true, None);
+        let name = build_pin_name(&t, &providers, true, None, None);
         assert_eq!(name, "ethereum_0xabc_1_metadata.json");
     }
 
@@ -1179,8 +1206,41 @@ mod build_pin_name_tests {
         let providers: Vec<Box<dyn IpfsPinningProvider>> =
             vec![Box::new(MockProvider("pinning-service"))];
         let t = token();
-        let name = build_pin_name(&t, &providers, false, Some("  "));
+        let name = build_pin_name(&t, &providers, false, Some("  "), None);
         assert_eq!(name, "ethereum_0xabc_1_content");
+    }
+
+    #[test]
+    fn prefixes_with_task_id_when_present() {
+        let providers: Vec<Box<dyn IpfsPinningProvider>> =
+            vec![Box::new(MockProvider("pinning-service"))];
+        let t = token();
+        let name = build_pin_name(&t, &providers, false, Some("content"), Some("task123"));
+        assert_eq!(name, "task12_ethereum_0xabc_1_content");
+    }
+
+    #[test]
+    fn truncates_long_task_id_to_six_chars() {
+        let providers: Vec<Box<dyn IpfsPinningProvider>> =
+            vec![Box::new(MockProvider("pinning-service"))];
+        let t = token();
+        let name = build_pin_name(
+            &t,
+            &providers,
+            false,
+            Some("content"),
+            Some("verylongtaskid123456789"),
+        );
+        assert_eq!(name, "verylo_ethereum_0xabc_1_content");
+    }
+
+    #[test]
+    fn uses_full_task_id_when_shorter_than_six_chars() {
+        let providers: Vec<Box<dyn IpfsPinningProvider>> =
+            vec![Box::new(MockProvider("pinning-service"))];
+        let t = token();
+        let name = build_pin_name(&t, &providers, false, Some("content"), Some("abc"));
+        assert_eq!(name, "abc_ethereum_0xabc_1_content");
     }
 }
 
@@ -1292,6 +1352,7 @@ mod pin_cid_tests {
             &mut errors,
             false,
             Some("fallback"),
+            None,
         )
         .await
         .unwrap();
@@ -1323,6 +1384,7 @@ mod pin_cid_tests {
             &mut errors,
             true,
             Some("metadata"),
+            None,
         )
         .await
         .unwrap();
@@ -1354,6 +1416,7 @@ mod pin_cid_tests {
             &mut errors,
             false,
             Some("x"),
+            None,
         )
         .await
         .unwrap();

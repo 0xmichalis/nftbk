@@ -625,6 +625,7 @@ async fn main() -> Result<()> {
             exit_on_error: args.exit_on_error,
             shutdown_flag: None,
         },
+        task_id: None, // CLI doesn't have a task ID
     };
     let (_files, _pin_requests, error_log) = backup_from_config(backup_config, None).await?;
     // Write error log to file if present

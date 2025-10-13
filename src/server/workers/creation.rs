@@ -89,6 +89,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
             exit_on_error: false,
             shutdown_flag: shutdown_flag.clone(),
         },
+        task_id: Some(task_id.clone()),
     };
     let span = tracing::info_span!("backup_task", task_id = %task_id);
     let backup_result = backup_from_config(backup_cfg, Some(span)).await;
