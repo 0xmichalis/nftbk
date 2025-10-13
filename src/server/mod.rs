@@ -70,7 +70,7 @@ pub struct BackupJob {
 pub struct DeletionJob {
     pub task_id: String,
     pub requestor: Option<String>,
-    /// Determines which parts of the backup to delete (e.g., only the archive, only the IPFS data, or both).
+    /// Determines which parts of the backup to delete (e.g., only the archive, only the IPFS pins, or both).
     pub scope: StorageMode,
 }
 
