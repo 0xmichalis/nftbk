@@ -327,18 +327,18 @@ pub async fn recover_incomplete_tasks<DB: RecoveryDb + ?Sized>(
     db: &DB,
     backup_task_sender: &mpsc::Sender<BackupTaskOrShutdown>,
 ) -> Result<usize, Box<dyn std::error::Error + Send + Sync>> {
-    debug!("Recovering incomplete protection tasks from database...");
+    debug!("Recovering incomplete backup tasks from database...");
 
     let incomplete_tasks = db.get_incomplete_backup_tasks().await?;
     let task_count = incomplete_tasks.len();
 
     if task_count == 0 {
-        debug!("No incomplete protection tasks found");
+        debug!("No incomplete backup tasks found");
         return Ok(0);
     }
 
     debug!(
-        "Found {} incomplete protection tasks, re-queueing for processing",
+        "Found {} incomplete backup tasks, re-queueing for processing",
         task_count
     );
 
@@ -348,7 +348,7 @@ pub async fn recover_incomplete_tasks<DB: RecoveryDb + ?Sized>(
             Ok(tokens) => tokens,
             Err(e) => {
                 warn!(
-                    "Failed to parse tokens for task {}: {}, skipping",
+                    "Failed to parse tokens for backup task {}: {}, skipping",
                     task_meta.task_id, e
                 );
                 // Mark this task as error since we can't process it
@@ -414,22 +414,22 @@ pub trait BackupTaskDb {
         requestor: &str,
         token_pin_mappings: &[crate::TokenPinMapping],
     ) -> Result<(), sqlx::Error>;
-    async fn update_protection_task_error_log(
+    async fn update_backup_task_error_log(
         &self,
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error>;
-    async fn update_protection_task_status(
+    async fn update_backup_task_status(
         &self,
         task_id: &str,
         status: &str,
     ) -> Result<(), sqlx::Error>;
-    async fn get_protection_task(
+    async fn get_backup_task(
         &self,
         task_id: &str,
     ) -> Result<Option<crate::server::db::BackupTask>, sqlx::Error>;
     async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
-    async fn delete_protection_task(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error>;
 }
@@ -458,35 +458,35 @@ impl BackupTaskDb for Db {
         Db::insert_pin_requests_with_tokens(self, task_id, requestor, token_pin_mappings).await
     }
 
-    async fn update_protection_task_error_log(
+    async fn update_backup_task_error_log(
         &self,
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error> {
-        Db::update_protection_task_error_log(self, task_id, error_log).await
+        Db::update_backup_task_error_log(self, task_id, error_log).await
     }
 
-    async fn update_protection_task_status(
+    async fn update_backup_task_status(
         &self,
         task_id: &str,
         status: &str,
     ) -> Result<(), sqlx::Error> {
-        Db::update_protection_task_status(self, task_id, status).await
+        Db::update_backup_task_status(self, task_id, status).await
     }
 
-    async fn get_protection_task(
+    async fn get_backup_task(
         &self,
         task_id: &str,
     ) -> Result<Option<crate::server::db::BackupTask>, sqlx::Error> {
-        Db::get_protection_task(self, task_id).await
+        Db::get_backup_task(self, task_id).await
     }
 
     async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
         Db::start_deletion(self, task_id).await
     }
 
-    async fn delete_protection_task(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::delete_protection_task(self, task_id).await
+    async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::delete_backup_task(self, task_id).await
     }
 
     async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error> {
@@ -508,7 +508,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
     let force = task.force;
     let storage_mode = task.storage_mode.clone();
     info!(
-        "Running protection task for task {} (storage_mode: {})",
+        "Running backup task for task {} (storage_mode: {})",
         task_id,
         storage_mode.as_str()
     );
@@ -558,7 +558,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
             shutdown_flag: shutdown_flag.clone(),
         },
     };
-    let span = tracing::info_span!("protection_task", task_id = %task_id);
+    let span = tracing::info_span!("backup_task", task_id = %task_id);
     let backup_result = backup_from_config(backup_cfg, Some(span)).await;
 
     // Check backup result
@@ -592,9 +592,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
     // Store non-fatal error log in DB if present
     if !error_log.is_empty() {
         let log_str = error_log.join("\n");
-        let _ = db
-            .update_protection_task_error_log(&task_id, &log_str)
-            .await;
+        let _ = db.update_backup_task_error_log(&task_id, &log_str).await;
     }
 
     // Handle archiving based on storage mode
@@ -652,7 +650,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
                         let _ = db.set_backup_error(&task_id, &error_msg).await;
                         return;
                     }
-                    let _ = db.update_protection_task_status(&task_id, "done").await;
+                    let _ = db.update_backup_task_status(&task_id, "done").await;
                 }
                 Err(e) => {
                     let err_str = e.to_string();
@@ -675,7 +673,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
         }
         StorageMode::Ipfs => {
             // IPFS-only mode: no filesystem operations needed
-            let _ = db.update_protection_task_status(&task_id, "done").await;
+            let _ = db.update_backup_task_status(&task_id, "done").await;
             info!("IPFS pinning for {} complete", task_id);
         }
     }
@@ -768,11 +766,11 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
     let task_id = task.task_id.clone();
     info!("Running deletion task for task {}", task_id);
 
-    // Get the protection task metadata
-    let meta = match db.get_protection_task(&task_id).await {
+    // Get the backup task metadata
+    let meta = match db.get_backup_task(&task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
-            error!("Task {} not found for deletion", task_id);
+            error!("Backup task {} not found for deletion", task_id);
             let _ = db
                 .set_backup_error(&task_id, "Task not found for deletion")
                 .await;
@@ -872,10 +870,10 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
         }
     }
 
-    // Delete or update the protection task metadata depending on scope and storage mode
+    // Delete or update the backup task metadata depending on scope and storage mode
     match task.scope {
         StorageMode::Full => {
-            if let Err(e) = db.delete_protection_task(&task_id).await {
+            if let Err(e) = db.delete_backup_task(&task_id).await {
                 error!("Database deletion failed for task {}: {}", task_id, e);
                 let _ = db
                     .set_backup_error(
@@ -895,11 +893,8 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
                     );
                 }
             } else if meta.storage_mode == "archive" {
-                if let Err(e) = db.delete_protection_task(&task_id).await {
-                    error!(
-                        "Failed to delete protection task for task {}: {}",
-                        task_id, e
-                    );
+                if let Err(e) = db.delete_backup_task(&task_id).await {
+                    error!("Failed to delete backup task for task {}: {}", task_id, e);
                 }
             }
         }
@@ -912,11 +907,8 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
                     );
                 }
             } else if meta.storage_mode == "ipfs" {
-                if let Err(e) = db.delete_protection_task(&task_id).await {
-                    error!(
-                        "Failed to delete protection task for task {}: {}",
-                        task_id, e
-                    );
+                if let Err(e) = db.delete_backup_task(&task_id).await {
+                    error!("Failed to delete backup task for task {}: {}", task_id, e);
                 }
             }
         }
