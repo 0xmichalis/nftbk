@@ -53,8 +53,8 @@ pub struct ProtectionJobWithBackup {
     /// Fatal error message if backup failed completely
     #[schema(example = "Database connection failed")]
     pub fatal_error: Option<String>,
-    /// Storage mode used for the backup (filesystem, ipfs, both)
-    #[schema(example = "filesystem")]
+    /// Storage mode used for the backup (archive, ipfs, full)
+    #[schema(example = "archive")]
     pub storage_mode: String,
     /// Archive format used for the backup (zip, tar.gz)
     #[schema(example = "zip")]
@@ -176,8 +176,8 @@ impl Db {
         .execute(&mut *tx)
         .await?;
 
-        // Insert into backup_requests if storage mode includes filesystem
-        if storage_mode == "filesystem" || storage_mode == "both" {
+        // Insert into backup_requests if storage mode includes archive
+        if storage_mode == "archive" || storage_mode == "full" {
             let archive_fmt = archive_format.unwrap_or("zip");
 
             if let Some(days) = retention_days {

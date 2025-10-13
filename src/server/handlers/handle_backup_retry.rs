@@ -156,9 +156,9 @@ async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
     let storage_mode = meta
         .storage_mode
         .parse()
-        .unwrap_or(crate::server::StorageMode::Both);
+        .unwrap_or(crate::server::StorageMode::Full);
     let pin_on_ipfs = storage_mode == crate::server::StorageMode::Ipfs
-        || storage_mode == crate::server::StorageMode::Both;
+        || storage_mode == crate::server::StorageMode::Full;
 
     let backup_job = BackupJob {
         task_id: task_id.to_string(),
@@ -265,7 +265,7 @@ mod handle_backup_retry_core_tests {
             status: status.to_string(),
             error_log: None,
             fatal_error: None,
-            storage_mode: "filesystem".to_string(),
+            storage_mode: "archive".to_string(),
             archive_format: Some("zip".to_string()),
             expires_at: None,
             deleted_at: None,

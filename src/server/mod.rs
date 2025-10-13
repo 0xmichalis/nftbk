@@ -70,29 +70,22 @@ pub struct BackupJob {
 pub struct DeletionJob {
     pub task_id: String,
     pub requestor: Option<String>,
-    pub scope: DeletionScope,
+    pub scope: StorageMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageMode {
-    Filesystem,
+    Archive,
     Ipfs,
-    Both,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DeletionScope {
     Full,
-    ArchiveOnly,
-    PinsOnly,
 }
 
 impl StorageMode {
     pub fn as_str(&self) -> &'static str {
         match self {
-            StorageMode::Filesystem => "filesystem",
+            StorageMode::Archive => "archive",
             StorageMode::Ipfs => "ipfs",
-            StorageMode::Both => "both",
+            StorageMode::Full => "full",
         }
     }
 }
@@ -102,9 +95,9 @@ impl FromStr for StorageMode {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "filesystem" => Ok(StorageMode::Filesystem),
+            "archive" => Ok(StorageMode::Archive),
             "ipfs" => Ok(StorageMode::Ipfs),
-            "both" => Ok(StorageMode::Both),
+            "full" => Ok(StorageMode::Full),
             _ => Err(format!("Unknown storage mode: {}", s)),
         }
     }
@@ -368,8 +361,8 @@ pub async fn recover_incomplete_jobs<DB: RecoveryDb + ?Sized>(
             }
         };
 
-        let storage_mode = job_meta.storage_mode.parse().unwrap_or(StorageMode::Both);
-        let pin_on_ipfs = storage_mode == StorageMode::Ipfs || storage_mode == StorageMode::Both;
+        let storage_mode = job_meta.storage_mode.parse().unwrap_or(StorageMode::Full);
+        let pin_on_ipfs = storage_mode == StorageMode::Ipfs || storage_mode == StorageMode::Full;
 
         let backup_job = BackupJob {
             task_id: job_meta.task_id.clone(),
@@ -527,7 +520,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
 
     // Determine output path and IPFS settings based on storage mode
     let (output_path, ipfs_providers) = match storage_mode {
-        StorageMode::Filesystem => {
+        StorageMode::Archive => {
             // Filesystem only: permanent directory, no IPFS
             let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
             (Some(PathBuf::from(out_dir)), Vec::new())
@@ -536,7 +529,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
             // IPFS only: no downloads, just pin existing CIDs
             (None, state.ipfs_providers.clone())
         }
-        StorageMode::Both => {
+        StorageMode::Full => {
             // Both: permanent directory and IPFS pinning
             let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
             (Some(PathBuf::from(out_dir)), state.ipfs_providers.clone())
@@ -596,8 +589,8 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
 
     // Handle archiving based on storage mode
     match storage_mode {
-        StorageMode::Filesystem | StorageMode::Both => {
-            // We have a filesystem output path
+        StorageMode::Archive | StorageMode::Full => {
+            // We have an archive output path
             let out_path = output_path.as_ref().unwrap();
 
             // Sync all files and directories to disk before archiving
@@ -671,7 +664,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
             info!("Backup {} ready", task_id);
         }
         StorageMode::Ipfs => {
-            // IPFS-only mode: no filesystem operations needed
+            // IPFS-only mode: no archive operations needed
             let _ = db.update_protection_job_status(&task_id, "done").await;
             info!("IPFS pinning for {} complete", task_id);
         }
@@ -816,11 +809,11 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
         return;
     }
 
-    // Handle filesystem cleanup if requested
-    if job.scope == DeletionScope::Full || job.scope == DeletionScope::ArchiveOnly {
-        if !(meta.storage_mode == "filesystem" || meta.storage_mode == "both") {
+    // Handle archive cleanup if requested
+    if job.scope == StorageMode::Full || job.scope == StorageMode::Archive {
+        if !(meta.storage_mode == "archive" || meta.storage_mode == "full") {
             info!(
-                "Skipping filesystem cleanup for task {} (no filesystem data)",
+                "Skipping archive cleanup for task {} (no archive data)",
                 task_id
             );
         } else {
@@ -832,10 +825,10 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
             .await
             {
                 Ok(_) => {
-                    info!("Filesystem cleanup completed for task {}", task_id);
+                    info!("Archive cleanup completed for task {}", task_id);
                 }
                 Err(e) => {
-                    error!("Filesystem deletion failed for task {}: {}", task_id, e);
+                    error!("Archive deletion failed for task {}: {}", task_id, e);
                     // Log the error but continue with deletion - don't fail the job
                 }
             }
@@ -843,8 +836,8 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
     }
 
     // Handle IPFS pin deletion if requested
-    if job.scope == DeletionScope::Full || job.scope == DeletionScope::PinsOnly {
-        if !(meta.storage_mode == "ipfs" || meta.storage_mode == "both") {
+    if job.scope == StorageMode::Full || job.scope == StorageMode::Ipfs {
+        if !(meta.storage_mode == "ipfs" || meta.storage_mode == "full") {
             info!(
                 "Skipping IPFS pin cleanup for task {} (no IPFS pins)",
                 task_id
@@ -871,7 +864,7 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
 
     // Delete or update the protection job metadata depending on scope and storage mode
     match job.scope {
-        DeletionScope::Full => {
+        StorageMode::Full => {
             if let Err(e) = db.delete_protection_job(&task_id).await {
                 error!("Database deletion failed for task {}: {}", task_id, e);
                 let _ = db
@@ -883,15 +876,15 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
                 return;
             }
         }
-        DeletionScope::ArchiveOnly => {
-            if meta.storage_mode == "both" {
+        StorageMode::Archive => {
+            if meta.storage_mode == "full" {
                 if let Err(e) = db
                     .update_protection_job_storage_mode(&task_id, "ipfs")
                     .await
                 {
                     error!("Failed to update storage mode for task {}: {}", task_id, e);
                 }
-            } else if meta.storage_mode == "filesystem" {
+            } else if meta.storage_mode == "archive" {
                 if let Err(e) = db.delete_protection_job(&task_id).await {
                     error!(
                         "Failed to delete protection job for task {}: {}",
@@ -900,10 +893,10 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
                 }
             }
         }
-        DeletionScope::PinsOnly => {
-            if meta.storage_mode == "both" {
+        StorageMode::Ipfs => {
+            if meta.storage_mode == "full" {
                 if let Err(e) = db
-                    .update_protection_job_storage_mode(&task_id, "filesystem")
+                    .update_protection_job_storage_mode(&task_id, "archive")
                     .await
                 {
                     error!("Failed to update storage mode for task {}: {}", task_id, e);
@@ -1181,14 +1174,14 @@ mod recover_incomplete_jobs_tests {
                 task_id: "task1".to_string(),
                 requestor: "user1".to_string(),
                 tokens: json!([{"chain": "ethereum", "tokens": ["0x123"]}]),
-                storage_mode: "filesystem".to_string(),
+                storage_mode: "archive".to_string(),
                 archive_format: Some("zip".to_string()),
             },
             RecoveryJob {
                 task_id: "task2".to_string(),
                 requestor: "user2".to_string(),
                 tokens: json!([{"chain": "tezos", "tokens": ["KT1ABC"]}]),
-                storage_mode: "both".to_string(),
+                storage_mode: "full".to_string(),
                 archive_format: None,
             },
         ];
@@ -1199,29 +1192,34 @@ mod recover_incomplete_jobs_tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 2);
 
-        // Check that jobs were enqueued
-        let job1 = rx.recv().await.unwrap();
-        let job2 = rx.recv().await.unwrap();
-
-        match (job1, job2) {
-            (
-                BackupJobOrShutdown::Job(JobType::Creation(job1)),
-                BackupJobOrShutdown::Job(JobType::Creation(job2)),
-            ) => {
-                assert_eq!(job1.task_id, "task1");
-                assert!(job1.force);
-                assert_eq!(job1.storage_mode, StorageMode::Filesystem);
-                assert_eq!(job1.archive_format, Some("zip".to_string()));
-                assert_eq!(job1.requestor, Some("user1".to_string()));
-
-                assert_eq!(job2.task_id, "task2");
-                assert!(job2.force);
-                assert_eq!(job2.storage_mode, StorageMode::Both);
-                assert_eq!(job2.archive_format, None);
-                assert_eq!(job2.requestor, Some("user2".to_string()));
+        // Check that jobs were enqueued (order-independent)
+        let j1 = rx.recv().await.unwrap();
+        let j2 = rx.recv().await.unwrap();
+        let mut seen_task1 = false;
+        let mut seen_task2 = false;
+        for job in [j1, j2] {
+            match job {
+                BackupJobOrShutdown::Job(JobType::Creation(job)) => {
+                    if job.task_id == "task1" {
+                        seen_task1 = true;
+                        assert!(job.force);
+                        assert_eq!(job.storage_mode, StorageMode::Archive);
+                        assert_eq!(job.archive_format, Some("zip".to_string()));
+                        assert_eq!(job.requestor, Some("user1".to_string()));
+                    } else if job.task_id == "task2" {
+                        seen_task2 = true;
+                        assert!(job.force);
+                        assert_eq!(job.storage_mode, StorageMode::Full);
+                        assert_eq!(job.archive_format, None);
+                        assert_eq!(job.requestor, Some("user2".to_string()));
+                    } else {
+                        panic!("Unexpected task id");
+                    }
+                }
+                _ => panic!("Expected backup job"),
             }
-            _ => panic!("Expected backup jobs"),
         }
+        assert!(seen_task1 && seen_task2);
     }
 
     #[tokio::test]
@@ -1230,7 +1228,7 @@ mod recover_incomplete_jobs_tests {
             task_id: "task1".to_string(),
             requestor: "user1".to_string(),
             tokens: json!("invalid tokens"), // Invalid JSON for tokens
-            storage_mode: "filesystem".to_string(),
+            storage_mode: "archive".to_string(),
             archive_format: None,
         }];
         let mock_db = MockRecoveryDb::new(jobs);
@@ -1277,11 +1275,11 @@ mod recover_incomplete_jobs_tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 1);
 
-        // Should default to StorageMode::Both for invalid mode
+        // Should default to StorageMode::Full for invalid mode
         let job = rx.recv().await.unwrap();
         match job {
             BackupJobOrShutdown::Job(JobType::Creation(job)) => {
-                assert_eq!(job.storage_mode, StorageMode::Both);
+                assert_eq!(job.storage_mode, StorageMode::Full);
                 assert!(job.request.pin_on_ipfs); // Both includes IPFS
             }
             _ => panic!("Expected backup job"),

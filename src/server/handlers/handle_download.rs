@@ -191,7 +191,7 @@ async fn serve_zip_file_for_token_core<DB: DownloadDb + ?Sized>(
         .into_response();
     }
 
-    // Check if this job has a filesystem backup
+    // Check if this job has an archive backup
     let archive_format = match &meta.archive_format {
         Some(fmt) => fmt,
         None => {

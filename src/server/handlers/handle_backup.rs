@@ -214,9 +214,9 @@ async fn handle_backup_core<DB: BackupDb + ?Sized>(
 
     // Determine storage mode based on pin_on_ipfs flag
     let storage_mode = if req.pin_on_ipfs {
-        StorageMode::Both
+        StorageMode::Full
     } else {
-        StorageMode::Filesystem
+        StorageMode::Archive
     };
 
     // Determine archive format from Accept header or user-agent; fallback to zip

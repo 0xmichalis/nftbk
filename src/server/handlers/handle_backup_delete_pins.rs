@@ -10,9 +10,9 @@ use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::AppState;
 
 /// Delete only the IPFS pins for a backup job.
-/// If the backup has storage mode "both", it will update the storage mode to "filesystem".
+/// If the backup has storage mode "full", it will update the storage mode to "archive".
 /// If the backup has storage mode "ipfs", it will delete the entire backup.
-/// If the backup has storage mode "filesystem", it will return an error.
+/// If the backup has storage mode "archive", it will return an error.
 #[utoipa::path(
     delete,
     path = "/v1/backups/{task_id}/pins",
@@ -241,7 +241,7 @@ async fn handle_backup_delete_pins_core<DB: DeletePinsDb + ?Sized>(
     }
 
     // Check if backup uses IPFS storage
-    if meta.storage_mode == "filesystem" {
+    if meta.storage_mode == "archive" {
         let problem = ProblemJson::from_status(
             StatusCode::UNPROCESSABLE_ENTITY,
             Some("Backup does not use IPFS storage".to_string()),
@@ -250,11 +250,11 @@ async fn handle_backup_delete_pins_core<DB: DeletePinsDb + ?Sized>(
         return problem.into_response();
     }
 
-    // Enqueue deletion job with PinsOnly scope and return 202
+    // Enqueue deletion job with IPFS scope and return 202
     let deletion_job = crate::server::DeletionJob {
         task_id: task_id.to_string(),
         requestor: Some(requestor_str),
-        scope: crate::server::DeletionScope::PinsOnly,
+        scope: crate::server::StorageMode::Ipfs,
     };
     if let Err(e) = backup_job_sender
         .send(crate::server::BackupJobOrShutdown::Job(
@@ -389,7 +389,7 @@ mod handle_backup_delete_pins_core_tests {
             error_log: None,
             fatal_error: None,
             storage_mode: storage_mode.to_string(),
-            archive_format: if storage_mode == "filesystem" || storage_mode == "both" {
+            archive_format: if storage_mode == "archive" || storage_mode == "full" {
                 Some("zip".to_string())
             } else {
                 None
@@ -482,9 +482,9 @@ mod handle_backup_delete_pins_core_tests {
     }
 
     #[tokio::test]
-    async fn returns_422_when_filesystem_only() {
+    async fn returns_422_when_archive_only() {
         let db = MockDb {
-            meta: Some(sample_meta("did:me", "done", "filesystem")),
+            meta: Some(sample_meta("did:me", "done", "archive")),
             get_error: false,
             update_error: false,
             delete_error: false,
@@ -522,9 +522,9 @@ mod handle_backup_delete_pins_core_tests {
     }
 
     #[tokio::test]
-    async fn updates_storage_mode_for_both_job() {
+    async fn updates_storage_mode_for_full_job() {
         let db = MockDb {
-            meta: Some(sample_meta("did:me", "done", "both")),
+            meta: Some(sample_meta("did:me", "done", "full")),
             get_error: false,
             update_error: false,
             delete_error: false,

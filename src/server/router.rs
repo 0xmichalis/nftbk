@@ -76,7 +76,7 @@ use crate::server::AppState;
 - **Purpose**: Enable users to request NFT backups and either download them to their local filesystem or pin them to IPFS
 - **Use Case**: Request a backup, track backup progress, view backup history, monitor failures
 
-### Pin Management (`/pins`) 
+### Pin Management (`/pins`)
 - **Purpose**: Enable users to request and manage IPFS pinning of NFTs
 - **Use Case**: Request a pin, check pin status, verify content is pinned",
         contact(

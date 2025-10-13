@@ -9,7 +9,7 @@ use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::{AppState, BackupJobOrShutdown, DeletionJob, JobType};
 
 /// Delete a backup job for the authenticated user. This will queue a deletion job that will
-/// delete the backup archive files (if the backup used filesystem storage), unpin any IPFS content
+/// delete the backup archive files (if the backup used archive storage), unpin any IPFS content
 /// (if the backup used IPFS storage), and remove the metadata from the database.
 /// The deletion is processed asynchronously by workers.
 #[utoipa::path(
@@ -215,7 +215,7 @@ async fn handle_backup_delete_core<DB: DeleteDb + ?Sized>(
     let deletion_job = DeletionJob {
         task_id: task_id.to_string(),
         requestor: Some(requestor_str),
-        scope: crate::server::DeletionScope::Full,
+        scope: crate::server::StorageMode::Full,
     };
 
     if let Err(e) = backup_job_sender
@@ -321,7 +321,7 @@ mod handle_backup_delete_core_tests {
             error_log: None,
             fatal_error: None,
             storage_mode: storage_mode.to_string(),
-            archive_format: if storage_mode == "filesystem" || storage_mode == "both" {
+            archive_format: if storage_mode == "archive" || storage_mode == "full" {
                 Some("zip".to_string())
             } else {
                 None
@@ -374,7 +374,7 @@ mod handle_backup_delete_core_tests {
     #[tokio::test]
     async fn returns_403_on_owner_mismatch() {
         let db = MockDb {
-            meta: Some(sample_meta("did:other", "done", "filesystem")),
+            meta: Some(sample_meta("did:other", "done", "archive")),
             get_error: false,
             delete_error: false,
             pin_requests: Vec::new(),
@@ -389,7 +389,7 @@ mod handle_backup_delete_core_tests {
     #[tokio::test]
     async fn returns_409_when_in_progress() {
         let db = MockDb {
-            meta: Some(sample_meta("did:me", "in_progress", "filesystem")),
+            meta: Some(sample_meta("did:me", "in_progress", "archive")),
             get_error: false,
             delete_error: false,
             pin_requests: Vec::new(),
@@ -404,7 +404,7 @@ mod handle_backup_delete_core_tests {
     #[tokio::test]
     async fn returns_202_on_success_and_queues_deletion() {
         let db = MockDb {
-            meta: Some(sample_meta("did:me", "done", "filesystem")),
+            meta: Some(sample_meta("did:me", "done", "archive")),
             get_error: false,
             delete_error: false,
             pin_requests: Vec::new(),

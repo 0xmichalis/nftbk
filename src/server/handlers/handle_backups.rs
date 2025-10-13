@@ -265,7 +265,7 @@ mod handle_backups_core_mockdb_tests {
                 status: "done".to_string(),
                 error_log: None,
                 fatal_error: None,
-                storage_mode: "filesystem".to_string(),
+                storage_mode: "archive".to_string(),
                 archive_format: Some("zip".to_string()),
                 expires_at: None,
                 deleted_at: None,

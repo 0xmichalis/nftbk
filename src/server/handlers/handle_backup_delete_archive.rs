@@ -8,9 +8,9 @@ use tracing::{error, info};
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::AppState;
 
-/// Delete only the archive (filesystem) data for a backup job.
-/// If the backup has storage mode "both", it will update the storage mode to "ipfs".
-/// If the backup has storage mode "filesystem", it will delete the entire backup.
+/// Delete only the archive data for a backup job.
+/// If the backup has storage mode "full", it will update the storage mode to "ipfs".
+/// If the backup has storage mode "archive", it will delete the entire backup.
 /// If the backup has storage mode "ipfs", it will return an error.
 #[utoipa::path(
     delete,
@@ -24,7 +24,7 @@ use crate::server::AppState;
         (status = 403, description = "Requestor does not match task owner", body = ApiProblem, content_type = "application/problem+json"),
         (status = 404, description = "Task not found", body = ApiProblem, content_type = "application/problem+json"),
         (status = 409, description = "Can only delete completed tasks", body = ApiProblem, content_type = "application/problem+json"),
-        (status = 422, description = "Backup does not use filesystem storage", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 422, description = "Backup does not use archive storage", body = ApiProblem, content_type = "application/problem+json"),
         (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
     tag = "backups",
@@ -199,11 +199,11 @@ async fn handle_backup_delete_archive_core<DB: DeleteArchiveDb + ?Sized>(
         return problem.into_response();
     }
 
-    // Check if backup uses filesystem storage
+    // Check if backup uses archive storage
     if meta.storage_mode == "ipfs" {
         let problem = ProblemJson::from_status(
             StatusCode::UNPROCESSABLE_ENTITY,
-            Some("Backup does not use filesystem storage".to_string()),
+            Some("Backup does not use archive storage".to_string()),
             Some(format!("/v1/backups/{}/archive", task_id)),
         );
         return problem.into_response();
@@ -213,7 +213,7 @@ async fn handle_backup_delete_archive_core<DB: DeleteArchiveDb + ?Sized>(
     let deletion_job = crate::server::DeletionJob {
         task_id: task_id.to_string(),
         requestor: Some(requestor_str),
-        scope: crate::server::DeletionScope::ArchiveOnly,
+        scope: crate::server::StorageMode::Archive,
     };
     if let Err(e) = backup_job_sender
         .send(crate::server::BackupJobOrShutdown::Job(
@@ -333,7 +333,7 @@ mod handle_backup_delete_archive_core_tests {
             error_log: None,
             fatal_error: None,
             storage_mode: storage_mode.to_string(),
-            archive_format: if storage_mode == "filesystem" || storage_mode == "both" {
+            archive_format: if storage_mode == "archive" || storage_mode == "full" {
                 Some("zip".to_string())
             } else {
                 None
@@ -391,7 +391,7 @@ mod handle_backup_delete_archive_core_tests {
     async fn returns_403_on_owner_mismatch() {
         // owner mismatch should return 403
         let db = MockDb {
-            meta: Some(sample_meta("did:other", "done", "filesystem")),
+            meta: Some(sample_meta("did:other", "done", "archive")),
             get_error: false,
             update_error: false,
             delete_error: false,
@@ -408,7 +408,7 @@ mod handle_backup_delete_archive_core_tests {
     #[tokio::test]
     async fn returns_409_when_in_progress() {
         let db = MockDb {
-            meta: Some(sample_meta("did:me", "in_progress", "filesystem")),
+            meta: Some(sample_meta("did:me", "in_progress", "archive")),
             get_error: false,
             update_error: false,
             delete_error: false,
@@ -440,9 +440,9 @@ mod handle_backup_delete_archive_core_tests {
     }
 
     #[tokio::test]
-    async fn deletes_filesystem_job_on_success() {
+    async fn deletes_archive_job_on_success() {
         let db = MockDb {
-            meta: Some(sample_meta("did:me", "done", "filesystem")),
+            meta: Some(sample_meta("did:me", "done", "archive")),
             get_error: false,
             update_error: false,
             delete_error: false,
@@ -461,9 +461,9 @@ mod handle_backup_delete_archive_core_tests {
     }
 
     #[tokio::test]
-    async fn updates_storage_mode_for_both_job() {
+    async fn updates_storage_mode_for_full_job() {
         let db = MockDb {
-            meta: Some(sample_meta("did:me", "done", "both")),
+            meta: Some(sample_meta("did:me", "done", "full")),
             get_error: false,
             update_error: false,
             delete_error: false,
