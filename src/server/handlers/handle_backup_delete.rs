@@ -9,7 +9,7 @@ use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::{AppState, BackupJobOrShutdown, DeletionJob, JobType};
 
 /// Delete a backup job for the authenticated user. This will queue a deletion job that will
-/// delete the backup archive files (if the backup used archive storage), unpin any IPFS content
+/// delete the backup files from the filesystem (if the backup used filesystem storage), unpin any IPFS content
 /// (if the backup used IPFS storage), and remove the metadata from the database.
 /// The deletion is processed asynchronously by workers.
 #[utoipa::path(
