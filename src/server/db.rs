@@ -53,8 +53,8 @@ pub struct ProtectionJobWithBackup {
     /// Fatal error message if backup failed completely
     #[schema(example = "Database connection failed")]
     pub fatal_error: Option<String>,
-    /// Storage mode used for the backup (filesystem, ipfs, both)
-    #[schema(example = "filesystem")]
+    /// Storage mode used for the backup (archive, ipfs, full)
+    #[schema(example = "archive")]
     pub storage_mode: String,
     /// Archive format used for the backup (zip, tar.gz)
     #[schema(example = "zip")]
@@ -176,8 +176,8 @@ impl Db {
         .execute(&mut *tx)
         .await?;
 
-        // Insert into backup_requests if storage mode includes filesystem
-        if storage_mode == "filesystem" || storage_mode == "both" {
+        // Insert into backup_requests if storage mode includes archive
+        if storage_mode == "archive" || storage_mode == "full" {
             let archive_fmt = archive_format.unwrap_or("zip");
 
             if let Some(days) = retention_days {
@@ -880,6 +880,55 @@ impl Db {
             .execute(&mut *tx)
             .await?;
         }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Atomically downgrade from full to ipfs: remove archive request row and update storage_mode
+    pub async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        sqlx::query(r#"DELETE FROM backup_requests WHERE task_id = $1"#)
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE protection_jobs
+            SET storage_mode = 'ipfs', updated_at = NOW()
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Atomically downgrade from full to archive: remove IPFS pin rows and update storage_mode
+    pub async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        // pinned_tokens will cascade on pin_requests delete
+        sqlx::query(r#"DELETE FROM pin_requests WHERE task_id = $1"#)
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await?;
+
+        sqlx::query(
+            r#"
+            UPDATE protection_jobs
+            SET storage_mode = 'archive', updated_at = NOW()
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
 
         tx.commit().await?;
         Ok(())

@@ -35,6 +35,8 @@ pub mod router;
 pub mod workers;
 pub use handlers::handle_backup::handle_backup;
 pub use handlers::handle_backup_delete::handle_backup_delete;
+pub use handlers::handle_backup_delete_archive::handle_backup_delete_archive;
+pub use handlers::handle_backup_delete_pins::handle_backup_delete_pins;
 pub use handlers::handle_backup_retry::handle_backup_retry;
 pub use handlers::handle_backups::handle_backups;
 pub use handlers::handle_download::handle_download;
@@ -68,21 +70,23 @@ pub struct BackupJob {
 pub struct DeletionJob {
     pub task_id: String,
     pub requestor: Option<String>,
+    /// Determines which parts of the backup to delete (e.g., only the archive, only the IPFS pins, or both).
+    pub scope: StorageMode,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StorageMode {
-    Filesystem,
+    Archive,
     Ipfs,
-    Both,
+    Full,
 }
 
 impl StorageMode {
     pub fn as_str(&self) -> &'static str {
         match self {
-            StorageMode::Filesystem => "filesystem",
+            StorageMode::Archive => "archive",
             StorageMode::Ipfs => "ipfs",
-            StorageMode::Both => "both",
+            StorageMode::Full => "full",
         }
     }
 }
@@ -92,9 +96,9 @@ impl FromStr for StorageMode {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "filesystem" => Ok(StorageMode::Filesystem),
+            "archive" => Ok(StorageMode::Archive),
             "ipfs" => Ok(StorageMode::Ipfs),
-            "both" => Ok(StorageMode::Both),
+            "full" => Ok(StorageMode::Full),
             _ => Err(format!("Unknown storage mode: {}", s)),
         }
     }
@@ -358,8 +362,8 @@ pub async fn recover_incomplete_jobs<DB: RecoveryDb + ?Sized>(
             }
         };
 
-        let storage_mode = job_meta.storage_mode.parse().unwrap_or(StorageMode::Both);
-        let pin_on_ipfs = storage_mode == StorageMode::Ipfs || storage_mode == StorageMode::Both;
+        let storage_mode = job_meta.storage_mode.parse().unwrap_or(StorageMode::Full);
+        let pin_on_ipfs = storage_mode == StorageMode::Ipfs || storage_mode == StorageMode::Full;
 
         let backup_job = BackupJob {
             task_id: job_meta.task_id.clone(),
@@ -424,6 +428,8 @@ pub trait BackupJobDb {
     ) -> Result<Option<crate::server::db::ProtectionJobWithBackup>, sqlx::Error>;
     async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn delete_protection_job(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error>;
 }
 
 // Implement BackupJobDb trait for the real Db
@@ -476,6 +482,14 @@ impl BackupJobDb for Db {
     async fn delete_protection_job(&self, task_id: &str) -> Result<(), sqlx::Error> {
         Db::delete_protection_job(self, task_id).await
     }
+
+    async fn downgrade_full_to_ipfs(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::downgrade_full_to_ipfs(self, task_id).await
+    }
+
+    async fn downgrade_full_to_archive(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::downgrade_full_to_archive(self, task_id).await
+    }
 }
 
 async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: BackupJob, db: &DB) {
@@ -504,7 +518,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
 
     // Determine output path and IPFS settings based on storage mode
     let (output_path, ipfs_providers) = match storage_mode {
-        StorageMode::Filesystem => {
+        StorageMode::Archive => {
             // Filesystem only: permanent directory, no IPFS
             let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
             (Some(PathBuf::from(out_dir)), Vec::new())
@@ -513,7 +527,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
             // IPFS only: no downloads, just pin existing CIDs
             (None, state.ipfs_providers.clone())
         }
-        StorageMode::Both => {
+        StorageMode::Full => {
             // Both: permanent directory and IPFS pinning
             let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
             (Some(PathBuf::from(out_dir)), state.ipfs_providers.clone())
@@ -573,7 +587,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
 
     // Handle archiving based on storage mode
     match storage_mode {
-        StorageMode::Filesystem | StorageMode::Both => {
+        StorageMode::Archive | StorageMode::Full => {
             // We have a filesystem output path
             let out_path = output_path.as_ref().unwrap();
 
@@ -655,6 +669,85 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
     }
 }
 
+async fn delete_dir_and_archive_for_task(
+    base_dir: &str,
+    task_id: &str,
+    archive_format: Option<&str>,
+) -> Result<bool, String> {
+    let mut deleted_anything = false;
+
+    if let Some(archive_format) = archive_format {
+        let (archive_path, archive_checksum_path) =
+            crate::server::archive::get_zipped_backup_paths(base_dir, task_id, archive_format);
+        for path in [&archive_path, &archive_checksum_path] {
+            match tokio::fs::remove_file(path).await {
+                Ok(_) => {
+                    deleted_anything = true;
+                }
+                Err(e) => {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        return Err(format!("Failed to delete file {}: {}", path.display(), e));
+                    }
+                }
+            }
+        }
+    }
+
+    let backup_dir = format!("{}/nftbk-{}", base_dir, task_id);
+    match tokio::fs::remove_dir_all(&backup_dir).await {
+        Ok(_) => {
+            deleted_anything = true;
+        }
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(format!("Failed to delete backup dir {backup_dir}: {e}"));
+            }
+        }
+    }
+
+    Ok(deleted_anything)
+}
+
+async fn delete_ipfs_pins(
+    provider_instances: &[std::sync::Arc<dyn crate::ipfs::IpfsPinningProvider>],
+    task_id: &str,
+    pin_requests: &[crate::server::db::PinRequestRow],
+) -> Result<bool, String> {
+    let mut deleted_anything = false;
+    for pin_request in pin_requests {
+        let provider = provider_instances
+            .iter()
+            .find(|provider| provider.provider_name() == pin_request.provider);
+
+        let provider = provider.ok_or_else(|| {
+            format!(
+                "No provider instance found for provider {} when unpinning {}",
+                pin_request.provider, pin_request.cid
+            )
+        })?;
+
+        provider
+            .delete_pin(&pin_request.request_id)
+            .await
+            .map_err(|e| {
+                format!(
+                    "Failed to unpin {} from provider {} for task {}: {}",
+                    pin_request.cid, pin_request.provider, task_id, e
+                )
+            })?;
+
+        tracing::info!(
+            "Successfully unpinned {} from provider {} for task {}",
+            pin_request.cid,
+            pin_request.provider,
+            task_id
+        );
+        deleted_anything = true;
+    }
+
+    Ok(deleted_anything)
+}
+
 async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
     state: AppState,
     job: DeletionJob,
@@ -662,11 +755,6 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
 ) {
     let task_id = job.task_id.clone();
     info!("Running deletion job for task {}", task_id);
-
-    // Import the deletion logic from the handler
-    use crate::server::handlers::handle_backup_delete::{
-        delete_dir_and_archive_for_task, delete_ipfs_pins_for_task,
-    };
 
     // Get the protection job metadata
     let meta = match db.get_protection_job(&task_id).await {
@@ -719,49 +807,107 @@ async fn run_deletion_job_inner<DB: BackupJobDb + ?Sized>(
         return;
     }
 
-    // Handle filesystem cleanup if this backup used filesystem storage
-    if meta.storage_mode == "filesystem" || meta.storage_mode == "both" {
-        match delete_dir_and_archive_for_task(
-            &state.base_dir,
-            &task_id,
-            meta.archive_format.as_deref(),
-        )
-        .await
-        {
-            Ok(_) => {
-                info!("Filesystem cleanup completed for task {}", task_id);
-            }
-            Err(e) => {
-                error!("Filesystem deletion failed for task {}: {}", task_id, e);
-                // Log the error but continue with deletion - don't fail the job
-            }
-        }
-    }
-
-    // Handle IPFS pin deletion if this backup used IPFS storage
-    if meta.storage_mode == "ipfs" || meta.storage_mode == "both" {
-        match delete_ipfs_pins_for_task(&state.db, &task_id, &state.ipfs_provider_instances).await {
-            Ok(_) => {
-                info!("IPFS pin cleanup completed for task {}", task_id);
-            }
-            Err(e) => {
-                error!("IPFS pin deletion failed for task {}: {}", task_id, e);
-                // Log the error but continue with deletion - don't fail the job
-            }
-        }
-    }
-
-    // Delete the protection job metadata
-    if let Err(e) = db.delete_protection_job(&task_id).await {
-        error!("Database deletion failed for task {}: {}", task_id, e);
-        // This is the only error we should fail on, as it means the job metadata couldn't be removed
-        let _ = db
-            .set_backup_error(
+    // Handle archive cleanup if requested
+    if job.scope == StorageMode::Full || job.scope == StorageMode::Archive {
+        if !(meta.storage_mode == "archive" || meta.storage_mode == "full") {
+            info!(
+                "Skipping archive cleanup for task {} (no archive data)",
+                task_id
+            );
+        } else {
+            match delete_dir_and_archive_for_task(
+                &state.base_dir,
                 &task_id,
-                &format!("Failed to delete metadata from database: {}", e),
+                meta.archive_format.as_deref(),
             )
-            .await;
-        return;
+            .await
+            {
+                Ok(_) => {
+                    info!("Archive cleanup completed for task {}", task_id);
+                }
+                Err(e) => {
+                    error!("Archive deletion failed for task {}: {}", task_id, e);
+                    // Log the error but continue with deletion - don't fail the job
+                }
+            }
+        }
+    }
+
+    // Handle IPFS pin deletion if requested
+    if job.scope == StorageMode::Full || job.scope == StorageMode::Ipfs {
+        if !(meta.storage_mode == "ipfs" || meta.storage_mode == "full") {
+            info!(
+                "Skipping IPFS pin cleanup for task {} (no IPFS pins)",
+                task_id
+            );
+        } else {
+            let pin_requests = match state.db.get_pin_requests_by_task_id(&task_id).await {
+                Ok(v) => v,
+                Err(e) => {
+                    error!("Failed to get pin requests for task {}: {}", task_id, e);
+                    Vec::new()
+                }
+            };
+            match delete_ipfs_pins(&state.ipfs_provider_instances, &task_id, &pin_requests).await {
+                Ok(_) => {
+                    info!("IPFS pin cleanup completed for task {}", task_id);
+                }
+                Err(e) => {
+                    error!("IPFS pin deletion failed for task {}: {}", task_id, e);
+                    // Log the error but continue with deletion - don't fail the job
+                }
+            }
+        }
+    }
+
+    // Delete or update the protection job metadata depending on scope and storage mode
+    match job.scope {
+        StorageMode::Full => {
+            if let Err(e) = db.delete_protection_job(&task_id).await {
+                error!("Database deletion failed for task {}: {}", task_id, e);
+                let _ = db
+                    .set_backup_error(
+                        &task_id,
+                        &format!("Failed to delete metadata from database: {}", e),
+                    )
+                    .await;
+                return;
+            }
+        }
+        StorageMode::Archive => {
+            if meta.storage_mode == "full" {
+                if let Err(e) = db.downgrade_full_to_ipfs(&task_id).await {
+                    error!(
+                        "Failed to downgrade storage mode for task {}: {}",
+                        task_id, e
+                    );
+                }
+            } else if meta.storage_mode == "archive" {
+                if let Err(e) = db.delete_protection_job(&task_id).await {
+                    error!(
+                        "Failed to delete protection job for task {}: {}",
+                        task_id, e
+                    );
+                }
+            }
+        }
+        StorageMode::Ipfs => {
+            if meta.storage_mode == "full" {
+                if let Err(e) = db.downgrade_full_to_archive(&task_id).await {
+                    error!(
+                        "Failed to downgrade storage mode for task {}: {}",
+                        task_id, e
+                    );
+                }
+            } else if meta.storage_mode == "ipfs" {
+                if let Err(e) = db.delete_protection_job(&task_id).await {
+                    error!(
+                        "Failed to delete protection job for task {}: {}",
+                        task_id, e
+                    );
+                }
+            }
+        }
     }
 
     info!("Successfully deleted backup {}", task_id);
@@ -809,6 +955,147 @@ pub async fn run_deletion_job(state: AppState, job: DeletionJob) {
         let error_msg = format!("Deletion job for task {task_id_clone} panicked: {panic_msg}");
         error!("{error_msg}");
         let _ = BackupJobDb::set_backup_error(&*state_clone.db, &task_id_clone, &error_msg).await;
+    }
+}
+
+#[cfg(test)]
+mod deletion_utils_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn delete_dir_and_archive_for_task_removes_files_and_dir() {
+        // Arrange: create a unique temp base dir
+        let base = std::env::temp_dir()
+            .join(format!("nftbk-test-{}", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .to_string();
+        let base_dir = base.clone();
+        tokio::fs::create_dir_all(&base_dir).await.unwrap();
+
+        let task_id = "tdel";
+        let archive_fmt = "zip";
+
+        // Create archive files and backup directory matching get_zipped_backup_paths
+        let (archive_path, checksum_path) =
+            crate::server::archive::get_zipped_backup_paths(&base_dir, task_id, archive_fmt);
+        if let Some(parent) = archive_path.parent() {
+            tokio::fs::create_dir_all(parent).await.unwrap();
+        }
+        tokio::fs::write(&archive_path, b"dummy").await.unwrap();
+        tokio::fs::write(&checksum_path, b"deadbeef").await.unwrap();
+
+        let backup_dir = format!("{}/nftbk-{}", base_dir, task_id);
+        tokio::fs::create_dir_all(&backup_dir).await.unwrap();
+        tokio::fs::write(format!("{backup_dir}/file.txt"), b"x")
+            .await
+            .unwrap();
+
+        // Act
+        let deleted = delete_dir_and_archive_for_task(&base_dir, task_id, Some(archive_fmt))
+            .await
+            .unwrap();
+
+        // Assert
+        assert!(deleted);
+        assert!(!tokio::fs::try_exists(&archive_path).await.unwrap());
+        assert!(!tokio::fs::try_exists(&checksum_path).await.unwrap());
+        assert!(!tokio::fs::try_exists(&backup_dir).await.unwrap());
+
+        // Cleanup
+        let _ = tokio::fs::remove_dir_all(&base_dir).await;
+    }
+
+    #[tokio::test]
+    async fn delete_dir_and_archive_for_task_noop_when_missing() {
+        let base_dir = std::env::temp_dir()
+            .join(format!("nftbk-test-missing-{}", uuid::Uuid::new_v4()))
+            .to_string_lossy()
+            .to_string();
+        // Do not create anything under base_dir
+        let deleted = delete_dir_and_archive_for_task(&base_dir, "nope", Some("zip"))
+            .await
+            .unwrap();
+        assert!(!deleted);
+    }
+
+    struct MockProvider {
+        name: &'static str,
+        deleted: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl crate::ipfs::IpfsPinningProvider for MockProvider {
+        fn provider_name(&self) -> &str {
+            self.name
+        }
+        async fn create_pin(
+            &self,
+            _request: &crate::ipfs::PinRequest,
+        ) -> anyhow::Result<crate::ipfs::PinResponse> {
+            unimplemented!()
+        }
+        async fn get_pin(&self, _pin_id: &str) -> anyhow::Result<crate::ipfs::PinResponse> {
+            unimplemented!()
+        }
+        async fn list_pins(&self) -> anyhow::Result<Vec<crate::ipfs::PinResponse>> {
+            unimplemented!()
+        }
+        async fn delete_pin(&self, request_id: &str) -> anyhow::Result<()> {
+            self.deleted.lock().unwrap().push(request_id.to_string());
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn delete_ipfs_pins_unpins_all_matching_requests() {
+        let deleted = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let provider = std::sync::Arc::new(MockProvider {
+            name: "mock",
+            deleted: deleted.clone(),
+        });
+        let providers: Vec<std::sync::Arc<dyn crate::ipfs::IpfsPinningProvider>> = vec![provider];
+
+        let rows = vec![
+            crate::server::db::PinRequestRow {
+                id: 1,
+                task_id: "t".into(),
+                provider: "mock".into(),
+                cid: "cid1".into(),
+                request_id: "rid1".into(),
+                status: "pinned".into(),
+                requestor: "u".into(),
+            },
+            crate::server::db::PinRequestRow {
+                id: 2,
+                task_id: "t".into(),
+                provider: "mock".into(),
+                cid: "cid2".into(),
+                request_id: "rid2".into(),
+                status: "pinned".into(),
+                requestor: "u".into(),
+            },
+        ];
+
+        let result = delete_ipfs_pins(&providers, "t", &rows).await.unwrap();
+        assert!(result);
+        let calls = deleted.lock().unwrap().clone();
+        assert_eq!(calls, vec!["rid1".to_string(), "rid2".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn delete_ipfs_pins_errors_when_provider_missing() {
+        let providers: Vec<std::sync::Arc<dyn crate::ipfs::IpfsPinningProvider>> = vec![];
+        let rows = vec![crate::server::db::PinRequestRow {
+            id: 1,
+            task_id: "t".into(),
+            provider: "unknown".into(),
+            cid: "cid".into(),
+            request_id: "rid".into(),
+            status: "pinned".into(),
+            requestor: "u".into(),
+        }];
+        let err = delete_ipfs_pins(&providers, "t", &rows).await.unwrap_err();
+        assert!(err.contains("No provider instance"));
     }
 }
 
@@ -885,14 +1172,14 @@ mod recover_incomplete_jobs_tests {
                 task_id: "task1".to_string(),
                 requestor: "user1".to_string(),
                 tokens: json!([{"chain": "ethereum", "tokens": ["0x123"]}]),
-                storage_mode: "filesystem".to_string(),
+                storage_mode: "archive".to_string(),
                 archive_format: Some("zip".to_string()),
             },
             RecoveryJob {
                 task_id: "task2".to_string(),
                 requestor: "user2".to_string(),
                 tokens: json!([{"chain": "tezos", "tokens": ["KT1ABC"]}]),
-                storage_mode: "both".to_string(),
+                storage_mode: "full".to_string(),
                 archive_format: None,
             },
         ];
@@ -903,29 +1190,34 @@ mod recover_incomplete_jobs_tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 2);
 
-        // Check that jobs were enqueued
-        let job1 = rx.recv().await.unwrap();
-        let job2 = rx.recv().await.unwrap();
-
-        match (job1, job2) {
-            (
-                BackupJobOrShutdown::Job(JobType::Creation(job1)),
-                BackupJobOrShutdown::Job(JobType::Creation(job2)),
-            ) => {
-                assert_eq!(job1.task_id, "task1");
-                assert!(job1.force);
-                assert_eq!(job1.storage_mode, StorageMode::Filesystem);
-                assert_eq!(job1.archive_format, Some("zip".to_string()));
-                assert_eq!(job1.requestor, Some("user1".to_string()));
-
-                assert_eq!(job2.task_id, "task2");
-                assert!(job2.force);
-                assert_eq!(job2.storage_mode, StorageMode::Both);
-                assert_eq!(job2.archive_format, None);
-                assert_eq!(job2.requestor, Some("user2".to_string()));
+        // Check that jobs were enqueued (order-independent)
+        let j1 = rx.recv().await.unwrap();
+        let j2 = rx.recv().await.unwrap();
+        let mut seen_task1 = false;
+        let mut seen_task2 = false;
+        for job in [j1, j2] {
+            match job {
+                BackupJobOrShutdown::Job(JobType::Creation(job)) => {
+                    if job.task_id == "task1" {
+                        seen_task1 = true;
+                        assert!(job.force);
+                        assert_eq!(job.storage_mode, StorageMode::Archive);
+                        assert_eq!(job.archive_format, Some("zip".to_string()));
+                        assert_eq!(job.requestor, Some("user1".to_string()));
+                    } else if job.task_id == "task2" {
+                        seen_task2 = true;
+                        assert!(job.force);
+                        assert_eq!(job.storage_mode, StorageMode::Full);
+                        assert_eq!(job.archive_format, None);
+                        assert_eq!(job.requestor, Some("user2".to_string()));
+                    } else {
+                        panic!("Unexpected task id");
+                    }
+                }
+                _ => panic!("Expected backup job"),
             }
-            _ => panic!("Expected backup jobs"),
         }
+        assert!(seen_task1 && seen_task2);
     }
 
     #[tokio::test]
@@ -934,7 +1226,7 @@ mod recover_incomplete_jobs_tests {
             task_id: "task1".to_string(),
             requestor: "user1".to_string(),
             tokens: json!("invalid tokens"), // Invalid JSON for tokens
-            storage_mode: "filesystem".to_string(),
+            storage_mode: "archive".to_string(),
             archive_format: None,
         }];
         let mock_db = MockRecoveryDb::new(jobs);
@@ -981,11 +1273,11 @@ mod recover_incomplete_jobs_tests {
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 1);
 
-        // Should default to StorageMode::Both for invalid mode
+        // Should default to StorageMode::Full for invalid mode
         let job = rx.recv().await.unwrap();
         match job {
             BackupJobOrShutdown::Job(JobType::Creation(job)) => {
-                assert_eq!(job.storage_mode, StorageMode::Both);
+                assert_eq!(job.storage_mode, StorageMode::Full);
                 assert!(job.request.pin_on_ipfs); // Both includes IPFS
             }
             _ => panic!("Expected backup job"),

@@ -4,7 +4,7 @@ use axum::middleware::Next;
 use axum::{
     extract::Request,
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use subtle::ConstantTimeEq;
@@ -19,6 +19,12 @@ use crate::server::db::{PinInfo, ProtectionJobWithBackup, TokenWithPins};
 use crate::server::handlers::handle_backup::{__path_handle_backup, handle_backup};
 use crate::server::handlers::handle_backup_delete::{
     __path_handle_backup_delete, handle_backup_delete,
+};
+use crate::server::handlers::handle_backup_delete_archive::{
+    __path_handle_backup_delete_archive, handle_backup_delete_archive,
+};
+use crate::server::handlers::handle_backup_delete_pins::{
+    __path_handle_backup_delete_pins, handle_backup_delete_pins,
 };
 use crate::server::handlers::handle_backup_retry::{
     __path_handle_backup_retry, handle_backup_retry,
@@ -46,6 +52,8 @@ use crate::server::AppState;
         handle_download,
         handle_backup_retry,
         handle_backup_delete,
+        handle_backup_delete_archive,
+        handle_backup_delete_pins,
         handle_backups,
         handle_create_pins,
         handle_pins,
@@ -68,7 +76,7 @@ use crate::server::AppState;
 - **Purpose**: Enable users to request NFT backups and either download them to their local filesystem or pin them to IPFS
 - **Use Case**: Request a backup, track backup progress, view backup history, monitor failures
 
-### Pin Management (`/pins`) 
+### Pin Management (`/pins`)
 - **Purpose**: Enable users to request and manage IPFS pinning of NFTs
 - **Use Case**: Request a pin, check pin status, verify content is pinned",
         contact(
@@ -199,6 +207,14 @@ pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -
             post(handle_download_token),
         )
         .route("/v1/backups/:task_id/retry", post(handle_backup_retry))
+        .route(
+            "/v1/backups/:task_id/archive",
+            delete(handle_backup_delete_archive),
+        )
+        .route(
+            "/v1/backups/:task_id/pins",
+            delete(handle_backup_delete_pins),
+        )
         .route("/v1/pins", get(handle_pins).post(handle_create_pins))
         .with_state(state.clone());
 
