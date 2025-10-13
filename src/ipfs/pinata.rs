@@ -163,7 +163,8 @@ impl IpfsPinningProvider for PinataClient {
             id: parsed.data.id,
             cid: parsed.data.cid,
             status,
-            provider: self.provider_name().to_string(),
+            provider_type: self.provider_type().to_string(),
+            provider_url: self.provider_url().to_string(),
             metadata: match parsed.data.keyvalues {
                 serde_json::Value::Object(map) => Some(map),
                 _ => None,
@@ -212,7 +213,8 @@ impl IpfsPinningProvider for PinataClient {
                     id: job.id,
                     cid: job.cid,
                     status,
-                    provider: self.provider_name().to_string(),
+                    provider_type: self.provider_type().to_string(),
+                    provider_url: self.provider_url().to_string(),
                     metadata: match job.keyvalues {
                         serde_json::Value::Object(map) => Some(map),
                         _ => None,
@@ -257,8 +259,12 @@ impl IpfsPinningProvider for PinataClient {
         Ok(())
     }
 
-    fn provider_name(&self) -> &str {
+    fn provider_type(&self) -> &str {
         "pinata"
+    }
+
+    fn provider_url(&self) -> &str {
+        &self.base_url
     }
 }
 
@@ -295,7 +301,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = PinataClient::new(server.uri(), "test-token".to_string());
+        let base = server.uri();
+        let client = PinataClient::new(base.clone(), "test-token".to_string());
 
         let request = PinRequest {
             cid: "QmTestHash".to_string(),
@@ -308,7 +315,7 @@ mod tests {
         assert_eq!(response.id, "test-pin-id-123");
         assert_eq!(response.cid, "QmTestHash");
         assert_eq!(response.status, PinResponseStatus::Pinned);
-        assert_eq!(response.provider, "pinata");
+        assert_eq!(response.provider_url, base);
     }
 
     #[tokio::test]
@@ -330,7 +337,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = PinataClient::new(server.uri(), "test-token".to_string());
+        let base = server.uri();
+        let client = PinataClient::new(base.clone(), "test-token".to_string());
 
         let request = PinRequest {
             cid: "QmAnotherHash".to_string(),
@@ -343,7 +351,7 @@ mod tests {
         assert_eq!(response.id, "test-pin-id-456");
         assert_eq!(response.cid, "QmAnotherHash");
         assert_eq!(response.status, PinResponseStatus::Queued);
-        assert_eq!(response.provider, "pinata");
+        assert_eq!(response.provider_url, base);
     }
 
     #[tokio::test]
@@ -369,7 +377,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = PinataClient::new(server.uri(), "test-token".to_string());
+        let base = server.uri();
+        let client = PinataClient::new(base.clone(), "test-token".to_string());
         let request = PinRequest {
             cid: "QmLongNameHash".to_string(),
             name: Some(long_name),
@@ -380,7 +389,7 @@ mod tests {
         assert_eq!(response.cid, "QmLongNameHash");
         // Status mapping of prechecking -> Queued
         assert_eq!(response.status, PinResponseStatus::Queued);
-        assert_eq!(response.provider, "pinata");
+        assert_eq!(response.provider_url, base);
     }
 
     #[tokio::test]
@@ -527,7 +536,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        let client = PinataClient::new(server.uri(), "test-token".to_string());
+        let base = server.uri();
+        let client = PinataClient::new(base.clone(), "test-token".to_string());
 
         let pins = client.list_pins().await.unwrap();
 
@@ -535,10 +545,10 @@ mod tests {
         assert_eq!(pins[0].id, "pin-id-1");
         assert_eq!(pins[0].cid, "QmHash1");
         assert_eq!(pins[0].status, PinResponseStatus::Pinned); // "backfilled" maps to Pinned
-        assert_eq!(pins[0].provider, "pinata");
+        assert_eq!(pins[0].provider_url, base);
         assert_eq!(pins[1].id, "pin-id-2");
         assert_eq!(pins[1].status, PinResponseStatus::Queued); // "prechecking" maps to Queued
-        assert_eq!(pins[1].provider, "pinata");
+        assert_eq!(pins[1].provider_url, base);
     }
 
     #[tokio::test]
@@ -628,7 +638,7 @@ mod tests {
         assert_eq!(pin.id, "pin-id-2");
         assert_eq!(pin.cid, "QmHash2");
         assert_eq!(pin.status, PinResponseStatus::Queued); // "prechecking" maps to Queued
-        assert_eq!(pin.provider, "pinata");
+        assert_eq!(pin.provider_url, server.uri());
     }
 
     #[tokio::test]

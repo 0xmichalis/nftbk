@@ -94,7 +94,8 @@ fn filter_tokens_for_query(tokens: Vec<TokenWithPins>, q: &PinsQuery) -> Vec<Tok
                  "pins": [
                      {
                          "cid": "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG",
-                         "provider": "pinata",
+                         "provider_type": "pinata",
+                         "provider_url": "https://api.pinata.cloud",
                          "status": "pinned",
                          "created_at": "2024-01-01T00:00:00Z"
                      }
@@ -253,7 +254,8 @@ mod filter_tokens_for_query_tests {
                 pins: vec![
                     PinInfo {
                         cid: "QmTestHash1".to_string(),
-                        provider: "pinata".to_string(),
+                        provider_type: "pinata".to_string(),
+                        provider_url: "https://api.pinata.cloud".to_string(),
                         status: "pinned".to_string(),
                         created_at: DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z")
                             .unwrap()
@@ -261,7 +263,8 @@ mod filter_tokens_for_query_tests {
                     },
                     PinInfo {
                         cid: "QmTestHash2".to_string(),
-                        provider: "web3storage".to_string(),
+                        provider_type: "web3storage".to_string(),
+                        provider_url: "https://api.web3.storage".to_string(),
                         status: "pinning".to_string(),
                         created_at: DateTime::parse_from_rfc3339("2023-01-01T01:00:00Z")
                             .unwrap()
@@ -275,7 +278,8 @@ mod filter_tokens_for_query_tests {
                 token_id: "2".to_string(),
                 pins: vec![PinInfo {
                     cid: "QmTestHash3".to_string(),
-                    provider: "pinata".to_string(),
+                    provider_type: "pinata".to_string(),
+                    provider_url: "https://api.pinata.cloud".to_string(),
                     status: "pinned".to_string(),
                     created_at: DateTime::parse_from_rfc3339("2023-01-02T00:00:00Z")
                         .unwrap()
@@ -383,7 +387,8 @@ mod handle_pins_core_mockdb_tests {
                 pins: vec![
                     PinInfo {
                         cid: "QmTestHash1".to_string(),
-                        provider: "pinata".to_string(),
+                        provider_type: "pinata".to_string(),
+                        provider_url: "https://api.pinata.cloud".to_string(),
                         status: "pinned".to_string(),
                         created_at: DateTime::parse_from_rfc3339("2023-01-01T00:00:00Z")
                             .unwrap()
@@ -391,7 +396,8 @@ mod handle_pins_core_mockdb_tests {
                     },
                     PinInfo {
                         cid: "QmTestHash2".to_string(),
-                        provider: "web3storage".to_string(),
+                        provider_type: "web3storage".to_string(),
+                        provider_url: "https://api.web3.storage".to_string(),
                         status: "pinning".to_string(),
                         created_at: DateTime::parse_from_rfc3339("2023-01-01T01:00:00Z")
                             .unwrap()
@@ -405,7 +411,8 @@ mod handle_pins_core_mockdb_tests {
                 token_id: "2".to_string(),
                 pins: vec![PinInfo {
                     cid: "QmTestHash3".to_string(),
-                    provider: "pinata".to_string(),
+                    provider_type: "pinata".to_string(),
+                    provider_url: "https://api.pinata.cloud".to_string(),
                     status: "pinned".to_string(),
                     created_at: DateTime::parse_from_rfc3339("2023-01-02T00:00:00Z")
                         .unwrap()

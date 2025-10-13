@@ -73,9 +73,12 @@ pub struct PinInfo {
     /// Content Identifier (CID) of the pinned content
     #[schema(example = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")]
     pub cid: String,
-    /// IPFS provider where the content is pinned
+    /// IPFS provider type where the content is pinned
     #[schema(example = "pinata")]
-    pub provider: String,
+    pub provider_type: String,
+    /// IPFS provider URL where the content is pinned
+    #[schema(example = "https://api.pinata.cloud")]
+    pub provider_url: String,
     /// Pin status (pinned, pinning, failed, queued)
     #[schema(example = "pinned")]
     pub status: String,
@@ -104,7 +107,8 @@ pub struct TokenWithPins {
 pub struct PinRequestRow {
     pub id: i64,
     pub task_id: String,
-    pub provider: String,
+    pub provider_type: String,
+    pub provider_url: Option<String>,
     pub cid: String,
     pub request_id: String,
     pub status: String,
@@ -576,22 +580,25 @@ impl Db {
 
         // Insert pin requests and return generated IDs
         let mut query = String::from(
-            "INSERT INTO pin_requests (task_id, provider, cid, request_id, status, requestor) VALUES ",
+            "INSERT INTO pin_requests (task_id, provider_type, provider_url, cid, request_id, status, requestor) VALUES ",
         );
         let mut bind_count = 0;
         for i in 0..all_pin_responses.len() {
             if i > 0 {
                 query.push_str(", ");
             }
-            // 6 bind params per row
+            // 7 bind params per row
             let p1 = bind_count + 1;
             let p2 = bind_count + 2;
             let p3 = bind_count + 3;
             let p4 = bind_count + 4;
             let p5 = bind_count + 5;
             let p6 = bind_count + 6;
-            bind_count += 6;
-            query.push_str(&format!("(${p1}, ${p2}, ${p3}, ${p4}, ${p5}, ${p6})"));
+            let p7 = bind_count + 7;
+            bind_count += 7;
+            query.push_str(&format!(
+                "(${p1}, ${p2}, ${p3}, ${p4}, ${p5}, ${p6}, ${p7})"
+            ));
         }
         query.push_str(" RETURNING id");
 
@@ -606,7 +613,8 @@ impl Db {
             };
             q = q
                 .bind(task_id)
-                .bind(&pin_response.provider)
+                .bind(&pin_response.provider_type)
+                .bind(&pin_response.provider_url)
                 .bind(&pin_response.cid)
                 .bind(&pin_response.id)
                 .bind(status)
@@ -659,7 +667,7 @@ impl Db {
         let rows = sqlx::query_as!(
             PinRequestRow,
             r#"
-            SELECT id, task_id, provider, cid, request_id, status, requestor
+            SELECT id, task_id, provider_type, provider_url, cid, request_id, status, requestor
             FROM pin_requests
             WHERE task_id = $1
             ORDER BY id
@@ -723,7 +731,7 @@ impl Db {
             let token_rows = sqlx::query(
                 r#"
                 SELECT pt.chain, pt.contract_address, pt.token_id,
-                       pr.cid, pr.provider, pr.status, pt.created_at
+                       pr.cid, pr.provider_type, pr.provider_url, pr.status, pt.created_at
                 FROM pinned_tokens pt
                 JOIN pin_requests pr ON pr.id = pt.pin_request_id
                 WHERE pr.requestor = $1
@@ -749,12 +757,18 @@ impl Db {
                 contract_address = row.get("contract_address");
                 token_id = row.get("token_id");
                 let cid: String = row.get("cid");
-                let provider: String = row.get("provider");
+                let provider_type: String = row.get("provider_type");
+                let provider_url: String = row
+                    .try_get::<Option<String>, _>("provider_url")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
                 let status: String = row.get("status");
                 let created_at: DateTime<Utc> = row.get("created_at");
                 pins.push(PinInfo {
                     cid,
-                    provider,
+                    provider_type,
+                    provider_url,
                     status,
                     created_at,
                 });
@@ -780,7 +794,7 @@ impl Db {
     ) -> Result<Option<TokenWithPins>, sqlx::Error> {
         let query = r#"
             SELECT pt.chain, pt.contract_address, pt.token_id,
-                   pr.cid, pr.provider, pr.status, pt.created_at
+                   pr.cid, pr.provider_type, pr.provider_url, pr.status, pt.created_at
             FROM pinned_tokens pt
             JOIN pin_requests pr ON pr.id = pt.pin_request_id
             WHERE pr.requestor = $1
@@ -812,13 +826,20 @@ impl Db {
             token_contract_address = row.get("contract_address");
             token_token_id = row.get("token_id");
             let cid: String = row.get("cid");
-            let provider: String = row.get("provider");
+            let provider_type: String = row.get("provider_type");
+            // provider_url may be NULL for legacy rows; default to empty string for API stability
+            let provider_url: String = row
+                .try_get::<Option<String>, _>("provider_url")
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             let status: String = row.get("status");
             let created_at: DateTime<Utc> = row.get("created_at");
 
             pins.push(PinInfo {
                 cid,
-                provider,
+                provider_type,
+                provider_url,
                 status,
                 created_at,
             });
@@ -838,7 +859,7 @@ impl Db {
         let rows = sqlx::query_as!(
             PinRequestRow,
             r#"
-            SELECT id, task_id, provider, cid, request_id, status, requestor
+            SELECT id, task_id, provider_type, provider_url, cid, request_id, status, requestor
             FROM pin_requests
             WHERE status IN ('queued', 'pinning')
             ORDER BY id
