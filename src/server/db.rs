@@ -407,12 +407,12 @@ impl Db {
         let row = sqlx::query(
             r#"
             SELECT 
-                pj.task_id, pj.created_at, pj.updated_at, pj.requestor, pj.nft_count, 
-                pj.tokens, pj.status, pj.error_log, pj.fatal_error, pj.storage_mode,
-                pj.deleted_at, br.archive_format, br.expires_at
-            FROM backup_tasks pj
-            LEFT JOIN archive_requests br ON pj.task_id = br.task_id
-            WHERE pj.task_id = $1
+                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
+                b.tokens, b.status, b.error_log, b.fatal_error, b.storage_mode,
+                b.deleted_at, br.archive_format, br.expires_at
+            FROM backup_tasks b
+            LEFT JOIN archive_requests br ON b.task_id = br.task_id
+            WHERE b.task_id = $1
             "#,
         )
         .bind(task_id)
@@ -512,10 +512,10 @@ impl Db {
         let recs = sqlx::query_as!(
             ExpiredBackup,
             r#"
-            SELECT pj.task_id, br.archive_format 
-            FROM backup_tasks pj
-            JOIN archive_requests br ON pj.task_id = br.task_id
-            WHERE br.expires_at IS NOT NULL AND br.expires_at < NOW() AND pj.status != 'expired'
+            SELECT b.task_id, br.archive_format 
+            FROM backup_tasks b
+            JOIN archive_requests br ON b.task_id = br.task_id
+            WHERE br.expires_at IS NOT NULL AND br.expires_at < NOW() AND b.status != 'expired'
             "#
         )
         .fetch_all(&self.pool)
