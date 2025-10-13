@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT status FROM protection_jobs WHERE task_id = $1",
+  "query": "SELECT status FROM backup_tasks WHERE task_id = $1",
   "describe": {
     "columns": [
       {
@@ -18,5 +18,5 @@
       false
     ]
   },
-  "hash": "d887db5962374aeee396eb5fe2960a4514691dead23427ccedbce234c7d72542"
+  "hash": "336786604000af39418e59128c613d4d211da9e133c838fd083b25f941e3d109"
 }

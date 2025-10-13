@@ -3,13 +3,12 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
-// no direct pin deletion in handler; enqueue job to workers
 use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::AppState;
 
-/// Delete only the IPFS pins for a backup job.
+/// Delete only the IPFS pins for a backup task.
 /// If the backup has storage mode "full", it will update the storage mode to "archive".
 /// If the backup has storage mode "ipfs", it will delete the entire backup.
 /// If the backup has storage mode "archive", it will return an error.
@@ -36,21 +35,18 @@ pub async fn handle_backup_delete_pins(
     Path(task_id): Path<String>,
     Extension(requestor): Extension<Option<String>>,
 ) -> impl IntoResponse {
-    handle_backup_delete_pins_core(&*state.db, &state.backup_job_sender, &task_id, requestor).await
+    handle_backup_delete_pins_core(&*state.db, &state.backup_task_sender, &task_id, requestor).await
 }
 
 // Minimal trait to mock DB calls
 pub trait DeletePinsDb {
-    fn get_protection_job<'a>(
+    fn get_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<
-                        Option<crate::server::db::ProtectionJobWithBackup>,
-                        sqlx::Error,
-                    >,
+                    Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
                 > + Send
                 + 'a,
         >,
@@ -66,28 +62,25 @@ pub trait DeletePinsDb {
                 + 'a,
         >,
     >;
-    fn delete_protection_job<'a>(
+    fn delete_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>;
 }
 
 impl DeletePinsDb for crate::server::db::Db {
-    fn get_protection_job<'a>(
+    fn get_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<
-                        Option<crate::server::db::ProtectionJobWithBackup>,
-                        sqlx::Error,
-                    >,
+                    Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
                 > + Send
                 + 'a,
         >,
     > {
-        Box::pin(async move { crate::server::db::Db::get_protection_job(self, task_id).await })
+        Box::pin(async move { crate::server::db::Db::get_backup_task(self, task_id).await })
     }
     fn get_pin_requests_by_task_id<'a>(
         &'a self,
@@ -104,31 +97,28 @@ impl DeletePinsDb for crate::server::db::Db {
             async move { crate::server::db::Db::get_pin_requests_by_task_id(self, task_id).await },
         )
     }
-    fn delete_protection_job<'a>(
+    fn delete_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
     {
-        Box::pin(async move { crate::server::db::Db::delete_protection_job(self, task_id).await })
+        Box::pin(async move { crate::server::db::Db::delete_backup_task(self, task_id).await })
     }
 }
 
 impl DeletePinsDb for std::sync::Arc<crate::server::db::Db> {
-    fn get_protection_job<'a>(
+    fn get_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
         Box<
             dyn std::future::Future<
-                    Output = Result<
-                        Option<crate::server::db::ProtectionJobWithBackup>,
-                        sqlx::Error,
-                    >,
+                    Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
                 > + Send
                 + 'a,
         >,
     > {
-        Box::pin(async move { crate::server::db::Db::get_protection_job(self, task_id).await })
+        Box::pin(async move { crate::server::db::Db::get_backup_task(self, task_id).await })
     }
     fn get_pin_requests_by_task_id<'a>(
         &'a self,
@@ -145,18 +135,18 @@ impl DeletePinsDb for std::sync::Arc<crate::server::db::Db> {
             async move { crate::server::db::Db::get_pin_requests_by_task_id(self, task_id).await },
         )
     }
-    fn delete_protection_job<'a>(
+    fn delete_backup_task<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
     {
-        Box::pin(async move { crate::server::db::Db::delete_protection_job(self, task_id).await })
+        Box::pin(async move { crate::server::db::Db::delete_backup_task(self, task_id).await })
     }
 }
 
 async fn handle_backup_delete_pins_core<DB: DeletePinsDb + ?Sized>(
     db: &DB,
-    backup_job_sender: &tokio::sync::mpsc::Sender<crate::server::BackupJobOrShutdown>,
+    backup_task_sender: &tokio::sync::mpsc::Sender<crate::server::BackupTaskOrShutdown>,
     task_id: &str,
     requestor: Option<String>,
 ) -> axum::response::Response {
@@ -173,7 +163,7 @@ async fn handle_backup_delete_pins_core<DB: DeletePinsDb + ?Sized>(
     };
 
     // Check if the task exists and get its metadata
-    let meta = match db.get_protection_job(task_id).await {
+    let meta = match db.get_backup_task(task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
             let problem = ProblemJson::from_status(
@@ -223,31 +213,28 @@ async fn handle_backup_delete_pins_core<DB: DeletePinsDb + ?Sized>(
         return problem.into_response();
     }
 
-    // Enqueue deletion job with IPFS scope and return 202
-    let deletion_job = crate::server::DeletionJob {
+    // Enqueue deletion task with IPFS scope and return 202
+    let deletion_task = crate::server::DeletionTask {
         task_id: task_id.to_string(),
         requestor: Some(requestor_str),
         scope: crate::server::StorageMode::Ipfs,
     };
-    if let Err(e) = backup_job_sender
-        .send(crate::server::BackupJobOrShutdown::Job(
-            crate::server::JobType::Deletion(deletion_job),
+    if let Err(e) = backup_task_sender
+        .send(crate::server::BackupTaskOrShutdown::Task(
+            crate::server::TaskType::Deletion(deletion_task),
         ))
         .await
     {
-        error!(
-            "Failed to enqueue pins-only deletion job for task {}: {}",
-            task_id, e
-        );
+        error!("Failed to enqueue pins-only deletion for task {task_id}: {e}",);
         let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
-            Some("Failed to enqueue deletion job".to_string()),
+            Some("Failed to enqueue deletion task".to_string()),
             Some(format!("/v1/backups/{}/pins", task_id)),
         );
         return problem.into_response();
     }
 
-    info!("Queued pins-only deletion job for backup {}", task_id);
+    info!("Queued pins-only deletion for task {}", task_id);
     (StatusCode::ACCEPTED, ()).into_response()
 }
 
@@ -259,7 +246,7 @@ mod handle_backup_delete_pins_core_tests {
 
     #[derive(Clone, Default)]
     struct MockDb {
-        meta: Option<crate::server::db::ProtectionJobWithBackup>,
+        meta: Option<crate::server::db::BackupTask>,
         get_error: bool,
         delete_error: bool,
         pin_requests: Vec<crate::server::db::PinRequestRow>,
@@ -267,16 +254,13 @@ mod handle_backup_delete_pins_core_tests {
     }
 
     impl DeletePinsDb for MockDb {
-        fn get_protection_job<'a>(
+        fn get_backup_task<'a>(
             &'a self,
             _task_id: &'a str,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<
-                        Output = Result<
-                            Option<crate::server::db::ProtectionJobWithBackup>,
-                            sqlx::Error,
-                        >,
+                        Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
                     > + Send
                     + 'a,
             >,
@@ -305,7 +289,7 @@ mod handle_backup_delete_pins_core_tests {
             let pin_requests = self.pin_requests.clone();
             Box::pin(async move { Ok(pin_requests) })
         }
-        fn delete_protection_job<'a>(
+        fn delete_backup_task<'a>(
             &'a self,
             task_id: &'a str,
         ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
@@ -324,13 +308,9 @@ mod handle_backup_delete_pins_core_tests {
         }
     }
 
-    fn sample_meta(
-        owner: &str,
-        status: &str,
-        storage_mode: &str,
-    ) -> crate::server::db::ProtectionJobWithBackup {
+    fn sample_meta(owner: &str, status: &str, storage_mode: &str) -> crate::server::db::BackupTask {
         use chrono::{TimeZone, Utc};
-        crate::server::db::ProtectionJobWithBackup {
+        crate::server::db::BackupTask {
             task_id: "t1".to_string(),
             created_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
             updated_at: Utc.timestamp_opt(1_700_000_100, 0).unwrap(),
@@ -442,7 +422,7 @@ mod handle_backup_delete_pins_core_tests {
     }
 
     #[tokio::test]
-    async fn deletes_ipfs_job_on_success() {
+    async fn deletes_ipfs_task_on_success() {
         let db = MockDb {
             meta: Some(sample_meta("did:me", "done", "ipfs")),
             get_error: false,
@@ -456,13 +436,13 @@ mod handle_backup_delete_pins_core_tests {
             .into_response();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
 
-        // Verify that a deletion job was queued
-        let job = rx.try_recv();
-        assert!(job.is_ok());
+        // Verify that a deletion task was queued
+        let task = rx.try_recv();
+        assert!(task.is_ok());
     }
 
     #[tokio::test]
-    async fn updates_storage_mode_for_full_job() {
+    async fn updates_storage_mode_for_full_task() {
         let db = MockDb {
             meta: Some(sample_meta("did:me", "done", "full")),
             get_error: false,
@@ -476,8 +456,8 @@ mod handle_backup_delete_pins_core_tests {
             .into_response();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
 
-        // Verify that a deletion job was queued
-        let job = rx.try_recv();
-        assert!(job.is_ok());
+        // Verify that a deletion task was queued
+        let task = rx.try_recv();
+        assert!(task.is_ok());
     }
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "DELETE FROM protection_jobs WHERE task_id = $1",
+  "query": "DELETE FROM backup_tasks WHERE task_id = $1",
   "describe": {
     "columns": [],
     "parameters": {
@@ -10,5 +10,5 @@
     },
     "nullable": []
   },
-  "hash": "30c4c6d435c69f2dff21b1c62875b5dd50e6350a772b3aa615e8adfc83729bcc"
+  "hash": "4887bcbbf31912905c89e393b8f778a4fd45be39e064f44d89ea685beda3b3e4"
 }
