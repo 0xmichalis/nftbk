@@ -638,7 +638,7 @@ mod tests {
         assert_eq!(pin.id, "pin-id-2");
         assert_eq!(pin.cid, "QmHash2");
         assert_eq!(pin.status, PinResponseStatus::Queued); // "prechecking" maps to Queued
-        assert_eq!(pin.provider_type, "pinata");
+        assert_eq!(pin.provider_url, server.uri());
     }
 
     #[tokio::test]

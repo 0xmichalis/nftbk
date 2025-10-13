@@ -758,7 +758,11 @@ impl Db {
                 token_id = row.get("token_id");
                 let cid: String = row.get("cid");
                 let provider_type: String = row.get("provider_type");
-                let provider_url: String = row.get("provider_url");
+                let provider_url: String = row
+                    .try_get::<Option<String>, _>("provider_url")
+                    .ok()
+                    .flatten()
+                    .unwrap_or_default();
                 let status: String = row.get("status");
                 let created_at: DateTime<Utc> = row.get("created_at");
                 pins.push(PinInfo {
@@ -823,7 +827,12 @@ impl Db {
             token_token_id = row.get("token_id");
             let cid: String = row.get("cid");
             let provider_type: String = row.get("provider_type");
-            let provider_url: String = row.get("provider_url");
+            // provider_url may be NULL for legacy rows; default to empty string for API stability
+            let provider_url: String = row
+                .try_get::<Option<String>, _>("provider_url")
+                .ok()
+                .flatten()
+                .unwrap_or_default();
             let status: String = row.get("status");
             let created_at: DateTime<Utc> = row.get("created_at");
 
