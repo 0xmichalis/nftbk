@@ -50,8 +50,9 @@ pub struct PinataListPinsResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct PinataListData {
-    pub jobs: Vec<PinataPinJob>,
     #[serde(default)]
+    pub jobs: Option<Vec<PinataPinJob>>,
+    #[serde(default, alias = "nextPageToken")]
     pub next_page_token: Option<String>,
 }
 
@@ -206,6 +207,7 @@ impl IpfsPinningProvider for PinataClient {
         let pins = parsed
             .data
             .jobs
+            .unwrap_or_default()
             .into_iter()
             .map(|job| {
                 let status = Self::convert_status(&job.status, &job.cid);
@@ -573,6 +575,48 @@ mod tests {
         let pins = client.list_pins().await.unwrap();
 
         assert_eq!(pins.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_pinata_list_pins_null_jobs_and_camelcase_next_page_token() {
+        let server = MockServer::start().await;
+
+        let expected_response = serde_json::json!({
+            "data": {
+                "jobs": null,
+                "nextPageToken": null
+            }
+        });
+
+        Mock::given(method("GET"))
+            .and(path("/v3/files/public/pin_by_cid"))
+            .and(header("authorization", "Bearer test-token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(expected_response))
+            .mount(&server)
+            .await;
+
+        let client = PinataClient::new(server.uri(), "test-token".to_string());
+
+        let pins = client.list_pins().await.unwrap();
+
+        assert_eq!(pins.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_pinata_next_page_token_camelcase_is_read() {
+        // Directly test deserialization to verify alias works
+        let body = serde_json::json!({
+            "data": {
+                "jobs": null,
+                "nextPageToken": "token-xyz"
+            }
+        })
+        .to_string();
+
+        let parsed: PinataListPinsResponse = serde_json::from_str(&body).unwrap();
+        assert_eq!(parsed.data.next_page_token, Some("token-xyz".to_string()));
+        // And jobs should be None which we treat as empty when consuming
+        assert!(parsed.data.jobs.is_none());
     }
 
     #[tokio::test]
