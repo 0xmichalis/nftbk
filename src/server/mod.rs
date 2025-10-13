@@ -662,7 +662,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
             info!("Backup {} ready", task_id);
         }
         StorageMode::Ipfs => {
-            // IPFS-only mode: no archive operations needed
+            // IPFS-only mode: no filesystem operations needed
             let _ = db.update_protection_job_status(&task_id, "done").await;
             info!("IPFS pinning for {} complete", task_id);
         }
