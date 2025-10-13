@@ -588,7 +588,7 @@ async fn run_backup_job_inner<DB: BackupJobDb + ?Sized>(state: AppState, job: Ba
     // Handle archiving based on storage mode
     match storage_mode {
         StorageMode::Archive | StorageMode::Full => {
-            // We have an archive output path
+            // We have a filesystem output path
             let out_path = output_path.as_ref().unwrap();
 
             // Sync all files and directories to disk before archiving
