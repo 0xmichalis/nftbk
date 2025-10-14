@@ -574,7 +574,11 @@ mod tests {
 
     #[async_trait::async_trait]
     impl BackupTaskDb for MockDb {
-        async fn clear_backup_errors(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+        async fn clear_backup_errors(
+            &self,
+            _task_id: &str,
+            _scope: &str,
+        ) -> Result<(), sqlx::Error> {
             Ok(())
         }
 

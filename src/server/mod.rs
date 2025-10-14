@@ -239,7 +239,7 @@ pub async fn check_backup_on_disk(
 // Trait for database operations needed by backup and deletion tasks
 #[async_trait::async_trait]
 pub trait BackupTaskDb {
-    async fn clear_backup_errors(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn clear_backup_errors(&self, task_id: &str, scope: &str) -> Result<(), sqlx::Error>;
     async fn set_backup_error(&self, task_id: &str, error: &str) -> Result<(), sqlx::Error>;
     async fn insert_pin_requests_with_tokens(
         &self,
@@ -307,8 +307,8 @@ pub trait BackupTaskDb {
 // Implement BackupTaskDb trait for the real Db
 #[async_trait::async_trait]
 impl BackupTaskDb for Db {
-    async fn clear_backup_errors(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::clear_backup_errors(self, task_id).await
+    async fn clear_backup_errors(&self, task_id: &str, scope: &str) -> Result<(), sqlx::Error> {
+        Db::clear_backup_errors(self, task_id, scope).await
     }
 
     async fn set_backup_error(&self, task_id: &str, error: &str) -> Result<(), sqlx::Error> {

@@ -179,7 +179,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
 
     // If force is set, clean up the error log if it exists
     if force {
-        let _ = db.clear_backup_errors(&task_id).await;
+        let _ = db.clear_backup_errors(&task_id, scope.as_str()).await;
     }
 
     // Prepare backup config
@@ -323,7 +323,11 @@ mod persist_error_logs_tests {
 
     #[async_trait::async_trait]
     impl BackupTaskDb for MockDb {
-        async fn clear_backup_errors(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+        async fn clear_backup_errors(
+            &self,
+            _task_id: &str,
+            _scope: &str,
+        ) -> Result<(), sqlx::Error> {
             Ok(())
         }
         async fn set_backup_error(&self, _task_id: &str, _error: &str) -> Result<(), sqlx::Error> {
