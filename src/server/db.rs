@@ -413,26 +413,30 @@ impl Db {
         Ok(())
     }
 
-    pub async fn clear_backup_errors(&self, task_id: &str) -> Result<(), sqlx::Error> {
+    pub async fn clear_backup_errors(&self, task_id: &str, scope: &str) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
+        // Clear archive errors if scope includes archive
         sqlx::query(
             r#"
             UPDATE archive_requests
             SET error_log = NULL, fatal_error = NULL
-            WHERE task_id = $1
+            WHERE task_id = $1 AND ($2 IN ('archive', 'full'))
             "#,
         )
         .bind(task_id)
+        .bind(scope)
         .execute(&mut *tx)
         .await?;
+        // Clear IPFS errors if scope includes ipfs
         sqlx::query(
             r#"
             UPDATE pin_requests
             SET error_log = NULL
-            WHERE task_id = $1
+            WHERE task_id = $1 AND ($2 IN ('ipfs', 'full'))
             "#,
         )
         .bind(task_id)
+        .bind(scope)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
