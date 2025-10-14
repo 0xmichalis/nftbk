@@ -38,6 +38,24 @@ impl<W: Write, H: Write> Write for TeeWriter<W, H> {
     }
 }
 
+pub fn sync_files(files_written: &[std::path::PathBuf]) {
+    let mut synced_dirs = std::collections::HashSet::new();
+    for file in files_written {
+        if file.is_file() {
+            if let Ok(f) = std::fs::File::open(file) {
+                let _ = f.sync_all();
+            }
+        }
+        if let Some(parent) = file.parent() {
+            if synced_dirs.insert(parent.to_path_buf()) {
+                if let Ok(dir) = std::fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+            }
+        }
+    }
+}
+
 pub fn zip_backup(
     out_path: &StdPath,
     zip_path: &StdPath,
