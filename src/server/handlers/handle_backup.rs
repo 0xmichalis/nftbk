@@ -539,10 +539,9 @@ mod handle_backup_core_tests {
             Ok(())
         }
 
-        async fn insert_pin_requests_with_tokens(
+        async fn insert_pins_with_tokens(
             &self,
             _task_id: &str,
-            _requestor: &str,
             _token_pin_mappings: &[crate::TokenPinMapping],
         ) -> Result<(), sqlx::Error> {
             Ok(())

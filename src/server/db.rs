@@ -116,7 +116,7 @@ pub struct TokenWithPins {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PinRequestRow {
+pub struct PinRow {
     pub id: i64,
     pub task_id: String,
     pub provider_type: String,
@@ -124,9 +124,7 @@ pub struct PinRequestRow {
     pub cid: String,
     pub request_id: String,
     pub pin_status: String,
-    pub requestor: String,
-    pub task_status: Option<String>,
-    pub fatal_error: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone)]
@@ -230,6 +228,21 @@ impl Db {
             }
         }
 
+        // Insert into pin_requests if storage mode includes IPFS
+        if storage_mode == "ipfs" || storage_mode == "full" {
+            sqlx::query(
+                r#"
+                INSERT INTO pin_requests (task_id, status)
+                VALUES ($1, 'in_progress')
+                ON CONFLICT (task_id) DO UPDATE SET
+                    status = COALESCE(pin_requests.status, 'in_progress')
+                "#,
+            )
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
         tx.commit().await?;
         Ok(())
     }
@@ -294,7 +307,7 @@ impl Db {
         Ok(())
     }
 
-    /// Update IPFS non-fatal error log for all pin_requests of a task where it's currently NULL
+    /// Update IPFS non-fatal error log for the task-level pin_requests record
     pub async fn update_ipfs_task_error_log(
         &self,
         task_id: &str,
@@ -304,7 +317,7 @@ impl Db {
             r#"
             UPDATE pin_requests
             SET error_log = $2
-            WHERE task_id = $1 AND error_log IS NULL
+            WHERE task_id = $1
             "#,
         )
         .bind(task_id)
@@ -314,7 +327,7 @@ impl Db {
         Ok(())
     }
 
-    /// Update IPFS task-level status for all pin_requests of a task (alias for clarity)
+    /// Update IPFS task-level status for the pin_requests record
     pub async fn update_pin_request_status(
         &self,
         task_id: &str,
@@ -323,7 +336,7 @@ impl Db {
         sqlx::query(
             r#"
             UPDATE pin_requests
-            SET task_status = $2
+            SET status = $2
             WHERE task_id = $1
             "#,
         )
@@ -512,23 +525,13 @@ impl Db {
                 b.tokens, ar.status as archive_status, ar.fatal_error, b.storage_mode,
                 b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
-                (
-                  SELECT MIN(pr.task_status) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.task_status IS NOT NULL
-                ) as ipfs_status,
-                (
-                  SELECT STRING_AGG(pr.error_log, E'\n')
-                  FROM pin_requests pr
-                  WHERE pr.task_id = b.task_id AND pr.error_log IS NOT NULL
-                ) as ipfs_error_log,
-                (
-                  SELECT MIN(pr.fatal_error) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.fatal_error IS NOT NULL
-                ) as ipfs_fatal_error,
-                COALESCE(
-                    (SELECT MIN(pr.deleted_at) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.deleted_at IS NOT NULL),
-                    NULL
-                ) as pins_deleted_at
+                pr.status as ipfs_status,
+                pr.error_log as ipfs_error_log,
+                pr.fatal_error as ipfs_fatal_error,
+                pr.deleted_at as pins_deleted_at
             FROM backup_tasks b
             LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
+            LEFT JOIN pin_requests pr ON b.task_id = pr.task_id
             WHERE b.task_id = $1
             "#,
         )
@@ -592,23 +595,13 @@ impl Db {
                 {tokens_field} ar.status as archive_status, ar.fatal_error, b.storage_mode,
                 b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
-                (
-                  SELECT MIN(pr.task_status) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.task_status IS NOT NULL
-                ) as ipfs_status,
-                (
-                  SELECT STRING_AGG(pr.error_log, E'\n')
-                  FROM pin_requests pr
-                  WHERE pr.task_id = b.task_id AND pr.error_log IS NOT NULL
-                ) as ipfs_error_log,
-                (
-                  SELECT MIN(pr.fatal_error) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.fatal_error IS NOT NULL
-                ) as ipfs_fatal_error,
-                COALESCE(
-                    (SELECT MIN(pr.deleted_at) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.deleted_at IS NOT NULL),
-                    NULL
-                ) as pins_deleted_at
+                pr.status as ipfs_status,
+                pr.error_log as ipfs_error_log,
+                pr.fatal_error as ipfs_fatal_error,
+                pr.deleted_at as pins_deleted_at
             FROM backup_tasks b
             LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
+            LEFT JOIN pin_requests pr ON b.task_id = pr.task_id
             WHERE b.requestor = $1
             ORDER BY b.created_at DESC
             LIMIT $2 OFFSET $3
@@ -700,20 +693,12 @@ impl Db {
                 b.tokens, COALESCE(ar.status, 'in_progress') as status, ar.status as archive_status, ar.fatal_error, b.storage_mode,
                 b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
-                (
-                  SELECT MIN(pr.task_status) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.task_status IS NOT NULL
-                ) as ipfs_status,
-                (
-                  SELECT STRING_AGG(pr.error_log, E'\n')
-                  FROM pin_requests pr
-                  WHERE pr.task_id = b.task_id AND pr.error_log IS NOT NULL
-                ) as ipfs_error_log,
-                COALESCE(
-                    (SELECT MIN(pr.deleted_at) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.deleted_at IS NOT NULL),
-                    NULL
-                ) as pins_deleted_at
+                pr.status as ipfs_status,
+                pr.error_log as ipfs_error_log,
+                pr.deleted_at as pins_deleted_at
             FROM backup_tasks b
             LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
+            LEFT JOIN pin_requests pr ON b.task_id = pr.task_id
             WHERE COALESCE(ar.status, 'in_progress') = 'in_progress'
             ORDER BY b.created_at ASC
             "#,
@@ -754,11 +739,10 @@ impl Db {
         Ok(recs)
     }
 
-    /// Insert pin requests and their associated tokens in a single atomic transaction
-    pub async fn insert_pin_requests_with_tokens(
+    /// Insert pins and their associated tokens in a single atomic transaction
+    pub async fn insert_pins_with_tokens(
         &self,
         task_id: &str,
-        requestor: &str,
         token_pin_mappings: &[crate::TokenPinMapping],
     ) -> Result<(), sqlx::Error> {
         if token_pin_mappings.is_empty() {
@@ -789,27 +773,24 @@ impl Db {
         // Start a transaction for atomicity
         let mut tx = self.pool.begin().await?;
 
-        // Insert pin requests and return generated IDs
+        // Insert pins and return generated IDs
         let mut query = String::from(
-            "INSERT INTO pin_requests (task_id, provider_type, provider_url, cid, request_id, pin_status, requestor) VALUES ",
+            "INSERT INTO pins (task_id, provider_type, provider_url, cid, request_id, pin_status) VALUES ",
         );
         let mut bind_count = 0;
         for i in 0..all_pin_responses.len() {
             if i > 0 {
                 query.push_str(", ");
             }
-            // 7 bind params per row
+            // 6 bind params per row
             let p1 = bind_count + 1;
             let p2 = bind_count + 2;
             let p3 = bind_count + 3;
             let p4 = bind_count + 4;
             let p5 = bind_count + 5;
             let p6 = bind_count + 6;
-            let p7 = bind_count + 7;
-            bind_count += 7;
-            query.push_str(&format!(
-                "(${p1}, ${p2}, ${p3}, ${p4}, ${p5}, ${p6}, ${p7})"
-            ));
+            bind_count += 6;
+            query.push_str(&format!("(${p1}, ${p2}, ${p3}, ${p4}, ${p5}, ${p6})"));
         }
         query.push_str(" RETURNING id");
 
@@ -828,18 +809,17 @@ impl Db {
                 .bind(&pin_response.provider_url)
                 .bind(&pin_response.cid)
                 .bind(&pin_response.id)
-                .bind(status)
-                .bind(requestor);
+                .bind(status);
         }
         let rows = q.fetch_all(&mut *tx).await?;
 
         // Extract generated IDs
-        let pin_request_ids: Vec<i64> = rows.iter().map(|row| row.get("id")).collect();
+        let pin_ids: Vec<i64> = rows.iter().map(|row| row.get("id")).collect();
 
-        // Insert pinned tokens using the generated pin_request_ids
+        // Insert pinned tokens using the generated pin_ids
         if !all_token_data.is_empty() {
             let mut query = String::from(
-                "INSERT INTO pinned_tokens (pin_request_id, chain, contract_address, token_id) VALUES ",
+                "INSERT INTO pinned_tokens (pin_id, chain, contract_address, token_id) VALUES ",
             );
             let mut bind_count = 0;
             for i in 0..all_token_data.len() {
@@ -857,7 +837,7 @@ impl Db {
             let mut q = sqlx::query(&query);
             for (index, chain, contract_address, token_id) in &all_token_data {
                 q = q
-                    .bind(pin_request_ids[*index])
+                    .bind(pin_ids[*index])
                     .bind(chain)
                     .bind(contract_address)
                     .bind(token_id);
@@ -870,15 +850,12 @@ impl Db {
         Ok(())
     }
 
-    /// Get all pin requests for a specific backup task
-    pub async fn get_pin_requests_by_task_id(
-        &self,
-        task_id: &str,
-    ) -> Result<Vec<PinRequestRow>, sqlx::Error> {
+    /// Get all pins for a specific backup task
+    pub async fn get_pins_by_task_id(&self, task_id: &str) -> Result<Vec<PinRow>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, task_id, provider_type, provider_url, cid, request_id, pin_status, requestor, task_status, fatal_error
-            FROM pin_requests
+            SELECT id, task_id, provider_type, provider_url, cid, request_id, pin_status, created_at
+            FROM pins
             WHERE task_id = $1
             ORDER BY id
             "#,
@@ -889,7 +866,7 @@ impl Db {
 
         Ok(rows
             .into_iter()
-            .map(|row| PinRequestRow {
+            .map(|row| PinRow {
                 id: row.get("id"),
                 task_id: row.get("task_id"),
                 provider_type: row.get("provider_type"),
@@ -900,15 +877,7 @@ impl Db {
                 cid: row.get("cid"),
                 request_id: row.get("request_id"),
                 pin_status: row.get("pin_status"),
-                requestor: row.get("requestor"),
-                task_status: row
-                    .try_get::<Option<String>, _>("task_status")
-                    .ok()
-                    .flatten(),
-                fatal_error: row
-                    .try_get::<Option<String>, _>("fatal_error")
-                    .ok()
-                    .flatten(),
+                created_at: row.get("created_at"),
             })
             .collect())
     }
@@ -921,40 +890,42 @@ impl Db {
         offset: i64,
     ) -> Result<(Vec<TokenWithPins>, u32), sqlx::Error> {
         // Total distinct tokens for this requestor
-        let total_row = sqlx::query!(
+        let total_row = sqlx::query(
             r#"
             SELECT COUNT(*) as count
             FROM (
                 SELECT DISTINCT pt.chain, pt.contract_address, pt.token_id
                 FROM pinned_tokens pt
-                JOIN pin_requests pr ON pr.id = pt.pin_request_id
-                WHERE pr.requestor = $1
+                JOIN pins p ON p.id = pt.pin_id
+                JOIN backup_tasks bt ON bt.task_id = p.task_id
+                WHERE bt.requestor = $1
             ) t
             "#,
-            requestor
         )
+        .bind(requestor)
         .fetch_one(&self.pool)
         .await?;
-        let total: u32 = (total_row.count.unwrap_or(0) as i64).max(0) as u32;
+        let total: u32 = (total_row.get::<i64, _>("count")).max(0) as u32;
 
         // Page of distinct tokens ordered by most recent pin time
-        let rows = sqlx::query!(
+        let rows = sqlx::query(
             r#"
             SELECT t.chain, t.contract_address, t.token_id
             FROM (
                 SELECT pt.chain, pt.contract_address, pt.token_id, MAX(pt.created_at) AS last_created
                 FROM pinned_tokens pt
-                JOIN pin_requests pr ON pr.id = pt.pin_request_id
-                WHERE pr.requestor = $1
+                JOIN pins p ON p.id = pt.pin_id
+                JOIN backup_tasks bt ON bt.task_id = p.task_id
+                WHERE bt.requestor = $1
                 GROUP BY pt.chain, pt.contract_address, pt.token_id
             ) t
             ORDER BY last_created DESC
             LIMIT $2 OFFSET $3
             "#,
-            requestor,
-            limit,
-            offset
         )
+        .bind(requestor)
+        .bind(limit)
+        .bind(offset)
         .fetch_all(&self.pool)
         .await?;
 
@@ -964,10 +935,11 @@ impl Db {
             let token_rows = sqlx::query(
                 r#"
                 SELECT pt.chain, pt.contract_address, pt.token_id,
-                       pr.cid, pr.provider_type, pr.provider_url, pr.pin_status, pt.created_at
+                       p.cid, p.provider_type, p.provider_url, p.pin_status, pt.created_at
                 FROM pinned_tokens pt
-                JOIN pin_requests pr ON pr.id = pt.pin_request_id
-                WHERE pr.requestor = $1
+                JOIN pins p ON p.id = pt.pin_id
+                JOIN backup_tasks bt ON bt.task_id = p.task_id
+                WHERE bt.requestor = $1
                   AND pt.chain = $2
                   AND pt.contract_address = $3
                   AND pt.token_id = $4
@@ -975,9 +947,9 @@ impl Db {
                 "#,
             )
             .bind(requestor)
-            .bind(&r.chain)
-            .bind(&r.contract_address)
-            .bind(&r.token_id)
+            .bind(r.get::<String, _>("chain"))
+            .bind(r.get::<String, _>("contract_address"))
+            .bind(r.get::<String, _>("token_id"))
             .fetch_all(&self.pool)
             .await?;
 
@@ -1027,10 +999,11 @@ impl Db {
     ) -> Result<Option<TokenWithPins>, sqlx::Error> {
         let query = r#"
             SELECT pt.chain, pt.contract_address, pt.token_id,
-                   pr.cid, pr.provider_type, pr.provider_url, pr.pin_status, pt.created_at
+                   p.cid, p.provider_type, p.provider_url, p.pin_status, pt.created_at
             FROM pinned_tokens pt
-            JOIN pin_requests pr ON pr.id = pt.pin_request_id
-            WHERE pr.requestor = $1
+            JOIN pins p ON p.id = pt.pin_id
+            JOIN backup_tasks bt ON bt.task_id = p.task_id
+            WHERE bt.requestor = $1
               AND pt.chain = $2
               AND pt.contract_address = $3
               AND pt.token_id = $4
@@ -1086,23 +1059,23 @@ impl Db {
         }))
     }
 
-    /// Get all pin requests that are in 'queued' or 'pinning' status
+    /// Get all pins that are in 'queued' or 'pinning' status
     /// This is used by the pin monitor to check for status updates
-    pub async fn get_active_pin_requests(&self) -> Result<Vec<PinRequestRow>, sqlx::Error> {
+    pub async fn get_active_pins(&self) -> Result<Vec<PinRow>, sqlx::Error> {
         let rows = sqlx::query(
             r#"
-            SELECT id, task_id, provider_type, provider_url, cid, request_id, pin_status, requestor, task_status, fatal_error
-            FROM pin_requests
+            SELECT id, task_id, provider_type, provider_url, cid, request_id, pin_status, created_at
+            FROM pins
             WHERE pin_status IN ('queued', 'pinning')
             ORDER BY id
-            "#
+            "#,
         )
         .fetch_all(&self.pool)
         .await?;
 
         Ok(rows
             .into_iter()
-            .map(|row| PinRequestRow {
+            .map(|row| PinRow {
                 id: row.get("id"),
                 task_id: row.get("task_id"),
                 provider_type: row.get("provider_type"),
@@ -1113,20 +1086,12 @@ impl Db {
                 cid: row.get("cid"),
                 request_id: row.get("request_id"),
                 pin_status: row.get("pin_status"),
-                requestor: row.get("requestor"),
-                task_status: row
-                    .try_get::<Option<String>, _>("task_status")
-                    .ok()
-                    .flatten(),
-                fatal_error: row
-                    .try_get::<Option<String>, _>("fatal_error")
-                    .ok()
-                    .flatten(),
+                created_at: row.get("created_at"),
             })
             .collect())
     }
 
-    /// Update IPFS task-level status for all pin_requests of a task
+    /// Update IPFS task-level status for the pin_requests record
     pub async fn update_ipfs_task_status(
         &self,
         task_id: &str,
@@ -1135,7 +1100,7 @@ impl Db {
         sqlx::query(
             r#"
             UPDATE pin_requests
-            SET task_status = $2
+            SET status = $2
             WHERE task_id = $1
             "#,
         )
@@ -1148,7 +1113,7 @@ impl Db {
 
     /// Set backup fatal error for relevant subresources in a single SQL statement
     /// - archive or full: updates archive_requests.status and archive_requests.fatal_error
-    /// - ipfs or full: updates pin_requests.task_status and pin_requests.fatal_error
+    /// - ipfs or full: updates pin_requests.status and pin_requests.fatal_error
     pub async fn set_backup_error(
         &self,
         task_id: &str,
@@ -1170,7 +1135,7 @@ impl Db {
             ),
             upd_pins AS (
                 UPDATE pin_requests pr
-                SET task_status = 'error', fatal_error = $2
+                SET status = 'error', fatal_error = $2
                 WHERE pr.task_id = $1
                   AND EXISTS (
                       SELECT 1 FROM task_mode tm
@@ -1191,7 +1156,7 @@ impl Db {
 
     /// Update backup subresource statuses for the task based on its storage mode
     /// - archive or full: updates archive_requests.status
-    /// - ipfs or full: updates pin_requests.task_status
+    /// - ipfs or full: updates pin_requests.status
     pub async fn update_backup_statuses(
         &self,
         task_id: &str,
@@ -1209,7 +1174,7 @@ impl Db {
             ),
             upd_pins AS (
                 UPDATE pin_requests pr
-                SET task_status = $3
+                SET status = $3
                 WHERE pr.task_id = $1
                   AND ($4 IN ('ipfs', 'full'))
                 RETURNING 1
@@ -1227,7 +1192,7 @@ impl Db {
         Ok(())
     }
 
-    /// Set IPFS task-level fatal error and mark task_status as error
+    /// Set IPFS task-level fatal error and mark status as error
     pub async fn set_ipfs_task_error(
         &self,
         task_id: &str,
@@ -1236,7 +1201,7 @@ impl Db {
         sqlx::query(
             r#"
             UPDATE pin_requests
-            SET task_status = 'error', fatal_error = $2
+            SET status = 'error', fatal_error = $2
             WHERE task_id = $1
             "#,
         )
@@ -1247,9 +1212,9 @@ impl Db {
         Ok(())
     }
 
-    /// Batch update pin request statuses
-    /// Updates multiple pin requests in a single transaction
-    pub async fn batch_update_pin_request_statuses(
+    /// Batch update pin statuses
+    /// Updates multiple pins in a single transaction
+    pub async fn batch_update_pin_statuses(
         &self,
         updates: &[(i64, String)],
     ) -> Result<(), sqlx::Error> {
@@ -1262,7 +1227,7 @@ impl Db {
         for (id, status) in updates {
             sqlx::query(
                 r#"
-                UPDATE pin_requests
+                UPDATE pins
                 SET pin_status = $2
                 WHERE id = $1
                 "#,

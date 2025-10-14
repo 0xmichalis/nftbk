@@ -51,14 +51,13 @@ pub trait DeletePinsDb {
                 + 'a,
         >,
     >;
-    fn get_pin_requests_by_task_id<'a>(
+    fn get_pins_by_task_id<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<Vec<crate::server::db::PinRequestRow>, sqlx::Error>,
-                > + Send
+            dyn std::future::Future<Output = Result<Vec<crate::server::db::PinRow>, sqlx::Error>>
+                + Send
                 + 'a,
         >,
     >;
@@ -82,20 +81,17 @@ impl DeletePinsDb for crate::server::db::Db {
     > {
         Box::pin(async move { crate::server::db::Db::get_backup_task(self, task_id).await })
     }
-    fn get_pin_requests_by_task_id<'a>(
+    fn get_pins_by_task_id<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<Vec<crate::server::db::PinRequestRow>, sqlx::Error>,
-                > + Send
+            dyn std::future::Future<Output = Result<Vec<crate::server::db::PinRow>, sqlx::Error>>
+                + Send
                 + 'a,
         >,
     > {
-        Box::pin(
-            async move { crate::server::db::Db::get_pin_requests_by_task_id(self, task_id).await },
-        )
+        Box::pin(async move { crate::server::db::Db::get_pins_by_task_id(self, task_id).await })
     }
     fn delete_backup_task<'a>(
         &'a self,
@@ -120,20 +116,17 @@ impl DeletePinsDb for std::sync::Arc<crate::server::db::Db> {
     > {
         Box::pin(async move { crate::server::db::Db::get_backup_task(self, task_id).await })
     }
-    fn get_pin_requests_by_task_id<'a>(
+    fn get_pins_by_task_id<'a>(
         &'a self,
         task_id: &'a str,
     ) -> std::pin::Pin<
         Box<
-            dyn std::future::Future<
-                    Output = Result<Vec<crate::server::db::PinRequestRow>, sqlx::Error>,
-                > + Send
+            dyn std::future::Future<Output = Result<Vec<crate::server::db::PinRow>, sqlx::Error>>
+                + Send
                 + 'a,
         >,
     > {
-        Box::pin(
-            async move { crate::server::db::Db::get_pin_requests_by_task_id(self, task_id).await },
-        )
+        Box::pin(async move { crate::server::db::Db::get_pins_by_task_id(self, task_id).await })
     }
     fn delete_backup_task<'a>(
         &'a self,
@@ -249,7 +242,7 @@ mod handle_backup_delete_pins_core_tests {
         meta: Option<crate::server::db::BackupTask>,
         get_error: bool,
         delete_error: bool,
-        pin_requests: Vec<crate::server::db::PinRequestRow>,
+        pin_requests: Vec<crate::server::db::PinRow>,
         delete_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
     }
 
@@ -275,13 +268,13 @@ mod handle_backup_delete_pins_core_tests {
                 }
             })
         }
-        fn get_pin_requests_by_task_id<'a>(
+        fn get_pins_by_task_id<'a>(
             &'a self,
             _task_id: &'a str,
         ) -> std::pin::Pin<
             Box<
                 dyn std::future::Future<
-                        Output = Result<Vec<crate::server::db::PinRequestRow>, sqlx::Error>,
+                        Output = Result<Vec<crate::server::db::PinRow>, sqlx::Error>,
                     > + Send
                     + 'a,
             >,
