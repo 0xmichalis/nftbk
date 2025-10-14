@@ -258,7 +258,17 @@ pub trait BackupTaskDb {
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error>;
+    async fn update_ipfs_task_error_log(
+        &self,
+        task_id: &str,
+        error_log: &str,
+    ) -> Result<(), sqlx::Error>;
     async fn update_archive_request_status(
+        &self,
+        task_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error>;
+    async fn update_pin_request_status(
         &self,
         task_id: &str,
         status: &str,
@@ -319,12 +329,28 @@ impl BackupTaskDb for Db {
         Db::update_archive_error_log(self, task_id, error_log).await
     }
 
+    async fn update_ipfs_task_error_log(
+        &self,
+        task_id: &str,
+        error_log: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_ipfs_task_error_log(self, task_id, error_log).await
+    }
+
     async fn update_archive_request_status(
         &self,
         task_id: &str,
         status: &str,
     ) -> Result<(), sqlx::Error> {
         Db::update_archive_request_status(self, task_id, status).await
+    }
+
+    async fn update_pin_request_status(
+        &self,
+        task_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_pin_request_status(self, task_id, status).await
     }
 
     async fn get_backup_task(

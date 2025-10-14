@@ -292,6 +292,46 @@ impl Db {
         Ok(())
     }
 
+    /// Update IPFS non-fatal error log for all pin_requests of a task where it's currently NULL
+    pub async fn update_ipfs_task_error_log(
+        &self,
+        task_id: &str,
+        error_log: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE pin_requests
+            SET error_log = $2
+            WHERE task_id = $1 AND error_log IS NULL
+            "#,
+        )
+        .bind(task_id)
+        .bind(error_log)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Update IPFS task-level status for all pin_requests of a task (alias for clarity)
+    pub async fn update_pin_request_status(
+        &self,
+        task_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE pin_requests
+            SET task_status = $2
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .bind(status)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
     pub async fn update_archive_request_status(
         &self,
         task_id: &str,
@@ -399,7 +439,7 @@ impl Db {
         Ok(())
     }
 
-    pub async fn set_backup_error(
+    pub async fn set_archive_request_error(
         &self,
         task_id: &str,
         fatal_error: &str,
@@ -1097,6 +1137,49 @@ impl Db {
         .bind(status)
         .execute(&self.pool)
         .await?;
+        Ok(())
+    }
+
+    /// Set backup fatal error for relevant subresources in a single SQL statement
+    /// - archive or full: updates archive_requests.status and archive_requests.fatal_error
+    /// - ipfs or full: updates pin_requests.task_status and pin_requests.fatal_error
+    pub async fn set_backup_error(
+        &self,
+        task_id: &str,
+        fatal_error: &str,
+    ) -> Result<(), sqlx::Error> {
+        let sql = r#"
+            WITH task_mode AS (
+                SELECT storage_mode FROM backup_tasks WHERE task_id = $1
+            ),
+            upd_archive AS (
+                UPDATE archive_requests ar
+                SET status = 'error', fatal_error = $2
+                WHERE ar.task_id = $1
+                  AND EXISTS (
+                      SELECT 1 FROM task_mode tm
+                      WHERE tm.storage_mode IN ('archive', 'full')
+                  )
+                RETURNING 1
+            ),
+            upd_pins AS (
+                UPDATE pin_requests pr
+                SET task_status = 'error', fatal_error = $2
+                WHERE pr.task_id = $1
+                  AND EXISTS (
+                      SELECT 1 FROM task_mode tm
+                      WHERE tm.storage_mode IN ('ipfs', 'full')
+                  )
+                RETURNING 1
+            )
+            SELECT COALESCE((SELECT COUNT(*) FROM upd_archive), 0) AS archive_updates,
+                   COALESCE((SELECT COUNT(*) FROM upd_pins), 0)     AS pin_updates
+        "#;
+        sqlx::query(sql)
+            .bind(task_id)
+            .bind(fatal_error)
+            .execute(&self.pool)
+            .await?;
         Ok(())
     }
 
