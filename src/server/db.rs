@@ -199,11 +199,12 @@ impl Db {
             if let Some(days) = retention_days {
                 sqlx::query(
                     r#"
-                    INSERT INTO archive_requests (task_id, archive_format, expires_at)
-                    VALUES ($1, $2, NOW() + ($3 || ' days')::interval)
+                    INSERT INTO archive_requests (task_id, archive_format, expires_at, status)
+                    VALUES ($1, $2, NOW() + ($3 || ' days')::interval, 'in_progress')
                     ON CONFLICT (task_id) DO UPDATE SET
                         archive_format = EXCLUDED.archive_format,
-                        expires_at = EXCLUDED.expires_at
+                        expires_at = EXCLUDED.expires_at,
+                        status = COALESCE(archive_requests.status, 'in_progress')
                     "#,
                 )
                 .bind(task_id)
@@ -214,11 +215,12 @@ impl Db {
             } else {
                 sqlx::query(
                     r#"
-                    INSERT INTO archive_requests (task_id, archive_format, expires_at)
-                    VALUES ($1, $2, NULL)
+                    INSERT INTO archive_requests (task_id, archive_format, expires_at, status)
+                    VALUES ($1, $2, NULL, 'in_progress')
                     ON CONFLICT (task_id) DO UPDATE SET
                         archive_format = EXCLUDED.archive_format,
-                        expires_at = EXCLUDED.expires_at
+                        expires_at = EXCLUDED.expires_at,
+                        status = COALESCE(archive_requests.status, 'in_progress')
                     "#,
                 )
                 .bind(task_id)
