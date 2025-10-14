@@ -12,13 +12,24 @@ use crate::server::archive::{
 use crate::server::{AppState, BackupTask, BackupTaskDb, StorageMode};
 use crate::{BackupConfig, ProcessManagementConfig, StorageConfig, TokenConfig};
 
-/// Persist non-fatal error logs for archive and IPFS in one atomic DB call
+fn derive_scope_from_request(req: &crate::server::api::BackupRequest) -> StorageMode {
+    match (req.create_archive, req.pin_on_ipfs) {
+        (true, true) => StorageMode::Full,
+        (true, false) => StorageMode::Archive,
+        (false, true) => StorageMode::Ipfs,
+        (false, false) => StorageMode::Archive, // defensive fallback; validation prevents this
+    }
+}
+
+/// Persist non-fatal error logs for archive and/or IPFS based on the requested scope
 async fn persist_non_fatal_error_logs<DB: BackupTaskDb + ?Sized>(
     db: &DB,
     task_id: &str,
+    scope: &crate::server::StorageMode,
     archive_errors: &[String],
     ipfs_errors: &[String],
 ) {
+    // Determine scope based on which non-fatal errors are present
     let archive_log = if archive_errors.is_empty() {
         None
     } else {
@@ -32,9 +43,23 @@ async fn persist_non_fatal_error_logs<DB: BackupTaskDb + ?Sized>(
     if archive_log.is_none() && ipfs_log.is_none() {
         return;
     }
-    let _ = db
-        .set_error_logs(task_id, archive_log.as_deref(), ipfs_log.as_deref())
-        .await;
+    match scope {
+        crate::server::StorageMode::Full => {
+            let _ = db
+                .set_error_logs(task_id, archive_log.as_deref(), ipfs_log.as_deref())
+                .await;
+        }
+        crate::server::StorageMode::Archive => {
+            if let Some(a) = archive_log.as_deref() {
+                let _ = db.update_archive_error_log(task_id, a).await;
+            }
+        }
+        crate::server::StorageMode::Ipfs => {
+            if let Some(i) = ipfs_log.as_deref() {
+                let _ = db.update_ipfs_task_error_log(task_id, i).await;
+            }
+        }
+    }
 }
 
 fn sync_files(files_written: &[std::path::PathBuf]) {
@@ -147,8 +172,16 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
             .await;
     }
 
-    // Store non-fatal library error logs atomically
-    persist_non_fatal_error_logs(db, &task_id, &archive_outcome.errors, &ipfs_outcome.errors).await;
+    // Store non-fatal library error logs according to requested scope (derived from request)
+    let scope = derive_scope_from_request(&task.request);
+    persist_non_fatal_error_logs(
+        db,
+        &task_id,
+        &scope,
+        &archive_outcome.errors,
+        &ipfs_outcome.errors,
+    )
+    .await;
 
     // Handle archiving based on storage mode
     match storage_mode {
@@ -203,7 +236,6 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
                     if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
                         let error_msg = format!("Failed to write archive checksum file: {e}");
                         error!("{error_msg}");
-                        let _ = db.update_archive_error_log(&task_id, &error_msg).await;
                         let _ = db.set_backup_error(&task_id, &error_msg).await;
                         return;
                     }
@@ -221,7 +253,6 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
                     }
                     let error_msg = format!("Failed to archive backup: {e}");
                     error!("{error_msg}");
-                    let _ = db.update_archive_error_log(&task_id, &error_msg).await;
                     let _ = db.set_backup_error(&task_id, &error_msg).await;
                     return;
                 }
@@ -231,7 +262,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
         }
         StorageMode::Ipfs => {
             // IPFS-only mode: no filesystem operations needed
-            let _ = db.update_archive_request_status(&task_id, "done").await;
+            let _ = db.update_pin_request_status(&task_id, "done").await;
             info!("IPFS pinning for {} complete", task_id);
         }
     }
@@ -289,9 +320,14 @@ mod persist_error_logs_tests {
         }
         async fn update_archive_error_log(
             &self,
-            _task_id: &str,
-            _error_log: &str,
+            task_id: &str,
+            error_log: &str,
         ) -> Result<(), sqlx::Error> {
+            self.calls.lock().unwrap().push((
+                task_id.to_string(),
+                Some(error_log.to_string()),
+                None,
+            ));
             Ok(())
         }
         async fn set_error_logs(
@@ -308,6 +344,25 @@ mod persist_error_logs_tests {
             Ok(())
         }
         async fn update_archive_request_status(
+            &self,
+            _task_id: &str,
+            _status: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn update_ipfs_task_error_log(
+            &self,
+            task_id: &str,
+            error_log: &str,
+        ) -> Result<(), sqlx::Error> {
+            self.calls.lock().unwrap().push((
+                task_id.to_string(),
+                None,
+                Some(error_log.to_string()),
+            ));
+            Ok(())
+        }
+        async fn update_pin_request_status(
             &self,
             _task_id: &str,
             _status: &str,
@@ -359,14 +414,21 @@ mod persist_error_logs_tests {
     #[tokio::test]
     async fn no_errors_makes_no_call() {
         let db = MockDb::default();
-        persist_non_fatal_error_logs(&db, "t1", &[], &[]).await;
+        persist_non_fatal_error_logs(&db, "t1", &crate::server::StorageMode::Full, &[], &[]).await;
         assert!(db.calls.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
     async fn archive_only_calls_once() {
         let db = MockDb::default();
-        persist_non_fatal_error_logs(&db, "t1", &["a1".into(), "a2".into()], &[]).await;
+        persist_non_fatal_error_logs(
+            &db,
+            "t1",
+            &crate::server::StorageMode::Archive,
+            &["a1".into(), "a2".into()],
+            &[],
+        )
+        .await;
         let calls = db.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         let (task_id, a, i) = &calls[0];
@@ -378,7 +440,14 @@ mod persist_error_logs_tests {
     #[tokio::test]
     async fn ipfs_only_calls_once() {
         let db = MockDb::default();
-        persist_non_fatal_error_logs(&db, "t1", &[], &["i1".into()]).await;
+        persist_non_fatal_error_logs(
+            &db,
+            "t1",
+            &crate::server::StorageMode::Ipfs,
+            &[],
+            &["i1".into()],
+        )
+        .await;
         let calls = db.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         let (_task_id, a, i) = &calls[0];
@@ -389,7 +458,14 @@ mod persist_error_logs_tests {
     #[tokio::test]
     async fn both_calls_once_with_both_logs() {
         let db = MockDb::default();
-        persist_non_fatal_error_logs(&db, "t1", &["a".into()], &["i1".into(), "i2".into()]).await;
+        persist_non_fatal_error_logs(
+            &db,
+            "t1",
+            &crate::server::StorageMode::Full,
+            &["a".into()],
+            &["i1".into(), "i2".into()],
+        )
+        .await;
         let calls = db.calls.lock().unwrap();
         assert_eq!(calls.len(), 1);
         let (_task_id, a, i) = &calls[0];

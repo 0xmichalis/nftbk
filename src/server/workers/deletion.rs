@@ -615,6 +615,20 @@ mod tests {
         ) -> Result<(), sqlx::Error> {
             Ok(())
         }
+        async fn update_ipfs_task_error_log(
+            &self,
+            _task_id: &str,
+            _error_log: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn update_pin_request_status(
+            &self,
+            _task_id: &str,
+            _status: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
 
         async fn get_backup_task(
             &self,
