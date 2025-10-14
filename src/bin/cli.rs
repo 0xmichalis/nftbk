@@ -385,7 +385,8 @@ async fn wait_for_done_backup(
                     let status: StatusResponse = r.json().await.unwrap_or(StatusResponse {
                         status: "error".to_string(),
                         error: Some("Invalid status response".to_string()),
-                        error_log: None,
+                        archive_error_log: None,
+                        ipfs_error_log: None,
                     });
                     match status.status.as_str() {
                         "in_progress" => {
@@ -396,9 +397,14 @@ async fn wait_for_done_backup(
                         }
                         "done" => {
                             println!("Backup complete.");
-                            if let Some(error_log) = &status.error_log {
-                                if !error_log.is_empty() {
-                                    warn!("{}", error_log);
+                            if let Some(ref a) = status.archive_error_log {
+                                if !a.is_empty() {
+                                    warn!("{}", a);
+                                }
+                            }
+                            if let Some(ref i) = status.ipfs_error_log {
+                                if !i.is_empty() {
+                                    warn!("{}", i);
                                 }
                             }
                             break;
@@ -548,12 +554,22 @@ async fn list_server_backups(server_address: &str) -> Result<()> {
         let task_id = entry.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
         let status = entry.get("status").and_then(|v| v.as_str()).unwrap_or("");
         let error = entry.get("error").and_then(|v| v.as_str()).unwrap_or("");
-        let error_log = entry
-            .get("error_log")
+        let archive_error_log = entry
+            .get("archive_error_log")
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        let ipfs_error_log = entry
+            .get("ipfs_error_log")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let combined = [archive_error_log, ipfs_error_log]
+            .iter()
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" | ");
         let nft_count = entry.get("nft_count").and_then(|v| v.as_u64()).unwrap_or(0);
-        table.add_row(row![task_id, status, error, error_log, nft_count]);
+        table.add_row(row![task_id, status, error, combined, nft_count]);
     }
     table.printstd();
     Ok(())
@@ -627,13 +643,20 @@ async fn main() -> Result<()> {
         },
         task_id: None, // CLI doesn't have a task ID
     };
-    let (_files, _pin_requests, error_log) = backup_from_config(backup_config, None).await?;
-    // Write error log to file if present
-    if !error_log.is_empty() {
+    let (archive_out, ipfs_out) = backup_from_config(backup_config, None).await?;
+    // Write combined error log to file if present
+    let mut merged = Vec::new();
+    if !archive_out.errors.is_empty() {
+        merged.extend(archive_out.errors);
+    }
+    if !ipfs_out.errors.is_empty() {
+        merged.extend(ipfs_out.errors);
+    }
+    if !merged.is_empty() {
         if let Some(ref out_path) = output_path {
             let mut log_path = out_path.clone();
             log_path.set_extension("log");
-            let log_content = error_log.join("\n") + "\n";
+            let log_content = merged.join("\n") + "\n";
             use tokio::io::AsyncWriteExt;
             let mut file = tokio::fs::File::create(&log_path).await?;
             file.write_all(log_content.as_bytes()).await?;

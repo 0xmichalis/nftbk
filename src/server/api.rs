@@ -42,12 +42,14 @@ pub struct StatusResponse {
     /// Current status of the backup (in_progress, done, error, expired)
     #[schema(example = "done")]
     pub status: String,
-    /// Error message if the backup failed
+    /// Fatal error message if the backup failed completely
     pub error: Option<String>,
-    /// This is a detailed error log of the backup process. It is only available if the backup completed
-    /// successfully but some of the tokens failed to backup.
+    /// Archive-related non-fatal error log
     #[schema(example = "Failed to download token #123: HTTP 404")]
-    pub error_log: Option<String>,
+    pub archive_error_log: Option<String>,
+    /// IPFS-related non-fatal error log aggregated from pin requests
+    #[schema(example = "pinata: 401 Unauthorized\nweb3.storage: 429 Too Many Requests")]
+    pub ipfs_error_log: Option<String>,
 }
 
 // RFC 7807 problem+json error shape

@@ -491,7 +491,16 @@ mod tests {
             Ok(())
         }
 
-        async fn update_backup_task_error_log(
+        async fn set_error_logs(
+            &self,
+            _task_id: &str,
+            _archive_error_log: Option<&str>,
+            _ipfs_error_log: Option<&str>,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn update_archive_error_log(
             &self,
             _task_id: &str,
             _error_log: &str,

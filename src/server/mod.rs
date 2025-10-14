@@ -248,7 +248,13 @@ pub trait BackupTaskDb {
         requestor: &str,
         token_pin_mappings: &[crate::TokenPinMapping],
     ) -> Result<(), sqlx::Error>;
-    async fn update_backup_task_error_log(
+    async fn set_error_logs(
+        &self,
+        task_id: &str,
+        archive_error_log: Option<&str>,
+        ipfs_error_log: Option<&str>,
+    ) -> Result<(), sqlx::Error>;
+    async fn update_archive_error_log(
         &self,
         task_id: &str,
         error_log: &str,
@@ -290,12 +296,21 @@ impl BackupTaskDb for Db {
         Db::insert_pin_requests_with_tokens(self, task_id, requestor, token_pin_mappings).await
     }
 
-    async fn update_backup_task_error_log(
+    async fn set_error_logs(
+        &self,
+        task_id: &str,
+        archive_error_log: Option<&str>,
+        ipfs_error_log: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        Db::set_error_logs(self, task_id, archive_error_log, ipfs_error_log).await
+    }
+
+    async fn update_archive_error_log(
         &self,
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error> {
-        Db::update_backup_task_error_log(self, task_id, error_log).await
+        Db::update_archive_error_log(self, task_id, error_log).await
     }
 
     async fn update_backup_task_status(

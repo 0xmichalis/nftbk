@@ -70,8 +70,9 @@ async fn handle_status_core<DB: StatusDb + ?Sized>(
     };
     Ok(Json(StatusResponse {
         status: meta.status,
-        error: meta.error_log.clone(),
-        error_log: meta.error_log,
+        error: meta.fatal_error.clone(),
+        archive_error_log: meta.archive_error_log,
+        ipfs_error_log: meta.ipfs_error_log,
     }))
 }
 
@@ -121,7 +122,8 @@ mod handle_status_core_tests {
             nft_count: 1,
             tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
             status: "done".to_string(),
-            error_log: None,
+            archive_error_log: None,
+            ipfs_error_log: None,
             fatal_error: None,
             storage_mode: "archive".to_string(),
             archive_format: Some("zip".to_string()),
@@ -139,14 +141,10 @@ mod handle_status_core_tests {
             error: false,
         };
         let resp = handle_status_core(&db, "t1").await.unwrap();
-        let StatusResponse {
-            status,
-            error,
-            error_log,
-        } = resp.0;
+        let StatusResponse { status, error, .. } = resp.0;
         assert_eq!(status, "done");
         assert!(error.is_none());
-        assert!(error_log.is_none());
+        // non-fatal logs are optional and omitted when none
     }
 
     #[tokio::test]

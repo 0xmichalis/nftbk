@@ -12,6 +12,31 @@ use crate::server::archive::{
 use crate::server::{AppState, BackupTask, BackupTaskDb, StorageMode};
 use crate::{BackupConfig, ProcessManagementConfig, StorageConfig, TokenConfig};
 
+/// Persist non-fatal error logs for archive and IPFS in one atomic DB call
+async fn persist_non_fatal_error_logs<DB: BackupTaskDb + ?Sized>(
+    db: &DB,
+    task_id: &str,
+    archive_errors: &[String],
+    ipfs_errors: &[String],
+) {
+    let archive_log = if archive_errors.is_empty() {
+        None
+    } else {
+        Some(archive_errors.join("\n"))
+    };
+    let ipfs_log = if ipfs_errors.is_empty() {
+        None
+    } else {
+        Some(ipfs_errors.join("\n"))
+    };
+    if archive_log.is_none() && ipfs_log.is_none() {
+        return;
+    }
+    let _ = db
+        .set_error_logs(task_id, archive_log.as_deref(), ipfs_log.as_deref())
+        .await;
+}
+
 fn sync_files(files_written: &[std::path::PathBuf]) {
     let mut synced_dirs = std::collections::HashSet::new();
     for file in files_written {
@@ -95,8 +120,8 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
     let backup_result = backup_from_config(backup_cfg, Some(span)).await;
 
     // Check backup result
-    let (files_written, token_pin_mappings, error_log) = match backup_result {
-        Ok((files, token_pin_mappings, errors)) => (files, token_pin_mappings, errors),
+    let (archive_outcome, ipfs_outcome) = match backup_result {
+        Ok((archive_outcome, ipfs_outcome)) => (archive_outcome, ipfs_outcome),
         Err(e) => {
             let error_msg = e.to_string();
             if error_msg.contains("interrupted by shutdown signal") {
@@ -115,18 +140,15 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
     };
 
     // Persist token-pin request mappings atomically, if any
-    if !token_pin_mappings.is_empty() {
+    if !ipfs_outcome.pin_requests.is_empty() {
         let req = task.requestor.as_deref().unwrap_or("");
         let _ = db
-            .insert_pin_requests_with_tokens(&task.task_id, req, &token_pin_mappings)
+            .insert_pin_requests_with_tokens(&task.task_id, req, &ipfs_outcome.pin_requests)
             .await;
     }
 
-    // Store non-fatal error log in DB if present
-    if !error_log.is_empty() {
-        let log_str = error_log.join("\n");
-        let _ = db.update_backup_task_error_log(&task_id, &log_str).await;
-    }
+    // Store non-fatal library error logs atomically
+    persist_non_fatal_error_logs(db, &task_id, &archive_outcome.errors, &ipfs_outcome.errors).await;
 
     // Handle archiving based on storage mode
     match storage_mode {
@@ -136,6 +158,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
 
             // Sync all files and directories to disk before archiving
             info!("Syncing {} to disk before archiving", out_path.display());
+            let files_written = archive_outcome.files.clone();
             let files_written_clone = files_written.clone();
             tokio::task::spawn_blocking(move || {
                 sync_files(&files_written_clone);
@@ -180,6 +203,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
                     if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
                         let error_msg = format!("Failed to write archive checksum file: {e}");
                         error!("{error_msg}");
+                        let _ = db.update_archive_error_log(&task_id, &error_msg).await;
                         let _ = db.set_backup_error(&task_id, &error_msg).await;
                         return;
                     }
@@ -197,6 +221,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
                     }
                     let error_msg = format!("Failed to archive backup: {e}");
                     error!("{error_msg}");
+                    let _ = db.update_archive_error_log(&task_id, &error_msg).await;
                     let _ = db.set_backup_error(&task_id, &error_msg).await;
                     return;
                 }
@@ -231,5 +256,128 @@ pub async fn run_backup_task(state: AppState, task: BackupTask) {
         let error_msg = format!("Backup task for task {task_id} panicked: {panic_msg}");
         error!("{error_msg}");
         let _ = BackupTaskDb::set_backup_error(&*state_clone.db, &task_id, &error_msg).await;
+    }
+}
+
+#[cfg(test)]
+mod persist_error_logs_tests {
+    use super::persist_non_fatal_error_logs;
+    use crate::server::BackupTaskDb;
+
+    type ErrorLogCall = (String, Option<String>, Option<String>);
+
+    #[derive(Default)]
+    struct MockDb {
+        calls: std::sync::Arc<std::sync::Mutex<Vec<ErrorLogCall>>>,
+    }
+
+    #[async_trait::async_trait]
+    impl BackupTaskDb for MockDb {
+        async fn clear_backup_errors(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn set_backup_error(&self, _task_id: &str, _error: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn insert_pin_requests_with_tokens(
+            &self,
+            _task_id: &str,
+            _requestor: &str,
+            _token_pin_mappings: &[crate::TokenPinMapping],
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn update_archive_error_log(
+            &self,
+            _task_id: &str,
+            _error_log: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn set_error_logs(
+            &self,
+            task_id: &str,
+            archive_error_log: Option<&str>,
+            ipfs_error_log: Option<&str>,
+        ) -> Result<(), sqlx::Error> {
+            self.calls.lock().unwrap().push((
+                task_id.to_string(),
+                archive_error_log.map(|s| s.to_string()),
+                ipfs_error_log.map(|s| s.to_string()),
+            ));
+            Ok(())
+        }
+        async fn update_backup_task_status(
+            &self,
+            _task_id: &str,
+            _status: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn get_backup_task(
+            &self,
+            _task_id: &str,
+        ) -> Result<Option<crate::server::db::BackupTask>, sqlx::Error> {
+            Ok(None)
+        }
+        async fn start_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn start_archive_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn start_ipfs_pins_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn delete_backup_task(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn complete_archive_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn complete_ipfs_pins_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn no_errors_makes_no_call() {
+        let db = MockDb::default();
+        persist_non_fatal_error_logs(&db, "t1", &[], &[]).await;
+        assert!(db.calls.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn archive_only_calls_once() {
+        let db = MockDb::default();
+        persist_non_fatal_error_logs(&db, "t1", &["a1".into(), "a2".into()], &[]).await;
+        let calls = db.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (task_id, a, i) = &calls[0];
+        assert_eq!(task_id, "t1");
+        assert_eq!(a.as_deref(), Some("a1\na2"));
+        assert!(i.is_none());
+    }
+
+    #[tokio::test]
+    async fn ipfs_only_calls_once() {
+        let db = MockDb::default();
+        persist_non_fatal_error_logs(&db, "t1", &[], &["i1".into()]).await;
+        let calls = db.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (_task_id, a, i) = &calls[0];
+        assert!(a.is_none());
+        assert_eq!(i.as_deref(), Some("i1"));
+    }
+
+    #[tokio::test]
+    async fn both_calls_once_with_both_logs() {
+        let db = MockDb::default();
+        persist_non_fatal_error_logs(&db, "t1", &["a".into()], &["i1".into(), "i2".into()]).await;
+        let calls = db.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        let (_task_id, a, i) = &calls[0];
+        assert_eq!(a.as_deref(), Some("a"));
+        assert_eq!(i.as_deref(), Some("i1\ni2"));
     }
 }

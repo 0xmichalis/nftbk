@@ -11,7 +11,6 @@ pub struct ProtectionTaskRow {
     pub nft_count: i32,
     pub tokens: serde_json::Value,
     pub status: String,
-    pub error_log: Option<String>,
     pub fatal_error: Option<String>,
     pub storage_mode: String,
 }
@@ -47,9 +46,14 @@ pub struct BackupTask {
     /// Current task status (in_progress, done, error, expired)
     #[schema(example = "done")]
     pub status: String,
-    /// Detailed error log if backup completed with some failures
-    #[schema(example = "Failed to download token #123: HTTP 404")]
-    pub error_log: Option<String>,
+    /// Detailed archive error log if archive completed with some failures
+    #[schema(example = "Failed to write archive checksum file")]
+    pub archive_error_log: Option<String>,
+    /// Detailed IPFS error log aggregated from pin requests
+    #[schema(
+        example = "Provider pinata failed: 401 Unauthorized\nProvider web3.storage failed: 429 Too Many Requests"
+    )]
+    pub ipfs_error_log: Option<String>,
     /// Fatal error message if backup failed completely
     #[schema(example = "Database connection failed")]
     pub fatal_error: Option<String>,
@@ -174,8 +178,7 @@ impl Db {
                 status = EXCLUDED.status,
                 nft_count = EXCLUDED.nft_count,
                 tokens = EXCLUDED.tokens,
-                storage_mode = EXCLUDED.storage_mode,
-                error_log = EXCLUDED.error_log
+                storage_mode = EXCLUDED.storage_mode
             "#,
         )
         .bind(task_id)
@@ -234,20 +237,53 @@ impl Db {
         Ok(())
     }
 
-    pub async fn update_backup_task_error_log(
+    /// Atomically set both archive and IPFS error logs for a task
+    pub async fn set_error_logs(
+        &self,
+        task_id: &str,
+        archive_error_log: Option<&str>,
+        ipfs_error_log: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(a) = archive_error_log {
+            sqlx::query("UPDATE archive_requests SET error_log = $2 WHERE task_id = $1")
+                .bind(task_id)
+                .bind(a)
+                .execute(&mut *tx)
+                .await?;
+        }
+        if let Some(i) = ipfs_error_log {
+            // Set the same message on all pin_requests for this task that currently have NULL error_log
+            sqlx::query(
+                r#"
+                    UPDATE pin_requests
+                    SET error_log = $2
+                    WHERE task_id = $1 AND error_log IS NULL
+                    "#,
+            )
+            .bind(task_id)
+            .bind(i)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn update_archive_error_log(
         &self,
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        sqlx::query(
             r#"
-            UPDATE backup_tasks
-            SET error_log = $2, updated_at = NOW()
+            UPDATE archive_requests
+            SET error_log = $2
             WHERE task_id = $1
             "#,
-            task_id,
-            error_log
         )
+        .bind(task_id)
+        .bind(error_log)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -280,14 +316,14 @@ impl Db {
         let mut tx = self.pool.begin().await?;
 
         // Update backup task
-        sqlx::query!(
+        sqlx::query(
             r#"
             UPDATE backup_tasks
-            SET status = 'in_progress', updated_at = NOW(), error_log = NULL, fatal_error = NULL
+            SET status = 'in_progress', updated_at = NOW(), fatal_error = NULL
             WHERE task_id = $1
             "#,
-            task_id
         )
+        .bind(task_id)
         .execute(&mut *tx)
         .await?;
 
@@ -337,16 +373,38 @@ impl Db {
     }
 
     pub async fn clear_backup_errors(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        let mut tx = self.pool.begin().await?;
+        sqlx::query(
             r#"
             UPDATE backup_tasks
-            SET error_log = NULL, fatal_error = NULL
+            SET fatal_error = NULL
             WHERE task_id = $1
             "#,
-            task_id
         )
-        .execute(&self.pool)
+        .bind(task_id)
+        .execute(&mut *tx)
         .await?;
+        sqlx::query(
+            r#"
+            UPDATE archive_requests
+            SET error_log = NULL
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
+            r#"
+            UPDATE pin_requests
+            SET error_log = NULL
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -414,8 +472,14 @@ impl Db {
             r#"
             SELECT 
                 b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
-                b.tokens, b.status, b.error_log, b.fatal_error, b.storage_mode,
+                b.tokens, b.status, b.fatal_error, b.storage_mode,
                 b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
+                ar.error_log as archive_error_log,
+                (
+                  SELECT STRING_AGG(pr.error_log, E'\n')
+                  FROM pin_requests pr
+                  WHERE pr.task_id = b.task_id AND pr.error_log IS NOT NULL
+                ) as ipfs_error_log,
                 COALESCE(
                     (SELECT MIN(pr.deleted_at) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.deleted_at IS NOT NULL),
                     NULL
@@ -437,7 +501,8 @@ impl Db {
             nft_count: row.get("nft_count"),
             tokens: row.get("tokens"),
             status: row.get("status"),
-            error_log: row.get("error_log"),
+            archive_error_log: row.get("archive_error_log"),
+            ipfs_error_log: row.get("ipfs_error_log"),
             fatal_error: row.get("fatal_error"),
             storage_mode: row.get("storage_mode"),
             archive_format: row.get("archive_format"),
@@ -470,8 +535,14 @@ impl Db {
             r#"
             SELECT 
                 b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
-                {tokens_field} b.status, b.error_log, b.fatal_error, b.storage_mode,
+                {tokens_field} b.status, b.fatal_error, b.storage_mode,
                 b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
+                ar.error_log as archive_error_log,
+                (
+                  SELECT STRING_AGG(pr.error_log, E'\n')
+                  FROM pin_requests pr
+                  WHERE pr.task_id = b.task_id AND pr.error_log IS NOT NULL
+                ) as ipfs_error_log,
                 COALESCE(
                     (SELECT MIN(pr.deleted_at) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.deleted_at IS NOT NULL),
                     NULL
@@ -509,7 +580,8 @@ impl Db {
                     nft_count: row.get("nft_count"),
                     tokens,
                     status: row.get("status"),
-                    error_log: row.get("error_log"),
+                    archive_error_log: row.get("archive_error_log"),
+                    ipfs_error_log: row.get("ipfs_error_log"),
                     fatal_error: row.get("fatal_error"),
                     storage_mode: row.get("storage_mode"),
                     archive_format: row.get("archive_format"),
@@ -558,8 +630,14 @@ impl Db {
             r#"
             SELECT 
                 b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
-                b.tokens, b.status, b.error_log, b.fatal_error, b.storage_mode,
+                b.tokens, b.status, b.fatal_error, b.storage_mode,
                 b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
+                ar.error_log as archive_error_log,
+                (
+                  SELECT STRING_AGG(pr.error_log, E'\n')
+                  FROM pin_requests pr
+                  WHERE pr.task_id = b.task_id AND pr.error_log IS NOT NULL
+                ) as ipfs_error_log,
                 COALESCE(
                     (SELECT MIN(pr.deleted_at) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.deleted_at IS NOT NULL),
                     NULL
@@ -583,7 +661,8 @@ impl Db {
                 nft_count: row.get("nft_count"),
                 tokens: row.get("tokens"),
                 status: row.get("status"),
-                error_log: row.get("error_log"),
+                archive_error_log: row.get("archive_error_log"),
+                ipfs_error_log: row.get("ipfs_error_log"),
                 fatal_error: row.get("fatal_error"),
                 storage_mode: row.get("storage_mode"),
                 archive_format: row.get("archive_format"),

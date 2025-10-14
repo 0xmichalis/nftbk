@@ -171,7 +171,7 @@ async fn protect_url<C>(
     token: &C::ContractTokenId,
     processor: &C,
     exit_on_error: bool,
-    errors: &mut Vec<String>,
+    ipfs_errors: &mut Vec<String>,
     task_id: Option<&str>,
 ) -> anyhow::Result<(Vec<crate::ipfs::PinResponse>, Option<std::path::PathBuf>)>
 where
@@ -188,7 +188,7 @@ where
             token,
             processor,
             exit_on_error,
-            errors,
+            ipfs_errors,
             false,
             fallback,
             task_id,
@@ -211,7 +211,7 @@ where
                 .await,
             format!("Failed to fetch {name_for_log} for {token}"),
             exit_on_error,
-            errors,
+            ipfs_errors,
         )? {
             downloaded_path = Some(path);
         }
@@ -228,7 +228,7 @@ async fn protect_metadata<C>(
     metadata: &C::Metadata,
     processor: &C,
     exit_on_error: bool,
-    errors: &mut Vec<String>,
+    ipfs_errors: &mut Vec<String>,
     task_id: Option<&str>,
 ) -> anyhow::Result<(Vec<crate::ipfs::PinResponse>, Option<std::path::PathBuf>)>
 where
@@ -245,7 +245,7 @@ where
             token,
             processor,
             exit_on_error,
-            errors,
+            ipfs_errors,
             true,
             Some("metadata"),
             task_id,
@@ -260,7 +260,7 @@ where
             write_metadata(token_uri, token, output_path, metadata).await,
             format!("Failed to write metadata for {token}"),
             exit_on_error,
-            errors,
+            ipfs_errors,
         )? {
             saved_path = Some(path);
         }
@@ -305,11 +305,7 @@ pub async fn process_nfts<C, FExtraUri>(
     config: crate::ProcessManagementConfig,
     get_extra_content_uri: FExtraUri,
     task_id: Option<String>,
-) -> anyhow::Result<(
-    Vec<std::path::PathBuf>,
-    Vec<crate::TokenPinMapping>,
-    Vec<String>,
-)>
+) -> anyhow::Result<(crate::ArchiveOutcome, crate::IpfsOutcome)>
 where
     C: NFTChainProcessor + Sync + Send + 'static,
     C::ContractTokenId: ContractTokenInfo,
@@ -318,7 +314,8 @@ where
 {
     let mut files = Vec::new();
     let mut token_pin_mappings = Vec::new();
-    let mut errors = Vec::new();
+    let mut archive_errors = Vec::new();
+    let mut ipfs_errors = Vec::new();
 
     for token in tokens {
         check_shutdown_signal(&config)?;
@@ -328,7 +325,7 @@ where
             processor.fetch_metadata(&token).await,
             format!("Failed to fetch metadata for {token}"),
             config.exit_on_error,
-            &mut errors,
+            &mut archive_errors,
         )? {
             Some(pair) => pair,
             None => continue,
@@ -347,7 +344,7 @@ where
             &metadata,
             &*processor,
             config.exit_on_error,
-            &mut errors,
+            &mut ipfs_errors,
             task_id.as_deref(),
         )
         .await?;
@@ -379,7 +376,7 @@ where
                 &token,
                 &*processor,
                 config.exit_on_error,
-                &mut errors,
+                &mut ipfs_errors,
                 task_id.as_deref(),
             )
             .await?;
@@ -407,14 +404,23 @@ where
                 fetch_and_write_extra(&token, out, get_extra_content_uri(&metadata)).await,
                 format!("Failed to fetch extra content for {token}"),
                 config.exit_on_error,
-                &mut errors,
+                &mut archive_errors,
             )? {
                 files.extend(extra_files);
             }
         }
     }
 
-    Ok((files, token_pin_mappings, errors))
+    Ok((
+        crate::ArchiveOutcome {
+            files,
+            errors: archive_errors,
+        },
+        crate::IpfsOutcome {
+            pin_requests: token_pin_mappings,
+            errors: ipfs_errors,
+        },
+    ))
 }
 
 #[cfg(test)]
@@ -713,10 +719,10 @@ mod process_nfts_tests {
         let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
-        let (files, token_pin_mappings, errors) = result.unwrap();
-        assert!(files.is_empty());
-        assert!(errors.is_empty());
-        assert!(token_pin_mappings.is_empty());
+        let (archive_out, ipfs_out) = result.unwrap();
+        assert!(archive_out.files.is_empty());
+        assert!(archive_out.errors.is_empty());
+        assert!(ipfs_out.pin_requests.is_empty());
     }
 
     #[tokio::test]
@@ -731,11 +737,11 @@ mod process_nfts_tests {
         let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
-        let (files, token_pin_mappings, errors) = result.unwrap();
+        let (archive_out, ipfs_out) = result.unwrap();
         // Should have metadata file and content files (data URLs work without network)
-        assert!(!files.is_empty());
-        assert!(errors.is_empty()); // No errors with data URLs
-        assert!(token_pin_mappings.is_empty()); // No IPFS client configured
+        assert!(!archive_out.files.is_empty());
+        assert!(archive_out.errors.is_empty()); // No errors with data URLs
+        assert!(ipfs_out.pin_requests.is_empty()); // No IPFS client configured
     }
 
     #[tokio::test]
@@ -782,12 +788,12 @@ mod process_nfts_tests {
         let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
-        let (files, token_pin_mappings, errors) = result.unwrap();
-        assert!(files.is_empty());
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("Failed to fetch metadata"));
-        assert!(errors[0].contains("Metadata fetch failed"));
-        assert!(token_pin_mappings.is_empty());
+        let (archive_out, ipfs_out) = result.unwrap();
+        assert!(archive_out.files.is_empty());
+        assert_eq!(archive_out.errors.len(), 1);
+        assert!(archive_out.errors[0].contains("Failed to fetch metadata"));
+        assert!(archive_out.errors[0].contains("Metadata fetch failed"));
+        assert!(ipfs_out.pin_requests.is_empty());
     }
 
     #[tokio::test]
@@ -802,11 +808,11 @@ mod process_nfts_tests {
         let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
-        let (files, token_pin_mappings, errors) = result.unwrap();
+        let (archive_out, ipfs_out) = result.unwrap();
         // Should have files (metadata and content from data URLs)
-        assert!(!files.is_empty());
-        assert!(errors.is_empty()); // No errors with data URLs
-        assert!(token_pin_mappings.is_empty());
+        assert!(!archive_out.files.is_empty());
+        assert!(archive_out.errors.is_empty()); // No errors with data URLs
+        assert!(ipfs_out.pin_requests.is_empty());
     }
 
     #[tokio::test]
@@ -828,11 +834,11 @@ mod process_nfts_tests {
         let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
-        let (files, token_pin_mappings, errors) = result.unwrap();
+        let (archive_out, ipfs_out) = result.unwrap();
         // Should have files for both tokens (metadata and content from data URLs)
-        assert!(!files.is_empty());
-        assert!(errors.is_empty()); // No errors with data URLs
-        assert!(token_pin_mappings.is_empty());
+        assert!(!archive_out.files.is_empty());
+        assert!(archive_out.errors.is_empty()); // No errors with data URLs
+        assert!(ipfs_out.pin_requests.is_empty());
     }
 
     #[tokio::test]
@@ -856,11 +862,11 @@ mod process_nfts_tests {
         let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
-        let (files, token_pin_mappings, errors) = result.unwrap();
+        let (archive_out, ipfs_out) = result.unwrap();
         // Should have some files from successful processing (metadata and content from data URLs)
-        assert!(!files.is_empty());
-        assert!(errors.is_empty()); // No errors with data URLs
-        assert!(token_pin_mappings.is_empty());
+        assert!(!archive_out.files.is_empty());
+        assert!(archive_out.errors.is_empty()); // No errors with data URLs
+        assert!(ipfs_out.pin_requests.is_empty());
     }
 
     #[tokio::test]
@@ -875,11 +881,11 @@ mod process_nfts_tests {
         let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
-        let (files, token_pin_mappings, errors) = result.unwrap();
+        let (archive_out, ipfs_out) = result.unwrap();
         // Should have files including potential extra content (metadata and content from data URLs)
-        assert!(!files.is_empty());
-        assert!(errors.is_empty()); // No errors with data URLs
-        assert!(token_pin_mappings.is_empty());
+        assert!(!archive_out.files.is_empty());
+        assert!(archive_out.errors.is_empty()); // No errors with data URLs
+        assert!(ipfs_out.pin_requests.is_empty());
     }
 
     #[tokio::test]
@@ -892,11 +898,11 @@ mod process_nfts_tests {
         let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
 
         assert!(result.is_ok());
-        let (files, token_pin_mappings, errors) = result.unwrap();
+        let (archive_out, ipfs_out) = result.unwrap();
         // Should have no files since no output path is configured
-        assert!(files.is_empty());
-        assert!(errors.is_empty());
-        assert!(token_pin_mappings.is_empty());
+        assert!(archive_out.files.is_empty());
+        assert!(archive_out.errors.is_empty());
+        assert!(ipfs_out.pin_requests.is_empty());
     }
 
     #[tokio::test]
@@ -958,15 +964,15 @@ mod process_nfts_tests {
         let tokens = vec![create_test_token()];
         let config = create_test_config(false);
 
-        let (files, token_pin_mappings, errors) =
+        let (archive_out, ipfs_out) =
             process_nfts(processor, tokens, config, get_no_extra_content_uri, None)
                 .await
                 .unwrap();
 
         // Verify results - files should still be created even if IPFS pinning fails
-        assert_eq!(files.len(), 1); // Only metadata.json (content fetching fails for IPFS URLs)
-        assert_eq!(token_pin_mappings.len(), 0); // No successful pins due to IPFS failure
-        assert!(errors.len() >= 2); // IPFS errors for both metadata and image pinning failures
+        assert_eq!(archive_out.files.len(), 1); // Only metadata.json (content fetching fails for IPFS URLs)
+        assert_eq!(ipfs_out.pin_requests.len(), 0); // No successful pins due to IPFS failure
+        assert!(ipfs_out.errors.len() >= 2); // IPFS errors for both metadata and image pinning failures
 
         // Verify that the files were created despite IPFS failure
         let output_path = temp_dir.path();
@@ -1030,15 +1036,15 @@ mod process_nfts_tests {
         let tokens = vec![create_test_token()];
         let config = create_test_config(false);
 
-        let (files, token_pin_mappings, errors) =
+        let (archive_out, ipfs_out) =
             process_nfts(processor, tokens, config, get_no_extra_content_uri, None)
                 .await
                 .unwrap();
 
         // Verify results - files should still be created even if IPFS auth fails
-        assert_eq!(files.len(), 1); // Only metadata.json (content fetching fails for IPFS URLs)
-        assert_eq!(token_pin_mappings.len(), 0); // No successful pins due to auth failure
-        assert!(errors.len() >= 2); // IPFS errors for both metadata and image pinning failures
+        assert_eq!(archive_out.files.len(), 1); // Only metadata.json (content fetching fails for IPFS URLs)
+        assert_eq!(ipfs_out.pin_requests.len(), 0); // No successful pins due to auth failure
+        assert!(ipfs_out.errors.len() >= 2); // IPFS errors for both metadata and image pinning failures
 
         // Verify that the files were created despite IPFS auth failure
         let output_path = temp_dir.path();
@@ -1103,18 +1109,18 @@ mod process_nfts_tests {
         let tokens = vec![create_test_token()];
         let config = create_test_config(false);
 
-        let (files, token_pin_mappings, _errors) =
+        let (archive_out, ipfs_out) =
             process_nfts(processor, tokens, config, get_no_extra_content_uri, None)
                 .await
                 .unwrap();
 
         // Verify results - IPFS pinning should work even if content fetching fails
-        assert_eq!(files.len(), 1); // Only metadata.json (content fetching may fail for IPFS URLs)
-        assert_eq!(token_pin_mappings.len(), 1); // One token with pin mappings
+        assert_eq!(archive_out.files.len(), 1); // Only metadata.json (content fetching may fail for IPFS URLs)
+        assert_eq!(ipfs_out.pin_requests.len(), 1); // One token with pin mappings
 
         // Verify the token pin mapping contains the expected request IDs
         // The mock server returns "test-request-id" as the request ID for all pins
-        let token_mapping = &token_pin_mappings[0];
+        let token_mapping = &ipfs_out.pin_requests[0];
         assert_eq!(token_mapping.chain, "ethereum");
         assert_eq!(
             token_mapping.contract_address,
