@@ -296,7 +296,10 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
         return;
     }
 
-    info!("Successfully deleted backup {task_id}");
+    info!(
+        "Successfully deleted backup {task_id} with scope {:?} and storage mode {}",
+        task.scope, meta.storage_mode
+    );
 }
 
 pub async fn run_deletion_task(state: AppState, task: DeletionTask) {
