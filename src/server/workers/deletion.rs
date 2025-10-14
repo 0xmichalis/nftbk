@@ -1,6 +1,6 @@
 use futures_util::FutureExt;
 use std::panic::AssertUnwindSafe;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 use crate::server::{AppState, BackupTaskDb, DeletionTask, StorageMode};
 
@@ -223,7 +223,10 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
     )
     .is_err()
     {
-        error!("Cannot delete task {task_id} that is in progress");
+        error!(
+            "Cannot delete in progress task {task_id} for scope {:?}",
+            task.scope
+        );
         return;
     }
 
@@ -239,7 +242,7 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
     // Handle archive cleanup if requested
     if task.scope == StorageMode::Full || task.scope == StorageMode::Archive {
         if !(meta.storage_mode == "archive" || meta.storage_mode == "full") {
-            info!("Skipping archive cleanup for task {task_id} (no archive data)");
+            debug!("Skipping archive cleanup for task {task_id} (no archive data)");
         } else {
             match delete_dir_and_archive_for_task(
                 &state.base_dir,
@@ -262,7 +265,7 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
     // Handle IPFS pin deletion if requested
     if task.scope == StorageMode::Full || task.scope == StorageMode::Ipfs {
         if !(meta.storage_mode == "ipfs" || meta.storage_mode == "full") {
-            info!("Skipping IPFS pin cleanup for task {task_id} (no IPFS pins)");
+            debug!("Skipping IPFS pin cleanup for task {task_id} (no IPFS pins)");
         } else {
             let pin_requests = match state.db.get_pin_requests_by_task_id(&task_id).await {
                 Ok(v) => v,
