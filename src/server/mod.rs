@@ -263,6 +263,11 @@ pub trait BackupTaskDb {
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error>;
+    async fn set_archive_request_error(
+        &self,
+        task_id: &str,
+        fatal_error: &str,
+    ) -> Result<(), sqlx::Error>;
     async fn update_archive_request_status(
         &self,
         task_id: &str,
@@ -272,6 +277,13 @@ pub trait BackupTaskDb {
         &self,
         task_id: &str,
         status: &str,
+    ) -> Result<(), sqlx::Error>;
+    async fn update_backup_statuses(
+        &self,
+        task_id: &str,
+        scope: &str,
+        archive_status: &str,
+        ipfs_status: &str,
     ) -> Result<(), sqlx::Error>;
     async fn get_backup_task(
         &self,
@@ -337,6 +349,14 @@ impl BackupTaskDb for Db {
         Db::update_ipfs_task_error_log(self, task_id, error_log).await
     }
 
+    async fn set_archive_request_error(
+        &self,
+        task_id: &str,
+        fatal_error: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::set_archive_request_error(self, task_id, fatal_error).await
+    }
+
     async fn update_archive_request_status(
         &self,
         task_id: &str,
@@ -351,6 +371,16 @@ impl BackupTaskDb for Db {
         status: &str,
     ) -> Result<(), sqlx::Error> {
         Db::update_pin_request_status(self, task_id, status).await
+    }
+
+    async fn update_backup_statuses(
+        &self,
+        task_id: &str,
+        scope: &str,
+        archive_status: &str,
+        ipfs_status: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_backup_statuses(self, task_id, scope, archive_status, ipfs_status).await
     }
 
     async fn get_backup_task(

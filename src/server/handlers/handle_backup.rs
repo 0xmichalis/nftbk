@@ -601,6 +601,24 @@ mod handle_backup_core_tests {
             Ok(())
         }
 
+        async fn update_backup_statuses(
+            &self,
+            _task_id: &str,
+            _scope: &str,
+            _archive_status: &str,
+            _ipfs_status: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn set_archive_request_error(
+            &self,
+            _task_id: &str,
+            _fatal_error: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
         async fn get_backup_task(
             &self,
             _task_id: &str,
