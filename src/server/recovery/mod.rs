@@ -119,7 +119,7 @@ pub async fn recover_incomplete_tasks<DB: RecoveryDb + ?Sized>(
                 create_archive,
             },
             force: true, // Force recovery to ensure backup actually runs
-            storage_mode,
+            scope: storage_mode,
             archive_format: task_meta.archive_format,
             requestor: Some(task_meta.requestor),
         };
@@ -250,13 +250,13 @@ mod tests {
                     if task.task_id == "task1" {
                         seen_task1 = true;
                         assert!(task.force);
-                        assert_eq!(task.storage_mode, StorageMode::Archive);
+                        assert_eq!(task.scope, StorageMode::Archive);
                         assert_eq!(task.archive_format, Some("zip".to_string()));
                         assert_eq!(task.requestor, Some("user1".to_string()));
                     } else if task.task_id == "task2" {
                         seen_task2 = true;
                         assert!(task.force);
-                        assert_eq!(task.storage_mode, StorageMode::Full);
+                        assert_eq!(task.scope, StorageMode::Full);
                         assert_eq!(task.archive_format, None);
                         assert_eq!(task.requestor, Some("user2".to_string()));
                     } else {
@@ -326,7 +326,7 @@ mod tests {
         let task = rx.recv().await.unwrap();
         match task {
             BackupTaskOrShutdown::Task(TaskType::Creation(task)) => {
-                assert_eq!(task.storage_mode, StorageMode::Full);
+                assert_eq!(task.scope, StorageMode::Full);
                 assert!(task.request.pin_on_ipfs); // Both includes IPFS
             }
             _ => panic!("Expected backup task"),
