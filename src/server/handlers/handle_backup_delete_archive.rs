@@ -116,7 +116,7 @@ async fn handle_backup_delete_archive_core<DB: DeleteArchiveDb + ?Sized>(
             let problem = ProblemJson::from_status(
                 StatusCode::BAD_REQUEST,
                 Some("Requestor required".to_string()),
-                Some(format!("/v1/backups/{}/archive", task_id)),
+                Some(format!("/v1/backups/{task_id}/archive")),
             );
             return problem.into_response();
         }
@@ -129,15 +129,15 @@ async fn handle_backup_delete_archive_core<DB: DeleteArchiveDb + ?Sized>(
             let problem = ProblemJson::from_status(
                 StatusCode::NOT_FOUND,
                 Some("Nothing found to delete".to_string()),
-                Some(format!("/v1/backups/{}/archive", task_id)),
+                Some(format!("/v1/backups/{task_id}/archive")),
             );
             return problem.into_response();
         }
         Err(e) => {
             let problem = ProblemJson::from_status(
                 StatusCode::INTERNAL_SERVER_ERROR,
-                Some(format!("Failed to read metadata: {}", e)),
-                Some(format!("/v1/backups/{}/archive", task_id)),
+                Some(format!("Failed to read metadata: {e}")),
+                Some(format!("/v1/backups/{task_id}/archive")),
             );
             return problem.into_response();
         }
@@ -148,7 +148,7 @@ async fn handle_backup_delete_archive_core<DB: DeleteArchiveDb + ?Sized>(
         let problem = ProblemJson::from_status(
             StatusCode::FORBIDDEN,
             Some("Requestor does not match task owner".to_string()),
-            Some(format!("/v1/backups/{}/archive", task_id)),
+            Some(format!("/v1/backups/{task_id}/archive")),
         );
         return problem.into_response();
     }
@@ -158,7 +158,7 @@ async fn handle_backup_delete_archive_core<DB: DeleteArchiveDb + ?Sized>(
         let problem = ProblemJson::from_status(
             StatusCode::UNPROCESSABLE_ENTITY,
             Some("Backup does not use archive storage".to_string()),
-            Some(format!("/v1/backups/{}/archive", task_id)),
+            Some(format!("/v1/backups/{task_id}/archive")),
         );
         return problem.into_response();
     }
@@ -168,7 +168,7 @@ async fn handle_backup_delete_archive_core<DB: DeleteArchiveDb + ?Sized>(
         let problem = ProblemJson::from_status(
             StatusCode::CONFLICT,
             Some("Can only delete completed tasks".to_string()),
-            Some(format!("/v1/backups/{}/archive", task_id)),
+            Some(format!("/v1/backups/{task_id}/archive")),
         );
         return problem.into_response();
     }
@@ -185,19 +185,16 @@ async fn handle_backup_delete_archive_core<DB: DeleteArchiveDb + ?Sized>(
         ))
         .await
     {
-        error!(
-            "Failed to enqueue archive-only deletion task for task {}: {}",
-            task_id, e
-        );
+        error!("Failed to enqueue archive-only deletion task for task {task_id}: {e}");
         let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             Some("Failed to enqueue deletion task".to_string()),
-            Some(format!("/v1/backups/{}/archive", task_id)),
+            Some(format!("/v1/backups/{task_id}/archive")),
         );
         return problem.into_response();
     }
 
-    info!("Queued archive-only deletion task for backup {}", task_id);
+    info!("Queued archive-only deletion task for backup {task_id}");
     (StatusCode::ACCEPTED, ()).into_response()
 }
 
