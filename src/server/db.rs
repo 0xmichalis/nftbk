@@ -391,20 +391,20 @@ impl Db {
         if task_ids.is_empty() {
             return Ok(());
         }
-        // Build the query with a dynamic number of parameters
-        let mut query = String::from("UPDATE archive_requests SET status = $1 WHERE task_id IN (");
-        for (i, _) in task_ids.iter().enumerate() {
-            if i > 0 {
-                query.push_str(", ");
-            }
-            query.push_str(&format!("${}", i + 2));
-        }
-        query.push(')');
-        let mut q = sqlx::query(&query).bind(status);
+
+        // Use a transaction for atomicity
+        let mut tx = self.pool.begin().await?;
+
+        // Update each task_id individually with a prepared statement
         for task_id in task_ids {
-            q = q.bind(task_id);
+            sqlx::query("UPDATE archive_requests SET status = $1 WHERE task_id = $2")
+                .bind(status)
+                .bind(task_id)
+                .execute(&mut *tx)
+                .await?;
         }
-        q.execute(&self.pool).await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -753,28 +753,8 @@ impl Db {
         // Start a transaction for atomicity
         let mut tx = self.pool.begin().await?;
 
-        // Insert pins and return generated IDs
-        let mut query = String::from(
-            "INSERT INTO pins (task_id, provider_type, provider_url, cid, request_id, pin_status) VALUES ",
-        );
-        let mut bind_count = 0;
-        for i in 0..all_pin_responses.len() {
-            if i > 0 {
-                query.push_str(", ");
-            }
-            // 6 bind params per row
-            let p1 = bind_count + 1;
-            let p2 = bind_count + 2;
-            let p3 = bind_count + 3;
-            let p4 = bind_count + 4;
-            let p5 = bind_count + 5;
-            let p6 = bind_count + 6;
-            bind_count += 6;
-            query.push_str(&format!("(${p1}, ${p2}, ${p3}, ${p4}, ${p5}, ${p6})"));
-        }
-        query.push_str(" RETURNING id");
-
-        let mut q = sqlx::query(&query);
+        // Insert pins one by one and collect generated IDs
+        let mut pin_ids: Vec<i64> = Vec::new();
         for pin_response in &all_pin_responses {
             // Map status enum to lowercase string to satisfy CHECK constraint
             let status = match pin_response.status {
@@ -783,46 +763,33 @@ impl Db {
                 crate::ipfs::PinResponseStatus::Pinned => "pinned",
                 crate::ipfs::PinResponseStatus::Failed => "failed",
             };
-            q = q
-                .bind(task_id)
-                .bind(&pin_response.provider_type)
-                .bind(&pin_response.provider_url)
-                .bind(&pin_response.cid)
-                .bind(&pin_response.id)
-                .bind(status);
-        }
-        let rows = q.fetch_all(&mut *tx).await?;
 
-        // Extract generated IDs
-        let pin_ids: Vec<i64> = rows.iter().map(|row| row.get("id")).collect();
+            let row = sqlx::query(
+                "INSERT INTO pins (task_id, provider_type, provider_url, cid, request_id, pin_status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"
+            )
+            .bind(task_id)
+            .bind(&pin_response.provider_type)
+            .bind(&pin_response.provider_url)
+            .bind(&pin_response.cid)
+            .bind(&pin_response.id)
+            .bind(status)
+            .fetch_one(&mut *tx)
+            .await?;
+
+            pin_ids.push(row.get("id"));
+        }
 
         // Insert pinned tokens using the generated pin_ids
-        if !all_token_data.is_empty() {
-            let mut query = String::from(
-                "INSERT INTO pinned_tokens (pin_id, chain, contract_address, token_id) VALUES ",
-            );
-            let mut bind_count = 0;
-            for i in 0..all_token_data.len() {
-                if i > 0 {
-                    query.push_str(", ");
-                }
-                // 4 bind params per row
-                let p1 = bind_count + 1;
-                let p2 = bind_count + 2;
-                let p3 = bind_count + 3;
-                let p4 = bind_count + 4;
-                bind_count += 4;
-                query.push_str(&format!("(${p1}, ${p2}, ${p3}, ${p4})"));
-            }
-            let mut q = sqlx::query(&query);
-            for (index, chain, contract_address, token_id) in &all_token_data {
-                q = q
-                    .bind(pin_ids[*index])
-                    .bind(chain)
-                    .bind(contract_address)
-                    .bind(token_id);
-            }
-            q.execute(&mut *tx).await?;
+        for (index, chain, contract_address, token_id) in &all_token_data {
+            sqlx::query(
+                "INSERT INTO pinned_tokens (pin_id, chain, contract_address, token_id) VALUES ($1, $2, $3, $4)"
+            )
+            .bind(pin_ids[*index])
+            .bind(chain)
+            .bind(contract_address)
+            .bind(token_id)
+            .execute(&mut *tx)
+            .await?;
         }
 
         // Commit the transaction
