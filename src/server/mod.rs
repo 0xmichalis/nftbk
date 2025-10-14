@@ -241,10 +241,9 @@ pub async fn check_backup_on_disk(
 pub trait BackupTaskDb {
     async fn clear_backup_errors(&self, task_id: &str, scope: &str) -> Result<(), sqlx::Error>;
     async fn set_backup_error(&self, task_id: &str, error: &str) -> Result<(), sqlx::Error>;
-    async fn insert_pin_requests_with_tokens(
+    async fn insert_pins_with_tokens(
         &self,
         task_id: &str,
-        requestor: &str,
         token_pin_mappings: &[crate::TokenPinMapping],
     ) -> Result<(), sqlx::Error>;
     async fn set_error_logs(
@@ -315,13 +314,12 @@ impl BackupTaskDb for Db {
         Db::set_backup_error(self, task_id, error).await
     }
 
-    async fn insert_pin_requests_with_tokens(
+    async fn insert_pins_with_tokens(
         &self,
         task_id: &str,
-        requestor: &str,
         token_pin_mappings: &[crate::TokenPinMapping],
     ) -> Result<(), sqlx::Error> {
-        Db::insert_pin_requests_with_tokens(self, task_id, requestor, token_pin_mappings).await
+        Db::insert_pins_with_tokens(self, task_id, token_pin_mappings).await
     }
 
     async fn set_error_logs(

@@ -155,9 +155,9 @@ async fn process_ipfs_outcome<DB: BackupTaskDb + ?Sized>(
         // No pin requests in an IPFS backup means the library failed to contact any of the current IPFS providers
         return false;
     }
-    let req = task.requestor.as_deref().unwrap_or("");
+    let _req = task.requestor.as_deref().unwrap_or("");
     let _ = db
-        .insert_pin_requests_with_tokens(&task.task_id, req, &ipfs_outcome.pin_requests)
+        .insert_pins_with_tokens(&task.task_id, &ipfs_outcome.pin_requests)
         .await;
     true
 }
@@ -333,10 +333,9 @@ mod persist_error_logs_tests {
         async fn set_backup_error(&self, _task_id: &str, _error: &str) -> Result<(), sqlx::Error> {
             Ok(())
         }
-        async fn insert_pin_requests_with_tokens(
+        async fn insert_pins_with_tokens(
             &self,
             _task_id: &str,
-            _requestor: &str,
             _token_pin_mappings: &[crate::TokenPinMapping],
         ) -> Result<(), sqlx::Error> {
             Ok(())

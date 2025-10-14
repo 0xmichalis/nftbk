@@ -142,7 +142,7 @@ async fn delete_dir_and_archive_for_task(
 async fn delete_ipfs_pins(
     provider_instances: &[std::sync::Arc<dyn crate::ipfs::IpfsPinningProvider>],
     task_id: &str,
-    pin_requests: &[crate::server::db::PinRequestRow],
+    pin_requests: &[crate::server::db::PinRow],
 ) -> Result<bool, String> {
     let mut deleted_anything = false;
     for pin_request in pin_requests {
@@ -267,7 +267,7 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
         if !(meta.storage_mode == "ipfs" || meta.storage_mode == "full") {
             debug!("Skipping IPFS pin cleanup for task {task_id} (no IPFS pins)");
         } else {
-            let pin_requests = match state.db.get_pin_requests_by_task_id(&task_id).await {
+            let pin_requests = match state.db.get_pins_by_task_id(&task_id).await {
                 Ok(v) => v,
                 Err(e) => {
                     error!("Failed to get pin requests for task {task_id}: {e}");
@@ -482,7 +482,7 @@ mod tests {
         let providers: Vec<std::sync::Arc<dyn crate::ipfs::IpfsPinningProvider>> = vec![provider];
 
         let rows = vec![
-            crate::server::db::PinRequestRow {
+            crate::server::db::PinRow {
                 id: 1,
                 task_id: "t".into(),
                 provider_type: "mock".into(),
@@ -490,11 +490,9 @@ mod tests {
                 cid: "cid1".into(),
                 request_id: "rid1".into(),
                 pin_status: "pinned".into(),
-                requestor: "u".into(),
-                task_status: None,
-                fatal_error: None,
+                created_at: chrono::Utc::now(),
             },
-            crate::server::db::PinRequestRow {
+            crate::server::db::PinRow {
                 id: 2,
                 task_id: "t".into(),
                 provider_type: "mock".into(),
@@ -502,9 +500,7 @@ mod tests {
                 cid: "cid2".into(),
                 request_id: "rid2".into(),
                 pin_status: "pinned".into(),
-                requestor: "u".into(),
-                task_status: None,
-                fatal_error: None,
+                created_at: chrono::Utc::now(),
             },
         ];
 
@@ -517,7 +513,7 @@ mod tests {
     #[tokio::test]
     async fn delete_ipfs_pins_errors_when_provider_missing() {
         let providers: Vec<std::sync::Arc<dyn crate::ipfs::IpfsPinningProvider>> = vec![];
-        let rows = vec![crate::server::db::PinRequestRow {
+        let rows = vec![crate::server::db::PinRow {
             id: 1,
             task_id: "t".into(),
             provider_type: "unknown".into(),
@@ -525,9 +521,7 @@ mod tests {
             cid: "cid".into(),
             request_id: "rid".into(),
             pin_status: "pinned".into(),
-            requestor: "u".into(),
-            task_status: None,
-            fatal_error: None,
+            created_at: chrono::Utc::now(),
         }];
         let err = delete_ipfs_pins(&providers, "t", &rows).await.unwrap_err();
         assert!(err.contains("No provider instance"));
@@ -592,10 +586,9 @@ mod tests {
             Ok(())
         }
 
-        async fn insert_pin_requests_with_tokens(
+        async fn insert_pins_with_tokens(
             &self,
             _task_id: &str,
-            _requestor: &str,
             _token_pin_mappings: &[crate::TokenPinMapping],
         ) -> Result<(), sqlx::Error> {
             Ok(())
