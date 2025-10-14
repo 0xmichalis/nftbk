@@ -167,6 +167,7 @@ async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
 
     // Re-run backup task
     let tokens: Vec<Tokens> = serde_json::from_value(meta.tokens.clone()).unwrap_or_default();
+    // TODO: Should make the scope configurable and not derive it from the storage mode
     let storage_mode = meta
         .storage_mode
         .parse()
@@ -182,7 +183,7 @@ async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
             create_archive,
         },
         force: true,
-        storage_mode,
+        scope: storage_mode,
         archive_format: meta.archive_format.clone(),
         requestor: requestor.clone(),
     };

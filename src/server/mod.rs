@@ -54,7 +54,7 @@ pub struct BackupTask {
     pub task_id: String,
     pub request: BackupRequest,
     pub force: bool,
-    pub storage_mode: StorageMode,
+    pub scope: StorageMode,
     pub archive_format: Option<String>,
     pub requestor: Option<String>,
 }

@@ -279,7 +279,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized + crate::server::BackupTaskDb>
         task_id: task_id.clone(),
         request: req.clone(),
         force: false,
-        storage_mode: storage_mode.clone(),
+        scope: storage_mode.clone(),
         archive_format: archive_format_opt.clone(),
         requestor: Some(requestor_str.clone()),
     };

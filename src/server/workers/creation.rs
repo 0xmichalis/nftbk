@@ -170,11 +170,11 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
     let task_id = task.task_id.clone();
     let tokens = task.request.tokens.clone();
     let force = task.force;
-    let storage_mode = task.storage_mode.clone();
+    let scope = task.scope.clone();
     info!(
-        "Running backup task for task {} (storage_mode: {})",
+        "Running backup task for task {} (scope: {})",
         task_id,
-        storage_mode.as_str()
+        scope.as_str()
     );
 
     // If force is set, clean up the error log if it exists
@@ -191,7 +191,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
     let token_config = TokenConfig { chains: token_map };
 
     // Determine output path and IPFS settings based on storage mode
-    let (output_path, ipfs_providers) = match storage_mode {
+    let (output_path, ipfs_providers) = match scope {
         StorageMode::Archive => {
             // Filesystem only: permanent directory, no IPFS
             let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
@@ -250,7 +250,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
     persist_non_fatal_error_logs(
         db,
         &task_id,
-        &storage_mode,
+        &scope,
         &archive_outcome.errors,
         &ipfs_outcome.errors,
     )
@@ -259,13 +259,13 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
     let mut archive_status = "in_progress";
     let mut ipfs_status = "in_progress";
 
-    if storage_mode != StorageMode::Archive {
+    if scope != StorageMode::Archive {
         // Persist token-pin request mappings atomically, if any
         let pin_success = process_ipfs_outcome(db, &task, &ipfs_outcome).await;
         ipfs_status = if pin_success { "done" } else { "error" };
     }
 
-    if storage_mode != StorageMode::Ipfs {
+    if scope != StorageMode::Ipfs {
         let out_path = output_path.as_ref().unwrap();
         let archive_success = process_archive_outcome(
             &state,
@@ -282,7 +282,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
 
     // Update subresource statuses
     let _ = db
-        .update_backup_statuses(&task_id, storage_mode.as_str(), archive_status, ipfs_status)
+        .update_backup_statuses(&task_id, scope.as_str(), archive_status, ipfs_status)
         .await;
     info!("Backup {} ready", task_id);
 }
