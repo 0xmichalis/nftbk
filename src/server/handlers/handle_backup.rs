@@ -13,6 +13,7 @@ use crate::server::db::Db;
 use crate::server::hashing::compute_task_id;
 use crate::server::{AppState, BackupTask, BackupTaskOrShutdown, StorageMode, TaskType};
 
+// TODO: Revisit this logic.
 fn derive_status(meta: &crate::server::db::BackupTask) -> String {
     if meta.archive_fatal_error.is_some() || meta.ipfs_fatal_error.is_some() {
         return "error".to_string();
