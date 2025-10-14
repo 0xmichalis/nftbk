@@ -536,7 +536,16 @@ mod handle_backup_core_tests {
             Ok(())
         }
 
-        async fn update_backup_task_error_log(
+        async fn set_error_logs(
+            &self,
+            _task_id: &str,
+            _archive_error_log: Option<&str>,
+            _ipfs_error_log: Option<&str>,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn update_archive_error_log(
             &self,
             _task_id: &str,
             _error_log: &str,
@@ -681,7 +690,8 @@ mod handle_backup_core_tests {
                 nft_count: 0,
                 tokens: serde_json::Value::Null,
                 status: "done".to_string(),
-                error_log: None,
+                archive_error_log: None,
+                ipfs_error_log: None,
                 fatal_error: None,
                 storage_mode: "archive".to_string(),
                 deleted_at: Some(chrono::Utc::now()),
@@ -717,16 +727,17 @@ mod handle_backup_core_tests {
                 task_id: "test".to_string(),
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
-                requestor: "test".to_string(),
-                nft_count: 0,
-                tokens: serde_json::Value::Null,
+                requestor: "did:privy:alice".to_string(),
+                nft_count: 1,
+                tokens: serde_json::json!([]),
                 status: "in_progress".to_string(),
-                error_log: None,
+                archive_error_log: None,
+                ipfs_error_log: None,
                 fatal_error: None,
                 storage_mode: "archive".to_string(),
-                deleted_at: None,
-                archive_format: None,
+                archive_format: Some("zip".to_string()),
                 expires_at: None,
+                deleted_at: None,
                 archive_deleted_at: None,
                 pins_deleted_at: None,
             }),

@@ -307,14 +307,11 @@ mod handle_backup_delete_core_tests {
             nft_count: 1,
             tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
             status: status.to_string(),
-            error_log: None,
+            archive_error_log: None,
+            ipfs_error_log: None,
             fatal_error: None,
             storage_mode: storage_mode.to_string(),
-            archive_format: if storage_mode == "archive" || storage_mode == "full" {
-                Some("zip".to_string())
-            } else {
-                None
-            },
+            archive_format: Some("zip".to_string()),
             expires_at: None,
             deleted_at: None,
             archive_deleted_at: None,

@@ -35,6 +35,18 @@ pub struct TokenPinMapping {
     pub pin_responses: Vec<crate::ipfs::PinResponse>,
 }
 
+#[derive(Debug)]
+pub struct ArchiveOutcome {
+    pub files: Vec<PathBuf>,
+    pub errors: Vec<String>,
+}
+
+#[derive(Debug)]
+pub struct IpfsOutcome {
+    pub pin_requests: Vec<TokenPinMapping>,
+    pub errors: Vec<String>,
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChainConfig(pub HashMap<String, String>);
 
@@ -97,17 +109,15 @@ pub mod backup {
     }
 
     /// Backup tokens from config
-    /// Returns all files saved, token-pin mappings, and all errors encountered
+    /// Returns grouped results for archives and IPFS
     pub async fn backup_from_config(
         cfg: BackupConfig,
         span: Option<tracing::Span>,
-    ) -> Result<(Vec<PathBuf>, Vec<TokenPinMapping>, Vec<String>)> {
+    ) -> Result<(ArchiveOutcome, IpfsOutcome)> {
         // Validate backup configuration
         validate_backup_config(&cfg)?;
 
-        async fn inner(
-            cfg: BackupConfig,
-        ) -> Result<(Vec<PathBuf>, Vec<TokenPinMapping>, Vec<String>)> {
+        async fn inner(cfg: BackupConfig) -> Result<(ArchiveOutcome, IpfsOutcome)> {
             info!(
                 "Protection requested: download to disk={}, pin to IPFS={}",
                 cfg.storage_config.output_path.is_some(),
@@ -124,7 +134,8 @@ pub mod backup {
             let start = Instant::now();
             let mut all_files = Vec::new();
             let mut all_token_pin_mappings: Vec<TokenPinMapping> = Vec::new();
-            let mut all_errors = Vec::new();
+            let mut all_archive_errors = Vec::new();
+            let mut all_ipfs_errors = Vec::new();
             let mut nft_count = 0;
 
             for (chain_name, tokens) in &token_config.chains {
@@ -139,7 +150,7 @@ pub mod backup {
                 let tokens = ContractTokenId::parse_tokens(tokens, chain_name);
                 nft_count += tokens.len();
 
-                let (files, token_pin_mappings, errors) = if chain_name == "tezos" {
+                let (archive_out, ipfs_out) = if chain_name == "tezos" {
                     let processor = Arc::new(TezosChainProcessor::new(
                         rpc_url,
                         cfg.storage_config.clone(),
@@ -166,9 +177,10 @@ pub mod backup {
                     )
                     .await?
                 };
-                all_files.extend(files);
-                all_errors.extend(errors);
-                all_token_pin_mappings.extend(token_pin_mappings);
+                all_files.extend(archive_out.files);
+                all_archive_errors.extend(archive_out.errors);
+                all_ipfs_errors.extend(ipfs_out.errors);
+                all_token_pin_mappings.extend(ipfs_out.pin_requests);
             }
 
             if cfg.storage_config.prune_redundant {
@@ -199,7 +211,16 @@ pub mod backup {
                 );
             }
 
-            Ok((all_files, all_token_pin_mappings, all_errors))
+            Ok((
+                ArchiveOutcome {
+                    files: all_files,
+                    errors: all_archive_errors,
+                },
+                IpfsOutcome {
+                    pin_requests: all_token_pin_mappings,
+                    errors: all_ipfs_errors,
+                },
+            ))
         }
 
         match span {
