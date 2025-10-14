@@ -7,7 +7,7 @@ use tracing::{error, info};
 
 use crate::backup::backup_from_config;
 use crate::server::archive::{
-    get_zipped_backup_paths, zip_backup, ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
+    get_zipped_backup_paths, sync_files, zip_backup, ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
 };
 use crate::server::{AppState, BackupTask, BackupTaskDb, StorageMode};
 use crate::{BackupConfig, IpfsOutcome, ProcessManagementConfig, StorageConfig, TokenConfig};
@@ -48,24 +48,6 @@ async fn persist_non_fatal_error_logs<DB: BackupTaskDb + ?Sized>(
         crate::server::StorageMode::Ipfs => {
             if let Some(i) = ipfs_log.as_deref() {
                 let _ = db.update_ipfs_task_error_log(task_id, i).await;
-            }
-        }
-    }
-}
-
-fn sync_files(files_written: &[std::path::PathBuf]) {
-    let mut synced_dirs = std::collections::HashSet::new();
-    for file in files_written {
-        if file.is_file() {
-            if let Ok(f) = std::fs::File::open(file) {
-                let _ = f.sync_all();
-            }
-        }
-        if let Some(parent) = file.parent() {
-            if synced_dirs.insert(parent.to_path_buf()) {
-                if let Ok(dir) = std::fs::File::open(parent) {
-                    let _ = dir.sync_all();
-                }
             }
         }
     }
