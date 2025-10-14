@@ -122,7 +122,17 @@ async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
     };
 
     // Check if task is in progress or being deleted
-    if meta.status == "in_progress" {
+    let archive_needed = meta.storage_mode != "ipfs";
+    let ipfs_needed = meta.storage_mode != "archive";
+    let archive_status = meta.archive_status.as_deref().unwrap_or("in_progress");
+    let ipfs_status = if ipfs_needed {
+        meta.ipfs_status.as_deref().unwrap_or("in_progress")
+    } else {
+        "done"
+    };
+    if (archive_needed && archive_status == "in_progress")
+        || (ipfs_needed && ipfs_status == "in_progress")
+    {
         let problem = ProblemJson::from_status(
             StatusCode::BAD_REQUEST,
             Some("Task is already in progress".to_string()),
@@ -264,10 +274,12 @@ mod handle_backup_retry_core_tests {
             requestor: owner.to_string(),
             nft_count: 1,
             tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
-            status: status.to_string(),
+            archive_status: Some(status.to_string()),
+            ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
-            fatal_error: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
             storage_mode: "archive".to_string(),
             archive_format: Some("zip".to_string()),
             expires_at: None,

@@ -4,6 +4,38 @@ use tracing::{error, info};
 
 use crate::server::{AppState, BackupTaskDb, DeletionTask, StorageMode};
 
+pub fn validate_status_for_scope(
+    scope: &StorageMode,
+    archive_status: Option<&str>,
+    ipfs_status: Option<&str>,
+) -> Result<(), &'static str> {
+    let a_in_progress = matches!(archive_status, Some("in_progress"));
+    let i_in_progress = matches!(ipfs_status, Some("in_progress"));
+    match scope {
+        StorageMode::Archive => {
+            if a_in_progress {
+                Err("in_progress")
+            } else {
+                Ok(())
+            }
+        }
+        StorageMode::Ipfs => {
+            if i_in_progress {
+                Err("in_progress")
+            } else {
+                Ok(())
+            }
+        }
+        StorageMode::Full => {
+            if a_in_progress || i_in_progress {
+                Err("in_progress")
+            } else {
+                Ok(())
+            }
+        }
+    }
+}
+
 /// Helper function to determine which start deletion function to call based on scope and storage mode
 pub async fn start_deletion_for_scope<DB: BackupTaskDb + ?Sized>(
     db: &DB,
@@ -183,8 +215,14 @@ async fn run_deletion_task_inner<DB: BackupTaskDb + ?Sized>(
         }
     }
 
-    // Check if task is in progress
-    if meta.status == "in_progress" {
+    // Check if task is in progress for the requested scope
+    if validate_status_for_scope(
+        &task.scope,
+        meta.archive_status.as_deref(),
+        meta.ipfs_status.as_deref(),
+    )
+    .is_err()
+    {
         error!("Cannot delete task {task_id} that is in progress");
         return;
     }
@@ -277,6 +315,62 @@ pub async fn run_deletion_task(state: AppState, task: DeletionTask) {
         let error_msg = format!("Deletion task for task {task_id} panicked: {panic_msg}");
         error!("{error_msg}");
         let _ = BackupTaskDb::set_backup_error(&*state_clone.db, &task_id, &error_msg).await;
+    }
+}
+
+#[cfg(test)]
+mod validate_status_for_scope_tests {
+    use super::{validate_status_for_scope, StorageMode};
+
+    #[test]
+    fn table_validates_all_cases() {
+        // (scope, archive_status, ipfs_status, expect_ok)
+        let cases: Vec<(
+            StorageMode,
+            Option<&'static str>,
+            Option<&'static str>,
+            bool,
+        )> = vec![
+            // Full scope
+            (StorageMode::Full, Some("done"), Some("done"), true),
+            (StorageMode::Full, Some("error"), Some("done"), true),
+            (StorageMode::Full, None, Some("done"), true),
+            (StorageMode::Full, Some("done"), None, true),
+            (StorageMode::Full, None, None, true),
+            (StorageMode::Full, Some("in_progress"), Some("done"), false),
+            (StorageMode::Full, Some("done"), Some("in_progress"), false),
+            (StorageMode::Full, Some("in_progress"), None, false),
+            (StorageMode::Full, None, Some("in_progress"), false),
+            // Archive scope
+            (StorageMode::Archive, Some("done"), Some("done"), true),
+            (StorageMode::Archive, Some("error"), None, true),
+            (StorageMode::Archive, None, Some("in_progress"), true),
+            (StorageMode::Archive, None, None, true),
+            (
+                StorageMode::Archive,
+                Some("in_progress"),
+                Some("done"),
+                false,
+            ),
+            (StorageMode::Archive, Some("in_progress"), None, false),
+            // Ipfs scope
+            (StorageMode::Ipfs, Some("done"), Some("done"), true),
+            (StorageMode::Ipfs, None, Some("error"), true),
+            (StorageMode::Ipfs, Some("in_progress"), None, true),
+            (StorageMode::Ipfs, None, None, true),
+            (StorageMode::Ipfs, Some("done"), Some("in_progress"), false),
+            (StorageMode::Ipfs, None, Some("in_progress"), false),
+        ];
+
+        for (idx, (scope, a, i, expect_ok)) in cases.into_iter().enumerate() {
+            let result = validate_status_for_scope(&scope, a, i);
+            let ok = result.is_ok();
+            assert_eq!(
+                ok, expect_ok,
+                "case {} failed: scope={:?}, a={:?}, i={:?}",
+                idx, scope, a, i
+            );
+        }
     }
 }
 
@@ -389,8 +483,10 @@ mod tests {
                 provider_url: Some("mock".into()),
                 cid: "cid1".into(),
                 request_id: "rid1".into(),
-                status: "pinned".into(),
+                pin_status: "pinned".into(),
                 requestor: "u".into(),
+                task_status: None,
+                fatal_error: None,
             },
             crate::server::db::PinRequestRow {
                 id: 2,
@@ -399,8 +495,10 @@ mod tests {
                 provider_url: Some("mock".into()),
                 cid: "cid2".into(),
                 request_id: "rid2".into(),
-                status: "pinned".into(),
+                pin_status: "pinned".into(),
                 requestor: "u".into(),
+                task_status: None,
+                fatal_error: None,
             },
         ];
 
@@ -420,8 +518,10 @@ mod tests {
             provider_url: Some("https://unknown".into()),
             cid: "cid".into(),
             request_id: "rid".into(),
-            status: "pinned".into(),
+            pin_status: "pinned".into(),
             requestor: "u".into(),
+            task_status: None,
+            fatal_error: None,
         }];
         let err = delete_ipfs_pins(&providers, "t", &rows).await.unwrap_err();
         assert!(err.contains("No provider instance"));
@@ -508,7 +608,7 @@ mod tests {
             Ok(())
         }
 
-        async fn update_backup_task_status(
+        async fn update_archive_request_status(
             &self,
             _task_id: &str,
             _status: &str,
@@ -586,6 +686,22 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(task_id.to_string());
+            Ok(())
+        }
+
+        async fn update_ipfs_task_status(
+            &self,
+            _task_id: &str,
+            _status: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn set_ipfs_task_error(
+            &self,
+            _task_id: &str,
+            _fatal_error: &str,
+        ) -> Result<(), sqlx::Error> {
             Ok(())
         }
     }

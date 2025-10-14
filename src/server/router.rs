@@ -17,9 +17,6 @@ use crate::server::api::{
 };
 use crate::server::db::{BackupTask, PinInfo, TokenWithPins};
 use crate::server::handlers::handle_backup::{__path_handle_backup, handle_backup};
-use crate::server::handlers::handle_backup_delete::{
-    __path_handle_backup_delete, handle_backup_delete,
-};
 use crate::server::handlers::handle_backup_delete_archive::{
     __path_handle_backup_delete_archive, handle_backup_delete_archive,
 };
@@ -48,7 +45,6 @@ use crate::server::AppState;
         handle_download_token,
         handle_download,
         handle_backup_retry,
-        handle_backup_delete,
         handle_backup_delete_archive,
         handle_backup_delete_pins,
         handle_backups,
@@ -194,10 +190,7 @@ pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -
     // Authenticated router
     let mut authed_router = Router::new()
         .route("/v1/backups", get(handle_backups).post(handle_backup))
-        .route(
-            "/v1/backups/:task_id",
-            get(handle_status).delete(handle_backup_delete),
-        )
+        .route("/v1/backups/:task_id", get(handle_status))
         .route(
             "/v1/backups/:task_id/download-tokens",
             post(handle_download_token),

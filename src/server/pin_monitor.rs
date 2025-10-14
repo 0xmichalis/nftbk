@@ -83,11 +83,11 @@ pub async fn monitor_pin_requests<DB: PinMonitorDb + ?Sized>(
                 };
 
                 // Only update if the status has changed
-                if new_status != pin_request.status {
+                if new_status != pin_request.pin_status {
                     status_updates.push((pin_request.id, new_status.to_string()));
                     info!(
                         "Queued status update for pin request {}: {} -> {}",
-                        pin_request.id, pin_request.status, new_status
+                        pin_request.id, pin_request.pin_status, new_status
                     );
                 }
             }
@@ -309,8 +309,10 @@ mod tests {
             provider_url: Some(provider_url.to_string()),
             cid: "QmTestCid".to_string(),
             request_id: request_id.to_string(),
-            status: status.to_string(),
+            pin_status: status.to_string(),
             requestor: "test-user".to_string(),
+            task_status: Some("in_progress".to_string()),
+            fatal_error: None,
         }
     }
 

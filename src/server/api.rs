@@ -37,19 +37,23 @@ pub struct BackupResponse {
     pub task_id: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct SubresourceStatus {
+    /// Subresource status
+    #[schema(example = "done")]
+    pub status: Option<String>,
+    /// Fatal error for the subresource
+    pub fatal_error: Option<String>,
+    /// Aggregated non-fatal error log for the subresource
+    pub error_log: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StatusResponse {
-    /// Current status of the backup (in_progress, done, error, expired)
-    #[schema(example = "done")]
-    pub status: String,
-    /// Fatal error message if the backup failed completely
-    pub error: Option<String>,
-    /// Archive-related non-fatal error log
-    #[schema(example = "Failed to download token #123: HTTP 404")]
-    pub archive_error_log: Option<String>,
-    /// IPFS-related non-fatal error log aggregated from pin requests
-    #[schema(example = "pinata: 401 Unauthorized\nweb3.storage: 429 Too Many Requests")]
-    pub ipfs_error_log: Option<String>,
+    /// Archive subresource status/errors
+    pub archive: SubresourceStatus,
+    /// IPFS subresource status/errors
+    pub ipfs: SubresourceStatus,
 }
 
 // RFC 7807 problem+json error shape

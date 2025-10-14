@@ -154,7 +154,7 @@ async fn serve_zip_file_for_token_core<DB: DownloadDb + ?Sized>(
     state: &AppState,
     task_id: &str,
 ) -> Response {
-    // Read archive_format and status from the database
+    // Read archive_format and subresource statuses from the database
     let meta = match db.get_backup_task(task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
@@ -174,7 +174,8 @@ async fn serve_zip_file_for_token_core<DB: DownloadDb + ?Sized>(
             .into_response();
         }
     };
-    if meta.status != "done" {
+    // Allow download only when archive subresource is done
+    if meta.archive_status.as_deref().unwrap_or("in_progress") != "done" {
         return ProblemJson::from_status(
             StatusCode::ACCEPTED,
             Some("Task not completed yet".to_string()),
