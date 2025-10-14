@@ -679,7 +679,13 @@ impl Db {
             FROM backup_tasks b
             LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
             LEFT JOIN pin_requests pr ON b.task_id = pr.task_id
-            WHERE COALESCE(ar.status, 'in_progress') = 'in_progress'
+            WHERE (
+                -- Archive-only or Full mode: check archive status (record must exist and be in_progress)
+                (b.storage_mode IN ('archive', 'full') AND ar.status = 'in_progress')
+                OR
+                -- IPFS-only mode: check IPFS status (record must exist and be in_progress)
+                (b.storage_mode = 'ipfs' AND pr.status = 'in_progress')
+            )
             ORDER BY b.created_at ASC
             "#,
         )
