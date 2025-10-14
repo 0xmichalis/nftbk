@@ -155,7 +155,6 @@ async fn process_ipfs_outcome<DB: BackupTaskDb + ?Sized>(
         // No pin requests in an IPFS backup means the library failed to contact any of the current IPFS providers
         return false;
     }
-    let _req = task.requestor.as_deref().unwrap_or("");
     let _ = db
         .insert_pins_with_tokens(&task.task_id, &ipfs_outcome.pin_requests)
         .await;

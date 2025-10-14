@@ -2,26 +2,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ProtectionTaskRow {
-    pub task_id: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub requestor: String,
-    pub nft_count: i32,
-    pub tokens: serde_json::Value,
-    pub status: String,
-    pub fatal_error: Option<String>,
-    pub storage_mode: String,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct BackupRequestRow {
-    pub task_id: String,
-    pub archive_format: String,
-    pub expires_at: Option<DateTime<Utc>>,
-}
-
 /// Combined view of backup_tasks + archive_requests
 #[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
 #[schema(description = "Backup task information including metadata and status")]
@@ -1111,9 +1091,10 @@ impl Db {
         Ok(())
     }
 
-    /// Set backup fatal error for relevant subresources in a single SQL statement
-    /// - archive or full: updates archive_requests.status and archive_requests.fatal_error
-    /// - ipfs or full: updates pin_requests.status and pin_requests.fatal_error
+    /// Set backup fatal error for relevant subresources in a single SQL statement.
+    /// The update is based on the `storage_mode` value from the `backup_tasks` table for the given `task_id`:
+    /// - If storage_mode is 'archive' or 'full': updates archive_requests.status and archive_requests.fatal_error
+    /// - If storage_mode is 'ipfs' or 'full': updates pin_requests.status and pin_requests.fatal_error
     pub async fn set_backup_error(
         &self,
         task_id: &str,
