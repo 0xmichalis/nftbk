@@ -161,31 +161,16 @@ async fn process_ipfs_outcome<DB: BackupTaskDb + ?Sized>(
     true
 }
 
-async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
-    state: AppState,
-    task: BackupTask,
-    db: &DB,
-) {
-    let task_id = task.task_id.clone();
-    let tokens = task.request.tokens.clone();
-    let force = task.force;
-    let scope = task.scope.clone();
-    info!(
-        "Running backup task for task {} (scope: {})",
-        task_id,
-        scope.as_str()
-    );
-
-    // If force is set, clean up the error log if it exists
-    if force {
-        let _ = db.clear_backup_errors(&task_id, scope.as_str()).await;
-    }
-
-    // Prepare backup config
+fn prepare_backup_config(
+    state: &AppState,
+    task_id: &str,
+    scope: &StorageMode,
+    tokens: &[crate::server::api::Tokens],
+) -> BackupConfig {
     let shutdown_flag = Some(state.shutdown_flag.clone());
     let mut token_map = HashMap::new();
-    for entry in tokens.clone() {
-        token_map.insert(entry.chain, entry.tokens);
+    for entry in tokens {
+        token_map.insert(entry.chain.clone(), entry.tokens.clone());
     }
     let token_config = TokenConfig { chains: token_map };
 
@@ -207,8 +192,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
         }
     };
 
-    // Run backup
-    let backup_cfg = BackupConfig {
+    BackupConfig {
         chain_config: (*state.chain_config).clone(),
         token_config,
         storage_config: StorageConfig {
@@ -220,9 +204,35 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
             exit_on_error: false,
             shutdown_flag: shutdown_flag.clone(),
         },
-        task_id: Some(task_id.clone()),
-    };
+        task_id: Some(task_id.to_string()),
+    }
+}
+
+async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
+    state: AppState,
+    task: BackupTask,
+    db: &DB,
+) {
+    let task_id = task.task_id.clone();
+    let force = task.force;
+    let scope = task.scope.clone();
+    info!(
+        "Running backup task for task {} (scope: {})",
+        task_id,
+        scope.as_str()
+    );
+
+    // If force is set, clean up the error log if it exists
+    if force {
+        let _ = db.clear_backup_errors(&task_id, scope.as_str()).await;
+    }
+
+    // Prepare backup config
+    let backup_cfg = prepare_backup_config(&state, &task_id, &scope, &task.request.tokens);
+    let output_path = backup_cfg.storage_config.output_path.clone();
     let span = tracing::info_span!("backup_task", task_id = %task_id);
+
+    // Run backup
     let backup_result = backup_from_config(backup_cfg, Some(span)).await;
 
     // Check backup result
@@ -272,7 +282,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
             &task_id,
             out_path,
             &archive_outcome,
-            shutdown_flag.clone(),
+            Some(state.shutdown_flag.clone()),
             db,
         )
         .await;
