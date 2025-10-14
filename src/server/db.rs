@@ -1183,6 +1183,44 @@ impl Db {
         Ok(())
     }
 
+    /// Update backup subresource statuses for the task based on its storage mode
+    /// - archive or full: updates archive_requests.status
+    /// - ipfs or full: updates pin_requests.task_status
+    pub async fn update_backup_statuses(
+        &self,
+        task_id: &str,
+        scope: &str,
+        archive_status: &str,
+        ipfs_status: &str,
+    ) -> Result<(), sqlx::Error> {
+        let sql = r#"
+            WITH upd_archive AS (
+                UPDATE archive_requests ar
+                SET status = $2
+                WHERE ar.task_id = $1
+                  AND ($4 IN ('archive', 'full'))
+                RETURNING 1
+            ),
+            upd_pins AS (
+                UPDATE pin_requests pr
+                SET task_status = $3
+                WHERE pr.task_id = $1
+                  AND ($4 IN ('ipfs', 'full'))
+                RETURNING 1
+            )
+            SELECT COALESCE((SELECT COUNT(*) FROM upd_archive), 0) AS archive_updates,
+                   COALESCE((SELECT COUNT(*) FROM upd_pins), 0)     AS pin_updates
+        "#;
+        sqlx::query(sql)
+            .bind(task_id)
+            .bind(archive_status)
+            .bind(ipfs_status)
+            .bind(scope)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     /// Set IPFS task-level fatal error and mark task_status as error
     pub async fn set_ipfs_task_error(
         &self,

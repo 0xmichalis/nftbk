@@ -10,16 +10,7 @@ use crate::server::archive::{
     get_zipped_backup_paths, zip_backup, ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
 };
 use crate::server::{AppState, BackupTask, BackupTaskDb, StorageMode};
-use crate::{BackupConfig, ProcessManagementConfig, StorageConfig, TokenConfig};
-
-fn derive_scope_from_request(req: &crate::server::api::BackupRequest) -> StorageMode {
-    match (req.create_archive, req.pin_on_ipfs) {
-        (true, true) => StorageMode::Full,
-        (true, false) => StorageMode::Archive,
-        (false, true) => StorageMode::Ipfs,
-        (false, false) => StorageMode::Archive, // defensive fallback; validation prevents this
-    }
-}
+use crate::{BackupConfig, IpfsOutcome, ProcessManagementConfig, StorageConfig, TokenConfig};
 
 /// Persist non-fatal error logs for archive and/or IPFS based on the requested scope
 async fn persist_non_fatal_error_logs<DB: BackupTaskDb + ?Sized>(
@@ -78,6 +69,115 @@ fn sync_files(files_written: &[std::path::PathBuf]) {
             }
         }
     }
+}
+
+async fn process_archive_outcome<DB: BackupTaskDb + ?Sized>(
+    state: &AppState,
+    task: &BackupTask,
+    task_id: &str,
+    out_path: &std::path::Path,
+    archive_outcome: &crate::ArchiveOutcome,
+    shutdown_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    db: &DB,
+) -> bool {
+    // Sync all files and directories to disk before archiving
+    info!("Syncing {} to disk before archiving", out_path.display());
+    let files_written = archive_outcome.files.clone();
+    let files_written_clone = files_written.clone();
+    if tokio::task::spawn_blocking(move || {
+        sync_files(&files_written_clone);
+    })
+    .await
+    .is_err()
+    {
+        let error_msg = "Sync before archiving failed".to_string();
+        error!("{error_msg}");
+        let _ = db.set_archive_request_error(task_id, &error_msg).await;
+        return false;
+    }
+    info!(
+        "Synced {} to disk before archiving ({} files)",
+        out_path.display(),
+        files_written.len()
+    );
+
+    // Archive the output dir
+    let archive_fmt = task.archive_format.as_deref().unwrap_or("zip");
+    let (zip_pathbuf, checksum_path) =
+        get_zipped_backup_paths(&state.base_dir, task_id, archive_fmt);
+    info!("Archiving backup to {}", zip_pathbuf.display());
+    let start_time = Instant::now();
+    let out_path_clone = out_path.to_path_buf();
+    let zip_pathbuf_clone = zip_pathbuf.clone();
+    let archive_format_clone = archive_fmt.to_string();
+    let shutdown_flag_clone = shutdown_flag.clone();
+    let zip_result = match tokio::task::spawn_blocking(move || {
+        zip_backup(
+            &out_path_clone,
+            &zip_pathbuf_clone,
+            archive_format_clone,
+            shutdown_flag_clone,
+        )
+    })
+    .await
+    {
+        Ok(r) => r,
+        Err(_) => {
+            let error_msg = "Archiving task panicked".to_string();
+            error!("{error_msg}");
+            let _ = db.set_archive_request_error(task_id, &error_msg).await;
+            return false;
+        }
+    };
+
+    // Check archive result
+    match zip_result {
+        Ok(checksum) => {
+            info!(
+                "Archived backup at {} in {:?}s",
+                zip_pathbuf.display(),
+                start_time.elapsed().as_secs()
+            );
+            if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
+                let error_msg = format!("Failed to write archive checksum file: {e}");
+                error!("{error_msg}");
+                let _ = db.set_archive_request_error(task_id, &error_msg).await;
+                return false;
+            }
+        }
+        Err(e) => {
+            let err_str = e.to_string();
+            if err_str.contains(ARCHIVE_INTERRUPTED_BY_SHUTDOWN) {
+                info!(
+                    "Archiving for backup {task_id} was gracefully interrupted by shutdown signal"
+                );
+                let _ = std::fs::remove_file(&zip_pathbuf);
+                return false;
+            }
+            let error_msg = format!("Failed to archive backup: {e}");
+            error!("{error_msg}");
+            let _ = db.set_archive_request_error(task_id, &error_msg).await;
+            return false;
+        }
+    }
+
+    true
+}
+
+async fn process_ipfs_outcome<DB: BackupTaskDb + ?Sized>(
+    db: &DB,
+    task: &BackupTask,
+    ipfs_outcome: &IpfsOutcome,
+) -> bool {
+    if ipfs_outcome.pin_requests.is_empty() {
+        // No pin requests in an IPFS backup means the library failed to contact any of the current IPFS providers
+        return false;
+    }
+    let req = task.requestor.as_deref().unwrap_or("");
+    let _ = db
+        .insert_pin_requests_with_tokens(&task.task_id, req, &ipfs_outcome.pin_requests)
+        .await;
+    true
 }
 
 async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
@@ -164,108 +264,45 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
         }
     };
 
-    // Persist token-pin request mappings atomically, if any
-    if !ipfs_outcome.pin_requests.is_empty() {
-        let req = task.requestor.as_deref().unwrap_or("");
-        let _ = db
-            .insert_pin_requests_with_tokens(&task.task_id, req, &ipfs_outcome.pin_requests)
-            .await;
-    }
-
-    // Store non-fatal library error logs according to requested scope (derived from request)
-    let scope = derive_scope_from_request(&task.request);
+    // Store non-fatal library error logs
     persist_non_fatal_error_logs(
         db,
         &task_id,
-        &scope,
+        &storage_mode,
         &archive_outcome.errors,
         &ipfs_outcome.errors,
     )
     .await;
 
-    // Handle archiving based on storage mode
-    match storage_mode {
-        StorageMode::Archive | StorageMode::Full => {
-            // We have a filesystem output path
-            let out_path = output_path.as_ref().unwrap();
+    let mut archive_status = "in_progress";
+    let mut ipfs_status = "in_progress";
 
-            // Sync all files and directories to disk before archiving
-            info!("Syncing {} to disk before archiving", out_path.display());
-            let files_written = archive_outcome.files.clone();
-            let files_written_clone = files_written.clone();
-            tokio::task::spawn_blocking(move || {
-                sync_files(&files_written_clone);
-            })
-            .await
-            .unwrap();
-            info!(
-                "Synced {} to disk before archiving ({} files)",
-                out_path.display(),
-                files_written.len()
-            );
-
-            // Archive the output dir
-            let archive_fmt = task.archive_format.as_deref().unwrap_or("zip");
-            let (zip_pathbuf, checksum_path) =
-                get_zipped_backup_paths(&state.base_dir, &task_id, archive_fmt);
-            info!("Archiving backup to {}", zip_pathbuf.display());
-            let start_time = Instant::now();
-            let out_path_clone = out_path.clone();
-            let zip_pathbuf_clone = zip_pathbuf.clone();
-            let archive_format_clone = archive_fmt.to_string();
-            let shutdown_flag_clone = shutdown_flag.clone();
-            let zip_result = tokio::task::spawn_blocking(move || {
-                zip_backup(
-                    &out_path_clone,
-                    &zip_pathbuf_clone,
-                    archive_format_clone,
-                    shutdown_flag_clone,
-                )
-            })
-            .await
-            .unwrap();
-
-            // Check archive result
-            match zip_result {
-                Ok(checksum) => {
-                    info!(
-                        "Archived backup at {} in {:?}s",
-                        zip_pathbuf.display(),
-                        start_time.elapsed().as_secs()
-                    );
-                    if let Err(e) = tokio::fs::write(&checksum_path, &checksum).await {
-                        let error_msg = format!("Failed to write archive checksum file: {e}");
-                        error!("{error_msg}");
-                        let _ = db.set_backup_error(&task_id, &error_msg).await;
-                        return;
-                    }
-                    let _ = db.update_archive_request_status(&task_id, "done").await;
-                }
-                Err(e) => {
-                    let err_str = e.to_string();
-                    if err_str.contains(ARCHIVE_INTERRUPTED_BY_SHUTDOWN) {
-                        info!(
-                            "Archiving for backup {} was gracefully interrupted by shutdown signal",
-                            task_id
-                        );
-                        let _ = std::fs::remove_file(&zip_pathbuf);
-                        return;
-                    }
-                    let error_msg = format!("Failed to archive backup: {e}");
-                    error!("{error_msg}");
-                    let _ = db.set_backup_error(&task_id, &error_msg).await;
-                    return;
-                }
-            }
-
-            info!("Backup {} ready", task_id);
-        }
-        StorageMode::Ipfs => {
-            // IPFS-only mode: no filesystem operations needed
-            let _ = db.update_pin_request_status(&task_id, "done").await;
-            info!("IPFS pinning for {} complete", task_id);
-        }
+    if storage_mode != StorageMode::Archive {
+        // Persist token-pin request mappings atomically, if any
+        let pin_success = process_ipfs_outcome(db, &task, &ipfs_outcome).await;
+        ipfs_status = if pin_success { "done" } else { "error" };
     }
+
+    if storage_mode != StorageMode::Ipfs {
+        let out_path = output_path.as_ref().unwrap();
+        let archive_success = process_archive_outcome(
+            &state,
+            &task,
+            &task_id,
+            out_path,
+            &archive_outcome,
+            shutdown_flag.clone(),
+            db,
+        )
+        .await;
+        archive_status = if archive_success { "done" } else { "error" };
+    }
+
+    // Update subresource statuses
+    let _ = db
+        .update_backup_statuses(&task_id, storage_mode.as_str(), archive_status, ipfs_status)
+        .await;
+    info!("Backup {} ready", task_id);
 }
 
 pub async fn run_backup_task(state: AppState, task: BackupTask) {
@@ -362,10 +399,26 @@ mod persist_error_logs_tests {
             ));
             Ok(())
         }
+        async fn set_archive_request_error(
+            &self,
+            _task_id: &str,
+            _fatal_error: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
         async fn update_pin_request_status(
             &self,
             _task_id: &str,
             _status: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+        async fn update_backup_statuses(
+            &self,
+            _task_id: &str,
+            _scope: &str,
+            _archive_status: &str,
+            _ipfs_status: &str,
         ) -> Result<(), sqlx::Error> {
             Ok(())
         }
