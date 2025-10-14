@@ -207,7 +207,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
                         let _ = db.set_backup_error(&task_id, &error_msg).await;
                         return;
                     }
-                    let _ = db.update_backup_task_status(&task_id, "done").await;
+                    let _ = db.update_archive_request_status(&task_id, "done").await;
                 }
                 Err(e) => {
                     let err_str = e.to_string();
@@ -231,7 +231,7 @@ async fn run_backup_task_inner<DB: BackupTaskDb + ?Sized>(
         }
         StorageMode::Ipfs => {
             // IPFS-only mode: no filesystem operations needed
-            let _ = db.update_backup_task_status(&task_id, "done").await;
+            let _ = db.update_archive_request_status(&task_id, "done").await;
             info!("IPFS pinning for {} complete", task_id);
         }
     }
@@ -307,7 +307,7 @@ mod persist_error_logs_tests {
             ));
             Ok(())
         }
-        async fn update_backup_task_status(
+        async fn update_archive_request_status(
             &self,
             _task_id: &str,
             _status: &str,
@@ -336,6 +336,22 @@ mod persist_error_logs_tests {
             Ok(())
         }
         async fn complete_ipfs_pins_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn update_ipfs_task_status(
+            &self,
+            _task_id: &str,
+            _status: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn set_ipfs_task_error(
+            &self,
+            _task_id: &str,
+            _fatal_error: &str,
+        ) -> Result<(), sqlx::Error> {
             Ok(())
         }
     }

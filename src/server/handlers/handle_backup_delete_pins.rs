@@ -193,21 +193,21 @@ async fn handle_backup_delete_pins_core<DB: DeletePinsDb + ?Sized>(
         return problem.into_response();
     }
 
-    // Check if task is in progress
-    if meta.status == "in_progress" {
-        let problem = ProblemJson::from_status(
-            StatusCode::CONFLICT,
-            Some("Can only delete completed tasks".to_string()),
-            Some(format!("/v1/backups/{}/pins", task_id)),
-        );
-        return problem.into_response();
-    }
-
     // Check if backup uses IPFS storage
     if meta.storage_mode == "archive" {
         let problem = ProblemJson::from_status(
             StatusCode::UNPROCESSABLE_ENTITY,
             Some("Backup does not use IPFS storage".to_string()),
+            Some(format!("/v1/backups/{}/pins", task_id)),
+        );
+        return problem.into_response();
+    }
+
+    // Check if task is in progress
+    if matches!(meta.ipfs_status.as_deref(), Some("in_progress")) {
+        let problem = ProblemJson::from_status(
+            StatusCode::CONFLICT,
+            Some("Can only delete completed tasks".to_string()),
             Some(format!("/v1/backups/{}/pins", task_id)),
         );
         return problem.into_response();
@@ -317,10 +317,12 @@ mod handle_backup_delete_pins_core_tests {
             requestor: owner.to_string(),
             nft_count: 1,
             tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
-            status: status.to_string(),
+            archive_status: Some(status.to_string()),
+            ipfs_status: Some(status.to_string()),
             archive_error_log: None,
             ipfs_error_log: None,
-            fatal_error: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
             storage_mode: storage_mode.to_string(),
             archive_format: Some("zip".to_string()),
             expires_at: None,

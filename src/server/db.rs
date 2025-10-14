@@ -43,9 +43,10 @@ pub struct BackupTask {
     pub nft_count: i32,
     /// Token details (only included if include_tokens=true)
     pub tokens: serde_json::Value,
-    /// Current task status (in_progress, done, error, expired)
-    #[schema(example = "done")]
-    pub status: String,
+    /// Archive subresource status (in_progress, done, error, expired)
+    pub archive_status: Option<String>,
+    /// IPFS subresource status (in_progress, done, error)
+    pub ipfs_status: Option<String>,
     /// Detailed archive error log if archive completed with some failures
     #[schema(example = "Failed to write archive checksum file")]
     pub archive_error_log: Option<String>,
@@ -54,9 +55,10 @@ pub struct BackupTask {
         example = "Provider pinata failed: 401 Unauthorized\nProvider web3.storage failed: 429 Too Many Requests"
     )]
     pub ipfs_error_log: Option<String>,
-    /// Fatal error message if backup failed completely
-    #[schema(example = "Database connection failed")]
-    pub fatal_error: Option<String>,
+    /// Archive subresource fatal error if backup failed completely at archive stage
+    pub archive_fatal_error: Option<String>,
+    /// IPFS subresource fatal error if backup failed completely at IPFS stage
+    pub ipfs_fatal_error: Option<String>,
     /// Storage mode used for the backup (archive, ipfs, full)
     #[schema(example = "archive")]
     pub storage_mode: String,
@@ -121,8 +123,10 @@ pub struct PinRequestRow {
     pub provider_url: Option<String>,
     pub cid: String,
     pub request_id: String,
-    pub status: String,
+    pub pin_status: String,
     pub requestor: String,
+    pub task_status: Option<String>,
+    pub fatal_error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -175,7 +179,6 @@ impl Db {
             )
             ON CONFLICT (task_id) DO UPDATE SET
                 updated_at = NOW(),
-                status = EXCLUDED.status,
                 nft_count = EXCLUDED.nft_count,
                 tokens = EXCLUDED.tokens,
                 storage_mode = EXCLUDED.storage_mode
@@ -289,20 +292,20 @@ impl Db {
         Ok(())
     }
 
-    pub async fn update_backup_task_status(
+    pub async fn update_archive_request_status(
         &self,
         task_id: &str,
         status: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        sqlx::query(
             r#"
-            UPDATE backup_tasks
-            SET status = $2, updated_at = NOW()
+            UPDATE archive_requests
+            SET status = $2
             WHERE task_id = $1
             "#,
-            task_id,
-            status
         )
+        .bind(task_id)
+        .bind(status)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -315,11 +318,11 @@ impl Db {
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
-        // Update backup task
+        // Reset archive subresource status and fatal_error
         sqlx::query(
             r#"
-            UPDATE backup_tasks
-            SET status = 'in_progress', updated_at = NOW(), fatal_error = NULL
+            UPDATE archive_requests
+            SET status = 'in_progress', fatal_error = NULL
             WHERE task_id = $1
             "#,
         )
@@ -354,9 +357,7 @@ impl Db {
             return Ok(());
         }
         // Build the query with a dynamic number of parameters
-        let mut query = String::from(
-            "UPDATE backup_tasks SET status = $1, updated_at = NOW() WHERE task_id IN (",
-        );
+        let mut query = String::from("UPDATE archive_requests SET status = $1 WHERE task_id IN (");
         for (i, _) in task_ids.iter().enumerate() {
             if i > 0 {
                 query.push_str(", ");
@@ -376,18 +377,8 @@ impl Db {
         let mut tx = self.pool.begin().await?;
         sqlx::query(
             r#"
-            UPDATE backup_tasks
-            SET fatal_error = NULL
-            WHERE task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            r#"
             UPDATE archive_requests
-            SET error_log = NULL
+            SET error_log = NULL, fatal_error = NULL
             WHERE task_id = $1
             "#,
         )
@@ -413,15 +404,15 @@ impl Db {
         task_id: &str,
         fatal_error: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        sqlx::query(
             r#"
-            UPDATE backup_tasks
-            SET status = 'error', fatal_error = $2, updated_at = NOW()
+            UPDATE archive_requests
+            SET status = 'error', fatal_error = $2
             WHERE task_id = $1
             "#,
-            task_id,
-            fatal_error
         )
+        .bind(task_id)
+        .bind(fatal_error)
         .execute(&self.pool)
         .await?;
         Ok(())
@@ -472,14 +463,20 @@ impl Db {
             r#"
             SELECT 
                 b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
-                b.tokens, b.status, b.fatal_error, b.storage_mode,
+                b.tokens, ar.status as archive_status, ar.fatal_error, b.storage_mode,
                 b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
+                (
+                  SELECT MIN(pr.task_status) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.task_status IS NOT NULL
+                ) as ipfs_status,
                 (
                   SELECT STRING_AGG(pr.error_log, E'\n')
                   FROM pin_requests pr
                   WHERE pr.task_id = b.task_id AND pr.error_log IS NOT NULL
                 ) as ipfs_error_log,
+                (
+                  SELECT MIN(pr.fatal_error) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.fatal_error IS NOT NULL
+                ) as ipfs_fatal_error,
                 COALESCE(
                     (SELECT MIN(pr.deleted_at) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.deleted_at IS NOT NULL),
                     NULL
@@ -500,10 +497,21 @@ impl Db {
             requestor: row.get("requestor"),
             nft_count: row.get("nft_count"),
             tokens: row.get("tokens"),
-            status: row.get("status"),
+            archive_status: row
+                .try_get::<Option<String>, _>("archive_status")
+                .ok()
+                .flatten(),
+            ipfs_status: row
+                .try_get::<Option<String>, _>("ipfs_status")
+                .ok()
+                .flatten(),
             archive_error_log: row.get("archive_error_log"),
             ipfs_error_log: row.get("ipfs_error_log"),
-            fatal_error: row.get("fatal_error"),
+            archive_fatal_error: row.get("fatal_error"),
+            ipfs_fatal_error: row
+                .try_get::<Option<String>, _>("ipfs_fatal_error")
+                .ok()
+                .flatten(),
             storage_mode: row.get("storage_mode"),
             archive_format: row.get("archive_format"),
             expires_at: row.get("expires_at"),
@@ -535,14 +543,20 @@ impl Db {
             r#"
             SELECT 
                 b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
-                {tokens_field} b.status, b.fatal_error, b.storage_mode,
+                {tokens_field} ar.status as archive_status, ar.fatal_error, b.storage_mode,
                 b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
+                (
+                  SELECT MIN(pr.task_status) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.task_status IS NOT NULL
+                ) as ipfs_status,
                 (
                   SELECT STRING_AGG(pr.error_log, E'\n')
                   FROM pin_requests pr
                   WHERE pr.task_id = b.task_id AND pr.error_log IS NOT NULL
                 ) as ipfs_error_log,
+                (
+                  SELECT MIN(pr.fatal_error) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.fatal_error IS NOT NULL
+                ) as ipfs_fatal_error,
                 COALESCE(
                     (SELECT MIN(pr.deleted_at) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.deleted_at IS NOT NULL),
                     NULL
@@ -579,10 +593,21 @@ impl Db {
                     requestor: row.get("requestor"),
                     nft_count: row.get("nft_count"),
                     tokens,
-                    status: row.get("status"),
+                    archive_status: row
+                        .try_get::<Option<String>, _>("archive_status")
+                        .ok()
+                        .flatten(),
+                    ipfs_status: row
+                        .try_get::<Option<String>, _>("ipfs_status")
+                        .ok()
+                        .flatten(),
                     archive_error_log: row.get("archive_error_log"),
                     ipfs_error_log: row.get("ipfs_error_log"),
-                    fatal_error: row.get("fatal_error"),
+                    archive_fatal_error: row.get("fatal_error"),
+                    ipfs_fatal_error: row
+                        .try_get::<Option<String>, _>("ipfs_fatal_error")
+                        .ok()
+                        .flatten(),
                     storage_mode: row.get("storage_mode"),
                     archive_format: row.get("archive_format"),
                     expires_at: row.get("expires_at"),
@@ -599,28 +624,24 @@ impl Db {
     pub async fn list_unprocessed_expired_backups(
         &self,
     ) -> Result<Vec<ExpiredBackup>, sqlx::Error> {
-        let recs = sqlx::query_as!(
-            ExpiredBackup,
+        let rows = sqlx::query(
             r#"
-            SELECT b.task_id, br.archive_format 
+            SELECT b.task_id, ar.archive_format 
             FROM backup_tasks b
-            JOIN archive_requests br ON b.task_id = br.task_id
-            WHERE br.expires_at IS NOT NULL AND br.expires_at < NOW() AND b.status != 'expired'
-            "#
+            JOIN archive_requests ar ON b.task_id = ar.task_id
+            WHERE ar.expires_at IS NOT NULL AND ar.expires_at < NOW() AND COALESCE(ar.status, 'in_progress') != 'expired'
+            "#,
         )
         .fetch_all(&self.pool)
         .await?;
+        let recs = rows
+            .into_iter()
+            .map(|row| ExpiredBackup {
+                task_id: row.get("task_id"),
+                archive_format: row.get("archive_format"),
+            })
+            .collect();
         Ok(recs)
-    }
-
-    pub async fn get_backup_status(&self, task_id: &str) -> Result<Option<String>, sqlx::Error> {
-        let rec = sqlx::query!(
-            r#"SELECT status FROM backup_tasks WHERE task_id = $1"#,
-            task_id
-        )
-        .fetch_optional(&self.pool)
-        .await?;
-        Ok(rec.map(|r| r.status))
     }
 
     /// Retrieve all backup tasks that are in 'in_progress' status
@@ -630,9 +651,12 @@ impl Db {
             r#"
             SELECT 
                 b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
-                b.tokens, b.status, b.fatal_error, b.storage_mode,
+                b.tokens, COALESCE(ar.status, 'in_progress') as status, ar.status as archive_status, ar.fatal_error, b.storage_mode,
                 b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
+                (
+                  SELECT MIN(pr.task_status) FROM pin_requests pr WHERE pr.task_id = b.task_id AND pr.task_status IS NOT NULL
+                ) as ipfs_status,
                 (
                   SELECT STRING_AGG(pr.error_log, E'\n')
                   FROM pin_requests pr
@@ -644,7 +668,7 @@ impl Db {
                 ) as pins_deleted_at
             FROM backup_tasks b
             LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
-            WHERE b.status = 'in_progress'
+            WHERE COALESCE(ar.status, 'in_progress') = 'in_progress'
             ORDER BY b.created_at ASC
             "#,
         )
@@ -660,10 +684,18 @@ impl Db {
                 requestor: row.get("requestor"),
                 nft_count: row.get("nft_count"),
                 tokens: row.get("tokens"),
-                status: row.get("status"),
+                archive_status: row
+                    .try_get::<Option<String>, _>("archive_status")
+                    .ok()
+                    .flatten(),
+                ipfs_status: row
+                    .try_get::<Option<String>, _>("ipfs_status")
+                    .ok()
+                    .flatten(),
                 archive_error_log: row.get("archive_error_log"),
                 ipfs_error_log: row.get("ipfs_error_log"),
-                fatal_error: row.get("fatal_error"),
+                archive_fatal_error: row.get("fatal_error"),
+                ipfs_fatal_error: None,
                 storage_mode: row.get("storage_mode"),
                 archive_format: row.get("archive_format"),
                 expires_at: row.get("expires_at"),
@@ -713,7 +745,7 @@ impl Db {
 
         // Insert pin requests and return generated IDs
         let mut query = String::from(
-            "INSERT INTO pin_requests (task_id, provider_type, provider_url, cid, request_id, status, requestor) VALUES ",
+            "INSERT INTO pin_requests (task_id, provider_type, provider_url, cid, request_id, pin_status, requestor) VALUES ",
         );
         let mut bind_count = 0;
         for i in 0..all_pin_responses.len() {
@@ -797,20 +829,42 @@ impl Db {
         &self,
         task_id: &str,
     ) -> Result<Vec<PinRequestRow>, sqlx::Error> {
-        let rows = sqlx::query_as!(
-            PinRequestRow,
+        let rows = sqlx::query(
             r#"
-            SELECT id, task_id, provider_type, provider_url, cid, request_id, status, requestor
+            SELECT id, task_id, provider_type, provider_url, cid, request_id, pin_status, requestor, task_status, fatal_error
             FROM pin_requests
             WHERE task_id = $1
             ORDER BY id
             "#,
-            task_id
         )
+        .bind(task_id)
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows)
+        Ok(rows
+            .into_iter()
+            .map(|row| PinRequestRow {
+                id: row.get("id"),
+                task_id: row.get("task_id"),
+                provider_type: row.get("provider_type"),
+                provider_url: row
+                    .try_get::<Option<String>, _>("provider_url")
+                    .ok()
+                    .flatten(),
+                cid: row.get("cid"),
+                request_id: row.get("request_id"),
+                pin_status: row.get("pin_status"),
+                requestor: row.get("requestor"),
+                task_status: row
+                    .try_get::<Option<String>, _>("task_status")
+                    .ok()
+                    .flatten(),
+                fatal_error: row
+                    .try_get::<Option<String>, _>("fatal_error")
+                    .ok()
+                    .flatten(),
+            })
+            .collect())
     }
 
     /// Paginated pinned tokens grouped by (chain, contract_address, token_id)
@@ -864,7 +918,7 @@ impl Db {
             let token_rows = sqlx::query(
                 r#"
                 SELECT pt.chain, pt.contract_address, pt.token_id,
-                       pr.cid, pr.provider_type, pr.provider_url, pr.status, pt.created_at
+                       pr.cid, pr.provider_type, pr.provider_url, pr.pin_status, pt.created_at
                 FROM pinned_tokens pt
                 JOIN pin_requests pr ON pr.id = pt.pin_request_id
                 WHERE pr.requestor = $1
@@ -896,7 +950,7 @@ impl Db {
                     .ok()
                     .flatten()
                     .unwrap_or_default();
-                let status: String = row.get("status");
+                let status: String = row.get("pin_status");
                 let created_at: DateTime<Utc> = row.get("created_at");
                 pins.push(PinInfo {
                     cid,
@@ -927,7 +981,7 @@ impl Db {
     ) -> Result<Option<TokenWithPins>, sqlx::Error> {
         let query = r#"
             SELECT pt.chain, pt.contract_address, pt.token_id,
-                   pr.cid, pr.provider_type, pr.provider_url, pr.status, pt.created_at
+                   pr.cid, pr.provider_type, pr.provider_url, pr.pin_status, pt.created_at
             FROM pinned_tokens pt
             JOIN pin_requests pr ON pr.id = pt.pin_request_id
             WHERE pr.requestor = $1
@@ -966,7 +1020,7 @@ impl Db {
                 .ok()
                 .flatten()
                 .unwrap_or_default();
-            let status: String = row.get("status");
+            let status: String = row.get("pin_status");
             let created_at: DateTime<Utc> = row.get("created_at");
 
             pins.push(PinInfo {
@@ -989,19 +1043,81 @@ impl Db {
     /// Get all pin requests that are in 'queued' or 'pinning' status
     /// This is used by the pin monitor to check for status updates
     pub async fn get_active_pin_requests(&self) -> Result<Vec<PinRequestRow>, sqlx::Error> {
-        let rows = sqlx::query_as!(
-            PinRequestRow,
+        let rows = sqlx::query(
             r#"
-            SELECT id, task_id, provider_type, provider_url, cid, request_id, status, requestor
+            SELECT id, task_id, provider_type, provider_url, cid, request_id, pin_status, requestor, task_status, fatal_error
             FROM pin_requests
-            WHERE status IN ('queued', 'pinning')
+            WHERE pin_status IN ('queued', 'pinning')
             ORDER BY id
             "#
         )
         .fetch_all(&self.pool)
         .await?;
 
-        Ok(rows)
+        Ok(rows
+            .into_iter()
+            .map(|row| PinRequestRow {
+                id: row.get("id"),
+                task_id: row.get("task_id"),
+                provider_type: row.get("provider_type"),
+                provider_url: row
+                    .try_get::<Option<String>, _>("provider_url")
+                    .ok()
+                    .flatten(),
+                cid: row.get("cid"),
+                request_id: row.get("request_id"),
+                pin_status: row.get("pin_status"),
+                requestor: row.get("requestor"),
+                task_status: row
+                    .try_get::<Option<String>, _>("task_status")
+                    .ok()
+                    .flatten(),
+                fatal_error: row
+                    .try_get::<Option<String>, _>("fatal_error")
+                    .ok()
+                    .flatten(),
+            })
+            .collect())
+    }
+
+    /// Update IPFS task-level status for all pin_requests of a task
+    pub async fn update_ipfs_task_status(
+        &self,
+        task_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE pin_requests
+            SET task_status = $2
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .bind(status)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    /// Set IPFS task-level fatal error and mark task_status as error
+    pub async fn set_ipfs_task_error(
+        &self,
+        task_id: &str,
+        fatal_error: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE pin_requests
+            SET task_status = 'error', fatal_error = $2
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .bind(fatal_error)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 
     /// Batch update pin request statuses
@@ -1017,15 +1133,15 @@ impl Db {
         let mut tx = self.pool.begin().await?;
 
         for (id, status) in updates {
-            sqlx::query!(
+            sqlx::query(
                 r#"
                 UPDATE pin_requests
-                SET status = $2
+                SET pin_status = $2
                 WHERE id = $1
                 "#,
-                id,
-                status
             )
+            .bind(id)
+            .bind(status)
             .execute(&mut *tx)
             .await?;
         }

@@ -5,7 +5,7 @@ use axum::{
     Json,
 };
 
-use crate::server::api::{ApiProblem, ProblemJson, StatusResponse};
+use crate::server::api::{ApiProblem, ProblemJson, StatusResponse, SubresourceStatus};
 use crate::server::db::{BackupTask, Db};
 use crate::server::AppState;
 
@@ -68,12 +68,17 @@ async fn handle_status_core<DB: StatusDb + ?Sized>(
         Ok(None) => return Err(AxumStatusCode::NOT_FOUND),
         Err(_) => return Err(AxumStatusCode::INTERNAL_SERVER_ERROR),
     };
-    Ok(Json(StatusResponse {
-        status: meta.status,
-        error: meta.fatal_error.clone(),
-        archive_error_log: meta.archive_error_log,
-        ipfs_error_log: meta.ipfs_error_log,
-    }))
+    let archive = SubresourceStatus {
+        status: meta.archive_status.clone(),
+        fatal_error: meta.archive_fatal_error.clone(),
+        error_log: meta.archive_error_log.clone(),
+    };
+    let ipfs = SubresourceStatus {
+        status: meta.ipfs_status.clone(),
+        fatal_error: meta.ipfs_fatal_error.clone(),
+        error_log: meta.ipfs_error_log.clone(),
+    };
+    Ok(Json(StatusResponse { archive, ipfs }))
 }
 
 #[cfg(test)]
@@ -121,10 +126,12 @@ mod handle_status_core_tests {
             requestor: "did:privy:alice".to_string(),
             nft_count: 1,
             tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
-            status: "done".to_string(),
+            archive_status: Some("done".to_string()),
+            ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
-            fatal_error: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
             storage_mode: "archive".to_string(),
             archive_format: Some("zip".to_string()),
             expires_at: None,
@@ -141,10 +148,28 @@ mod handle_status_core_tests {
             error: false,
         };
         let resp = handle_status_core(&db, "t1").await.unwrap();
-        let StatusResponse { status, error, .. } = resp.0;
-        assert_eq!(status, "done");
-        assert!(error.is_none());
+        let StatusResponse { archive, ipfs } = resp.0;
+        assert_eq!(archive.status.as_deref(), Some("done"));
+        assert!(archive.fatal_error.is_none());
+        // ipfs status is null when None
+        assert_eq!(ipfs.status, None);
+        assert!(ipfs.fatal_error.is_none());
         // non-fatal logs are optional and omitted when none
+    }
+
+    #[tokio::test]
+    async fn returns_unknown_when_statuses_absent() {
+        let mut m = sample_meta();
+        m.archive_status = None;
+        m.ipfs_status = None;
+        let db = MockDb {
+            meta: Some(m),
+            error: false,
+        };
+        let resp = handle_status_core(&db, "t1").await.unwrap();
+        let StatusResponse { archive, ipfs } = resp.0;
+        assert_eq!(archive.status, None);
+        assert_eq!(ipfs.status, None);
     }
 
     #[tokio::test]

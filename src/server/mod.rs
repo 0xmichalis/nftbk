@@ -26,7 +26,6 @@ pub mod recovery;
 pub mod router;
 pub mod workers;
 pub use handlers::handle_backup::handle_backup;
-pub use handlers::handle_backup_delete::handle_backup_delete;
 pub use handlers::handle_backup_delete_archive::handle_backup_delete_archive;
 pub use handlers::handle_backup_delete_pins::handle_backup_delete_pins;
 pub use handlers::handle_backup_retry::handle_backup_retry;
@@ -259,7 +258,7 @@ pub trait BackupTaskDb {
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error>;
-    async fn update_backup_task_status(
+    async fn update_archive_request_status(
         &self,
         task_id: &str,
         status: &str,
@@ -274,6 +273,13 @@ pub trait BackupTaskDb {
     async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn complete_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
     async fn complete_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn update_ipfs_task_status(&self, task_id: &str, status: &str)
+        -> Result<(), sqlx::Error>;
+    async fn set_ipfs_task_error(
+        &self,
+        task_id: &str,
+        fatal_error: &str,
+    ) -> Result<(), sqlx::Error>;
 }
 
 // Implement BackupTaskDb trait for the real Db
@@ -313,12 +319,12 @@ impl BackupTaskDb for Db {
         Db::update_archive_error_log(self, task_id, error_log).await
     }
 
-    async fn update_backup_task_status(
+    async fn update_archive_request_status(
         &self,
         task_id: &str,
         status: &str,
     ) -> Result<(), sqlx::Error> {
-        Db::update_backup_task_status(self, task_id, status).await
+        Db::update_archive_request_status(self, task_id, status).await
     }
 
     async fn get_backup_task(
@@ -350,5 +356,21 @@ impl BackupTaskDb for Db {
 
     async fn complete_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
         Db::complete_ipfs_pins_deletion(self, task_id).await
+    }
+
+    async fn update_ipfs_task_status(
+        &self,
+        task_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_ipfs_task_status(self, task_id, status).await
+    }
+
+    async fn set_ipfs_task_error(
+        &self,
+        task_id: &str,
+        fatal_error: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::set_ipfs_task_error(self, task_id, fatal_error).await
     }
 }

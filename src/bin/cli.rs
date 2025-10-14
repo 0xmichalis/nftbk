@@ -382,39 +382,63 @@ async fn wait_for_done_backup(
         match resp {
             Ok(r) => {
                 if r.status().is_success() {
-                    let status: StatusResponse = r.json().await.unwrap_or(StatusResponse {
-                        status: "error".to_string(),
-                        error: Some("Invalid status response".to_string()),
-                        archive_error_log: None,
-                        ipfs_error_log: None,
+                    let status: StatusResponse = r.json().await.unwrap_or({
+                        // Fallback shape with nulls
+                        StatusResponse {
+                            archive: nftbk::server::api::SubresourceStatus {
+                                status: None,
+                                fatal_error: None,
+                                error_log: None,
+                            },
+                            ipfs: nftbk::server::api::SubresourceStatus {
+                                status: None,
+                                fatal_error: None,
+                                error_log: None,
+                            },
+                        }
                     });
-                    match status.status.as_str() {
-                        "in_progress" => {
-                            if !in_progress_logged {
-                                println!("Waiting for backup to complete...");
-                                in_progress_logged = true;
+                    // Aggregate a coarse "overall" view for UX: in_progress if any subresource is in_progress
+                    let archive_status = status.archive.status.as_deref();
+                    let ipfs_status = status.ipfs.status.as_deref();
+                    let any_in_progress = matches!(archive_status, Some("in_progress"))
+                        || matches!(ipfs_status, Some("in_progress"));
+                    let any_error = matches!(archive_status, Some("error"))
+                        || matches!(ipfs_status, Some("error"))
+                        || status.archive.fatal_error.is_some()
+                        || status.ipfs.fatal_error.is_some();
+                    let all_done = matches!(archive_status, Some("done"))
+                        && (ipfs_status.is_none() || matches!(ipfs_status, Some("done")));
+                    if any_in_progress {
+                        if !in_progress_logged {
+                            println!("Waiting for backup to complete...");
+                            in_progress_logged = true;
+                        }
+                    } else if all_done {
+                        println!("Backup complete.");
+                        if let Some(ref a) = status.archive.error_log {
+                            if !a.is_empty() {
+                                warn!("{}", a);
                             }
                         }
-                        "done" => {
-                            println!("Backup complete.");
-                            if let Some(ref a) = status.archive_error_log {
-                                if !a.is_empty() {
-                                    warn!("{}", a);
-                                }
+                        if let Some(ref i) = status.ipfs.error_log {
+                            if !i.is_empty() {
+                                warn!("{}", i);
                             }
-                            if let Some(ref i) = status.ipfs_error_log {
-                                if !i.is_empty() {
-                                    warn!("{}", i);
-                                }
-                            }
-                            break;
                         }
-                        "error" => {
-                            anyhow::bail!("Server error: {}", status.error.unwrap_or_default());
-                        }
-                        _ => {
-                            println!("Unknown status: {}", status.status);
-                        }
+                        break;
+                    } else if any_error {
+                        let msg = status
+                            .archive
+                            .fatal_error
+                            .clone()
+                            .or(status.ipfs.fatal_error.clone())
+                            .unwrap_or_else(|| "Unknown error".to_string());
+                        anyhow::bail!("Server error: {}", msg);
+                    } else {
+                        println!(
+                            "Unknown status: archive={:?} ipfs={:?}",
+                            status.archive.status, status.ipfs.status
+                        );
                     }
                 } else {
                     println!("Failed to get status: {}", r.status());

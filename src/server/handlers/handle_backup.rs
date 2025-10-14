@@ -13,6 +13,30 @@ use crate::server::db::Db;
 use crate::server::hashing::compute_task_id;
 use crate::server::{AppState, BackupTask, BackupTaskOrShutdown, StorageMode, TaskType};
 
+fn derive_status(meta: &crate::server::db::BackupTask) -> String {
+    if meta.archive_fatal_error.is_some() || meta.ipfs_fatal_error.is_some() {
+        return "error".to_string();
+    }
+    let archive_needed = meta.storage_mode != "ipfs";
+    let ipfs_needed = meta.storage_mode != "archive";
+    let archive_status = meta.archive_status.as_deref().unwrap_or("in_progress");
+    let ipfs_status = if ipfs_needed {
+        meta.ipfs_status.as_deref().unwrap_or("in_progress")
+    } else {
+        "done"
+    };
+    if archive_status == "expired" {
+        return "expired".to_string();
+    }
+    if archive_status == "error" || ipfs_status == "error" {
+        return "error".to_string();
+    }
+    if (!archive_needed || archive_status == "done") && (!ipfs_needed || ipfs_status == "done") {
+        return "done".to_string();
+    }
+    "in_progress".to_string()
+}
+
 fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), String> {
     validate_backup_request_impl(&state.chain_config, state.ipfs_providers.len(), req)
 }
@@ -94,13 +118,6 @@ pub async fn handle_backup(
 
 // A minimal trait to enable mocking DB calls for unit tests of this handler
 pub trait BackupDb {
-    fn get_backup_status<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<String>, sqlx::Error>> + Send + 'a>,
-    >;
-
     #[allow(clippy::too_many_arguments)]
     fn insert_backup_task<'a>(
         &'a self,
@@ -115,15 +132,6 @@ pub trait BackupDb {
 }
 
 impl BackupDb for Db {
-    fn get_backup_status<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<String>, sqlx::Error>> + Send + 'a>,
-    > {
-        Box::pin(async move { Db::get_backup_status(self, task_id).await })
-    }
-
     #[allow(clippy::too_many_arguments)]
     fn insert_backup_task<'a>(
         &'a self,
@@ -186,7 +194,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized + crate::server::BackupTaskDb>
             return problem.into_response();
         }
 
-        match task_meta.status.as_str() {
+        match derive_status(&task_meta).as_str() {
             "in_progress" => {
                 debug!("Duplicate backup request, returning existing task_id {task_id}");
                 return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
@@ -200,7 +208,7 @@ async fn handle_backup_core<DB: BackupDb + ?Sized + crate::server::BackupTaskDb>
                     StatusCode::CONFLICT,
                     Some(format!(
                         "Backup in status {} cannot be started. Use retry.",
-                        task_meta.status
+                        derive_status(&task_meta)
                     )),
                     Some(format!("/v1/backups/{task_id}")),
                 );
@@ -545,6 +553,22 @@ mod handle_backup_core_tests {
             Ok(())
         }
 
+        async fn update_ipfs_task_status(
+            &self,
+            _task_id: &str,
+            _status: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
+        async fn set_ipfs_task_error(
+            &self,
+            _task_id: &str,
+            _fatal_error: &str,
+        ) -> Result<(), sqlx::Error> {
+            Ok(())
+        }
+
         async fn update_archive_error_log(
             &self,
             _task_id: &str,
@@ -553,7 +577,7 @@ mod handle_backup_core_tests {
             Ok(())
         }
 
-        async fn update_backup_task_status(
+        async fn update_archive_request_status(
             &self,
             _task_id: &str,
             _status: &str,
@@ -594,16 +618,7 @@ mod handle_backup_core_tests {
     }
 
     impl BackupDb for MockDb {
-        fn get_backup_status<'a>(
-            &'a self,
-            _task_id: &'a str,
-        ) -> std::pin::Pin<
-            Box<dyn std::future::Future<Output = Result<Option<String>, sqlx::Error>> + Send + 'a>,
-        > {
-            let status = self.task_meta.as_ref().map(|meta| meta.status.clone());
-            Box::pin(async move { Ok(status) })
-        }
-
+        #[allow(clippy::too_many_arguments)]
         fn insert_backup_task<'a>(
             &'a self,
             _task_id: &'a str,
@@ -689,10 +704,12 @@ mod handle_backup_core_tests {
                 requestor: "test".to_string(),
                 nft_count: 0,
                 tokens: serde_json::Value::Null,
-                status: "done".to_string(),
+                archive_status: Some("done".to_string()),
+                ipfs_status: None,
                 archive_error_log: None,
                 ipfs_error_log: None,
-                fatal_error: None,
+                archive_fatal_error: None,
+                ipfs_fatal_error: None,
                 storage_mode: "archive".to_string(),
                 deleted_at: Some(chrono::Utc::now()),
                 archive_format: None,
@@ -730,10 +747,12 @@ mod handle_backup_core_tests {
                 requestor: "did:privy:alice".to_string(),
                 nft_count: 1,
                 tokens: serde_json::json!([]),
-                status: "in_progress".to_string(),
+                archive_status: Some("in_progress".to_string()),
+                ipfs_status: None,
                 archive_error_log: None,
                 ipfs_error_log: None,
-                fatal_error: None,
+                archive_fatal_error: None,
+                ipfs_fatal_error: None,
                 storage_mode: "archive".to_string(),
                 archive_format: Some("zip".to_string()),
                 expires_at: None,
