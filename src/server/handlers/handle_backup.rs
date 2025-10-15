@@ -38,6 +38,21 @@ fn derive_status(meta: &crate::server::database::BackupTask) -> String {
     "in_progress".to_string()
 }
 
+/// Validate if a task is in the process of deletion for the given scope/storage mode.
+/// For Archive scope, treat deletion as active when `archive_deleted_at` is set.
+/// For Ipfs scope, treat deletion as active when `pins_deleted_at` is set.
+/// For Full scope, treat deletion as active when either subresource has deletion started.
+fn validate_deletion_with_scope(
+    storage_mode: &StorageMode,
+    meta: &crate::server::database::BackupTask,
+) -> bool {
+    match storage_mode {
+        StorageMode::Archive => meta.archive_deleted_at.is_some(),
+        StorageMode::Ipfs => meta.pins_deleted_at.is_some(),
+        StorageMode::Full => meta.archive_deleted_at.is_some() || meta.pins_deleted_at.is_some(),
+    }
+}
+
 fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), String> {
     validate_backup_request_impl(&state.chain_config, state.ipfs_providers.len(), req)
 }
@@ -138,14 +153,32 @@ async fn handle_backup_core<DB: Database + ?Sized>(
         }
     };
 
+    // Determine storage mode
+    let storage_mode = match (req.create_archive, req.pin_on_ipfs) {
+        (true, true) => StorageMode::Full,
+        (true, false) => StorageMode::Archive,
+        (false, true) => StorageMode::Ipfs,
+        (false, false) => {
+            // Should be prevented by validation; return error defensively
+            let problem = ProblemJson::from_status(
+                StatusCode::BAD_REQUEST,
+                Some("Either create_archive must be true or pin_on_ipfs must be true".to_string()),
+                Some("/v1/backups".to_string()),
+            );
+            return problem.into_response();
+        }
+    };
+
+    // Determine task id
     let task_id = compute_task_id(&req.tokens, Some(&requestor_str));
 
+    // Validate against existing tasks
     if let Ok(Some(task_meta)) = db.get_backup_task(&task_id).await {
-        // Check if task is being deleted
-        if task_meta.deleted_at.is_some() {
+        // Check if task is being deleted for this scope
+        if validate_deletion_with_scope(&storage_mode, &task_meta) {
             let problem = ProblemJson::from_status(
                 StatusCode::CONFLICT,
-                Some("Task is being deleted and cannot be started".to_string()),
+                Some("Task is being deleted".to_string()),
                 Some(format!("/v1/backups/{task_id}")),
             );
             return problem.into_response();
@@ -183,23 +216,7 @@ async fn handle_backup_core<DB: Database + ?Sized>(
         }
     }
 
-    // Determine storage mode based on flags
-    let storage_mode = match (req.create_archive, req.pin_on_ipfs) {
-        (true, true) => StorageMode::Full,
-        (true, false) => StorageMode::Archive,
-        (false, true) => StorageMode::Ipfs,
-        (false, false) => {
-            // Should be prevented by validation; return error defensively
-            let problem = ProblemJson::from_status(
-                StatusCode::BAD_REQUEST,
-                Some("Either create_archive must be true or pin_on_ipfs must be true".to_string()),
-                Some("/v1/backups".to_string()),
-            );
-            return problem.into_response();
-        }
-    };
-
-    // Determine archive format if necessary (None for IPFS-only)
+    // Determine archive format if necessary
     let archive_format_opt: Option<String> = if storage_mode == StorageMode::Ipfs {
         None
     } else {
@@ -232,6 +249,7 @@ async fn handle_backup_core<DB: Database + ?Sized>(
         return problem.into_response();
     }
 
+    // Enqueue backup task
     let backup_task = BackupTask {
         task_id: task_id.clone(),
         request: req.clone(),
@@ -546,10 +564,9 @@ mod handle_backup_core_tests {
             archive_fatal_error: None,
             ipfs_fatal_error: None,
             storage_mode: "archive".to_string(),
-            deleted_at: Some(chrono::Utc::now()),
             archive_format: None,
             expires_at: None,
-            archive_deleted_at: None,
+            archive_deleted_at: Some(chrono::Utc::now()),
             pins_deleted_at: None,
         }));
         let (tx, _rx) = mpsc::channel(1);
@@ -588,7 +605,6 @@ mod handle_backup_core_tests {
             storage_mode: "archive".to_string(),
             archive_format: Some("zip".to_string()),
             expires_at: None,
-            deleted_at: None,
             archive_deleted_at: None,
             pins_deleted_at: None,
         }));
@@ -789,5 +805,74 @@ mod handle_backup_core_tests {
             }
             _ => panic!("Expected Creation task"),
         }
+    }
+}
+
+#[cfg(test)]
+mod validate_deletion_with_scope_tests {
+    use super::validate_deletion_with_scope;
+    use crate::server::database::BackupTask;
+    use crate::server::StorageMode;
+
+    fn make_meta(archive_deleted: bool, pins_deleted: bool) -> BackupTask {
+        BackupTask {
+            task_id: "t".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            requestor: "did:test".to_string(),
+            nft_count: 0,
+            tokens: serde_json::Value::Null,
+            archive_status: None,
+            ipfs_status: None,
+            archive_error_log: None,
+            ipfs_error_log: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
+            storage_mode: "full".to_string(),
+            archive_format: None,
+            expires_at: None,
+            archive_deleted_at: if archive_deleted {
+                Some(chrono::Utc::now())
+            } else {
+                None
+            },
+            pins_deleted_at: if pins_deleted {
+                Some(chrono::Utc::now())
+            } else {
+                None
+            },
+        }
+    }
+
+    #[test]
+    fn archive_scope_true_only_when_archive_deleted() {
+        let meta = make_meta(true, false);
+        assert!(validate_deletion_with_scope(&StorageMode::Archive, &meta));
+        let meta = make_meta(false, true);
+        assert!(!validate_deletion_with_scope(&StorageMode::Archive, &meta));
+        let meta = make_meta(false, false);
+        assert!(!validate_deletion_with_scope(&StorageMode::Archive, &meta));
+    }
+
+    #[test]
+    fn ipfs_scope_true_only_when_pins_deleted() {
+        let meta = make_meta(false, true);
+        assert!(validate_deletion_with_scope(&StorageMode::Ipfs, &meta));
+        let meta = make_meta(true, false);
+        assert!(!validate_deletion_with_scope(&StorageMode::Ipfs, &meta));
+        let meta = make_meta(false, false);
+        assert!(!validate_deletion_with_scope(&StorageMode::Ipfs, &meta));
+    }
+
+    #[test]
+    fn full_scope_true_when_either_deleted() {
+        let meta = make_meta(true, false);
+        assert!(validate_deletion_with_scope(&StorageMode::Full, &meta));
+        let meta = make_meta(false, true);
+        assert!(validate_deletion_with_scope(&StorageMode::Full, &meta));
+        let meta = make_meta(true, true);
+        assert!(validate_deletion_with_scope(&StorageMode::Full, &meta));
+        let meta = make_meta(false, false);
+        assert!(!validate_deletion_with_scope(&StorageMode::Full, &meta));
     }
 }

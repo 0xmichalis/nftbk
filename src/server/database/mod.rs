@@ -52,9 +52,6 @@ pub struct BackupTask {
     /// When the backup expires (if applicable, typically 7 days from creation)
     #[schema(example = "2024-01-08T12:00:00Z")]
     pub expires_at: Option<DateTime<Utc>>,
-    /// When deletion was started (if applicable)
-    #[schema(example = "2024-01-02T10:00:00Z")]
-    pub deleted_at: Option<DateTime<Utc>>,
     /// When archive deletion was started (if applicable)
     #[schema(example = "2024-01-02T10:00:00Z")]
     pub archive_deleted_at: Option<DateTime<Utc>>,
@@ -475,12 +472,41 @@ impl Db {
     }
 
     pub async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        // Touch parent row
         sqlx::query!(
-            r#"UPDATE backup_tasks SET deleted_at = NOW(), updated_at = NOW() WHERE task_id = $1"#,
+            r#"UPDATE backup_tasks SET updated_at = NOW() WHERE task_id = $1"#,
             task_id
         )
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await?;
+
+        // Mark archive subresource as being deleted
+        sqlx::query!(
+            r#"
+            UPDATE archive_requests
+            SET deleted_at = NOW()
+            WHERE task_id = $1 AND deleted_at IS NULL
+            "#,
+            task_id
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        // Mark IPFS subresource as being deleted
+        sqlx::query!(
+            r#"
+            UPDATE pin_requests
+            SET deleted_at = NOW()
+            WHERE task_id = $1 AND deleted_at IS NULL
+            "#,
+            task_id
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
         Ok(())
     }
 
@@ -520,7 +546,7 @@ impl Db {
             SELECT 
                 b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
                 b.tokens, ar.status as archive_status, ar.fatal_error, b.storage_mode,
-                b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
+                ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
                 pr.status as ipfs_status,
                 pr.error_log as ipfs_error_log,
@@ -561,7 +587,6 @@ impl Db {
             storage_mode: row.get("storage_mode"),
             archive_format: row.get("archive_format"),
             expires_at: row.get("expires_at"),
-            deleted_at: row.get("deleted_at"),
             archive_deleted_at: row.get("archive_deleted_at"),
             pins_deleted_at: row.get("pins_deleted_at"),
         }))
@@ -590,7 +615,7 @@ impl Db {
             SELECT 
                 b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
                 {tokens_field} ar.status as archive_status, ar.fatal_error, b.storage_mode,
-                b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
+                ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
                 pr.status as ipfs_status,
                 pr.error_log as ipfs_error_log,
@@ -647,7 +672,6 @@ impl Db {
                     storage_mode: row.get("storage_mode"),
                     archive_format: row.get("archive_format"),
                     expires_at: row.get("expires_at"),
-                    deleted_at: row.get("deleted_at"),
                     archive_deleted_at: row.get("archive_deleted_at"),
                     pins_deleted_at: row.get("pins_deleted_at"),
                 }
@@ -688,7 +712,7 @@ impl Db {
             SELECT 
                 b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
                 b.tokens, ar.status as archive_status, ar.fatal_error, b.storage_mode,
-                b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
+                ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
                 pr.status as ipfs_status,
                 pr.error_log as ipfs_error_log,
@@ -736,7 +760,6 @@ impl Db {
                 storage_mode: row.get("storage_mode"),
                 archive_format: row.get("archive_format"),
                 expires_at: row.get("expires_at"),
-                deleted_at: row.get("deleted_at"),
                 archive_deleted_at: row.get("archive_deleted_at"),
                 pins_deleted_at: row.get("pins_deleted_at"),
             })

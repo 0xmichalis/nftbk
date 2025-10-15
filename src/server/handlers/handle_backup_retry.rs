@@ -92,7 +92,7 @@ async fn handle_backup_retry_core<DB: Database + ?Sized>(
     }
 
     // Check if task is being deleted
-    if meta.deleted_at.is_some() {
+    if meta.archive_deleted_at.is_some() {
         let problem = ProblemJson::from_status(
             StatusCode::BAD_REQUEST,
             Some("Task is being deleted and cannot be retried".to_string()),
@@ -189,7 +189,6 @@ mod handle_backup_retry_core_tests {
             storage_mode: "archive".to_string(),
             archive_format: Some("zip".to_string()),
             expires_at: None,
-            deleted_at: None,
             archive_deleted_at: None,
             pins_deleted_at: None,
         }
@@ -231,7 +230,7 @@ mod handle_backup_retry_core_tests {
     #[tokio::test]
     async fn returns_400_when_being_deleted() {
         let mut meta = sample_meta("did:me", "done");
-        meta.deleted_at = Some(chrono::Utc::now());
+        meta.archive_deleted_at = Some(chrono::Utc::now());
         let mut db = MockDatabase::default();
         db.set_get_backup_task_result(Some(meta));
         let (tx, _rx) = mpsc::channel(1);
