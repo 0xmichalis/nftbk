@@ -262,34 +262,60 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
     )
     .await;
 
-    let mut archive_status = "in_progress";
-    let mut ipfs_status = "in_progress";
+    // Process archive and IPFS outcomes based on scope of the backup task.
+    match scope {
+        StorageMode::Ipfs => {
+            let success = process_ipfs_outcome(db, &task, &ipfs_outcome).await;
+            let status = if success { "done" } else { "error" };
+            let _ = db.update_pin_request_status(&task_id, status).await;
+        }
+        StorageMode::Archive => {
+            let out_path = output_path.as_ref().unwrap();
+            let success = process_archive_outcome(
+                &state,
+                &task,
+                &task_id,
+                out_path,
+                &archive_outcome,
+                Some(state.shutdown_flag.clone()),
+                db,
+            )
+            .await;
+            let status = if success { "done" } else { "error" };
+            let _ = db.update_archive_request_status(&task_id, status).await;
+        }
+        StorageMode::Full => {
+            let out_path = output_path.as_ref().unwrap().clone();
+            let state_ref = &state;
+            let task_ref = &task;
+            let task_id_ref = task_id.clone();
 
-    if scope != StorageMode::Archive {
-        // Persist token-pin request mappings atomically, if any
-        let pin_success = process_ipfs_outcome(db, &task, &ipfs_outcome).await;
-        ipfs_status = if pin_success { "done" } else { "error" };
+            // Process archive and IPFS outcomes in parallel. This should speed up status
+            // updates for ipfs tasks since archives usually take longer to complete.
+            let archive_fut = async move {
+                let success = process_archive_outcome(
+                    state_ref,
+                    task_ref,
+                    &task_id_ref,
+                    &out_path,
+                    &archive_outcome,
+                    Some(state_ref.shutdown_flag.clone()),
+                    db,
+                )
+                .await;
+                let status = if success { "done" } else { "error" };
+                let _ = db.update_archive_request_status(&task_id_ref, status).await;
+            };
+
+            let ipfs_fut = async {
+                let success = process_ipfs_outcome(db, &task, &ipfs_outcome).await;
+                let status = if success { "done" } else { "error" };
+                let _ = db.update_pin_request_status(&task_id, status).await;
+            };
+
+            tokio::join!(archive_fut, ipfs_fut);
+        }
     }
-
-    if scope != StorageMode::Ipfs {
-        let out_path = output_path.as_ref().unwrap();
-        let archive_success = process_archive_outcome(
-            &state,
-            &task,
-            &task_id,
-            out_path,
-            &archive_outcome,
-            Some(state.shutdown_flag.clone()),
-            db,
-        )
-        .await;
-        archive_status = if archive_success { "done" } else { "error" };
-    }
-
-    // Update subresource statuses
-    let _ = db
-        .update_backup_statuses(&task_id, scope.as_str(), archive_status, ipfs_status)
-        .await;
     info!("Backup {} ready", task_id);
 }
 
