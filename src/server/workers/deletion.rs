@@ -48,7 +48,7 @@ pub async fn start_deletion_for_scope<DB: Database + ?Sized>(
         StorageMode::Full => db.start_deletion(task_id).await,
         StorageMode::Archive => {
             if storage_mode == "full" {
-                db.start_archive_deletion(task_id).await
+                db.start_archive_request_deletion(task_id).await
             } else if storage_mode == "archive" {
                 db.start_deletion(task_id).await
             } else {
@@ -58,7 +58,7 @@ pub async fn start_deletion_for_scope<DB: Database + ?Sized>(
         }
         StorageMode::Ipfs => {
             if storage_mode == "full" {
-                db.start_ipfs_pins_deletion(task_id).await
+                db.start_pin_request_deletions(task_id).await
             } else if storage_mode == "ipfs" {
                 db.start_deletion(task_id).await
             } else {

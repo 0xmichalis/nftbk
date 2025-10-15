@@ -472,7 +472,7 @@ impl Db {
     }
 
     /// Mark archive as being deleted (similar to start_deletion but for archive subresource)
-    pub async fn start_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+    pub async fn start_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
             UPDATE archive_requests 
@@ -487,7 +487,7 @@ impl Db {
     }
 
     /// Mark IPFS pins as being deleted (similar to start_deletion but for IPFS pins subresource)
-    pub async fn start_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+    pub async fn start_pin_request_deletions(&self, task_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
             UPDATE pin_requests 
@@ -1355,12 +1355,12 @@ impl Database for Db {
         Db::start_deletion(self, task_id).await
     }
 
-    async fn start_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::start_archive_deletion(self, task_id).await
+    async fn start_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::start_archive_request_deletion(self, task_id).await
     }
 
-    async fn start_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::start_ipfs_pins_deletion(self, task_id).await
+    async fn start_pin_request_deletions(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::start_pin_request_deletions(self, task_id).await
     }
 
     async fn complete_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
