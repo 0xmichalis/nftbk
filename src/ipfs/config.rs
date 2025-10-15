@@ -36,7 +36,7 @@ pub const IPFS_GATEWAYS: &[IpfsGatewayConfig] = &[
 /// Configuration for a single IPFS pinning provider
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum IpfsProviderConfig {
+pub enum IpfsPinningConfig {
     #[serde(rename = "pinning-service")]
     IpfsPinningService {
         base_url: String,
@@ -52,19 +52,19 @@ pub enum IpfsProviderConfig {
     },
 }
 
-impl IpfsProviderConfig {
+impl IpfsPinningConfig {
     /// Create a provider instance from this configuration
     /// Returns an error if a referenced environment variable is not set
     pub fn create_provider(&self) -> Result<Box<dyn IpfsPinningProvider>> {
         match self {
-            IpfsProviderConfig::IpfsPinningService {
+            IpfsPinningConfig::IpfsPinningService {
                 base_url,
                 bearer_token_env,
             } => {
                 let token = Self::resolve_token(bearer_token_env)?;
                 Ok(Box::new(IpfsPinningClient::new(base_url.clone(), token)))
             }
-            IpfsProviderConfig::Pinata {
+            IpfsPinningConfig::Pinata {
                 base_url,
                 bearer_token_env,
             } => {

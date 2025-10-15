@@ -177,22 +177,22 @@ where
 pub struct EvmChainProcessor {
     pub rpc: alloy::providers::RootProvider<Http<Client>>,
     pub output_path: Option<PathBuf>,
-    pub ipfs_providers: Vec<Box<dyn IpfsPinningProvider>>,
+    pub ipfs_pinning_providers: Vec<Box<dyn IpfsPinningProvider>>,
     pub http_client: HttpClient,
 }
 
 impl EvmChainProcessor {
     pub fn new(rpc_url: &str, storage_config: StorageConfig) -> anyhow::Result<Self> {
         let rpc = ProviderBuilder::new().on_http(rpc_url.parse()?);
-        let ipfs_providers: Vec<Box<dyn IpfsPinningProvider>> = storage_config
-            .ipfs_providers
+        let ipfs_pinning_providers: Vec<Box<dyn IpfsPinningProvider>> = storage_config
+            .ipfs_pinning_configs
             .iter()
             .map(|config| config.create_provider())
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             rpc,
             output_path: storage_config.output_path,
-            ipfs_providers,
+            ipfs_pinning_providers,
             http_client: HttpClient::new(),
         })
     }
@@ -369,8 +369,8 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         Ok(uri)
     }
 
-    fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
-        &self.ipfs_providers
+    fn ipfs_pinning_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
+        &self.ipfs_pinning_providers
     }
 
     fn http_client(&self) -> &crate::httpclient::HttpClient {
@@ -767,19 +767,19 @@ mod new_tests {
         let storage = crate::StorageConfig {
             output_path: Some(std::path::PathBuf::from("/tmp")),
             prune_redundant: false,
-            ipfs_providers: vec![],
+            ipfs_pinning_configs: vec![],
         };
         let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
         // basic sanity
         let _ = proc.http_client();
-        let _ = proc.ipfs_providers();
+        let _ = proc.ipfs_pinning_providers();
         let out = proc.output_path();
         assert!(out.is_some());
     }
 }
 
 #[cfg(test)]
-mod ipfs_providers_tests {
+mod ipfs_pinning_providers_tests {
     use super::*;
     use crate::chain::NFTChainProcessor;
 
@@ -788,13 +788,13 @@ mod ipfs_providers_tests {
         let storage = crate::StorageConfig {
             output_path: None,
             prune_redundant: false,
-            ipfs_providers: vec![crate::ipfs::IpfsProviderConfig::IpfsPinningService {
+            ipfs_pinning_configs: vec![crate::ipfs::IpfsPinningConfig::IpfsPinningService {
                 base_url: "http://example.com".to_string(),
                 bearer_token_env: None,
             }],
         };
         let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
-        assert_eq!(proc.ipfs_providers().len(), 1);
+        assert_eq!(proc.ipfs_pinning_providers().len(), 1);
     }
 }
 
@@ -808,7 +808,7 @@ mod http_client_tests {
         let storage = crate::StorageConfig {
             output_path: None,
             prune_redundant: false,
-            ipfs_providers: vec![],
+            ipfs_pinning_configs: vec![],
         };
         let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
         let _client_ref = proc.http_client();
@@ -825,7 +825,7 @@ mod output_path_tests {
         let storage = crate::StorageConfig {
             output_path: Some(std::path::PathBuf::from("/tmp")),
             prune_redundant: false,
-            ipfs_providers: vec![],
+            ipfs_pinning_configs: vec![],
         };
         let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
         assert_eq!(proc.output_path().unwrap().to_str().unwrap(), "/tmp");

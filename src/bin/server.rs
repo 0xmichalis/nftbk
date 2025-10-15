@@ -99,7 +99,7 @@ struct PrivyFile {
 
 #[derive(serde::Deserialize)]
 struct IpfsConfigFile {
-    ipfs_provider: Vec<nftbk::ipfs::IpfsProviderConfig>,
+    ipfs_pinning_configs: Vec<nftbk::ipfs::IpfsPinningConfig>,
 }
 
 #[tokio::main]
@@ -143,7 +143,7 @@ async fn main() {
     }
 
     // Load IPFS provider configuration from file if provided
-    let ipfs_providers = if args.ipfs_config.is_none() {
+    let ipfs_pinning_configs = if args.ipfs_config.is_none() {
         // No config file, use empty list (AppState will fall back to env vars)
         Vec::new()
     } else {
@@ -152,11 +152,11 @@ async fn main() {
             Ok(contents) => match toml::from_str::<IpfsConfigFile>(&contents) {
                 Ok(file) => {
                     info!(
-                        "Loaded {} IPFS provider(s) from config file '{}'",
-                        file.ipfs_provider.len(),
+                        "Loaded {} IPFS pinning provider(s) from config file '{}'",
+                        file.ipfs_pinning_configs.len(),
                         path
                     );
-                    file.ipfs_provider
+                    file.ipfs_pinning_configs
                 }
                 Err(e) => {
                     error!("Failed to parse IPFS config file '{}': {}", path, e);
@@ -186,7 +186,7 @@ async fn main() {
         &db_url,
         (args.backup_queue_size + 1) as u32,
         shutdown_flag.clone(),
-        ipfs_providers, // ipfs_provider_config parameter
+        ipfs_pinning_configs,
     )
     .await;
 
@@ -232,11 +232,11 @@ async fn main() {
     };
 
     // Start the pin monitor thread if IPFS providers are configured
-    let pin_monitor_handle = if state.ipfs_provider_instances.is_empty() {
+    let pin_monitor_handle = if state.ipfs_pinning_instances.is_empty() {
         None
     } else {
         let db = state.db.clone();
-        let providers = state.ipfs_provider_instances.clone();
+        let providers = state.ipfs_pinning_instances.clone();
         let interval = args.pin_monitor_interval_seconds;
         let shutdown_flag = state.shutdown_flag.clone();
         info!(

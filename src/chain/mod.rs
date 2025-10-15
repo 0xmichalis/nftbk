@@ -117,7 +117,7 @@ where
     C: NFTChainProcessor,
 {
     let mut pin_responses = Vec::new();
-    let providers = processor.ipfs_providers();
+    let providers = processor.ipfs_pinning_providers();
     if providers.is_empty() {
         return Ok(pin_responses);
     }
@@ -294,7 +294,7 @@ pub trait NFTChainProcessor {
     fn collect_urls(metadata: &Self::Metadata) -> Vec<(String, Options)>;
 
     /// Get all IPFS pinning providers available to the processor
-    fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>];
+    fn ipfs_pinning_providers(&self) -> &[Box<dyn IpfsPinningProvider>];
 
     /// Get the output path for local storage
     fn output_path(&self) -> Option<&std::path::Path>;
@@ -605,7 +605,7 @@ mod process_nfts_tests {
     // Mock processor for testing
     struct MockProcessor {
         output_path: Option<std::path::PathBuf>,
-        ipfs_providers: Vec<Box<dyn IpfsPinningProvider>>,
+        ipfs_pinning_providers: Vec<Box<dyn IpfsPinningProvider>>,
         fetch_metadata_result: Result<(MockMetadata, String), anyhow::Error>,
         get_uri_result: Result<String, anyhow::Error>,
         http_client: crate::httpclient::HttpClient,
@@ -615,7 +615,7 @@ mod process_nfts_tests {
         fn new() -> Self {
             Self {
                 output_path: None,
-                ipfs_providers: Vec::new(),
+                ipfs_pinning_providers: Vec::new(),
                 fetch_metadata_result: Ok((
                     MockMetadata {
                         name: "Test NFT".to_string(),
@@ -675,8 +675,8 @@ mod process_nfts_tests {
             urls
         }
 
-        fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
-            &self.ipfs_providers
+        fn ipfs_pinning_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
+            &self.ipfs_pinning_providers
         }
 
         fn output_path(&self) -> Option<&std::path::Path> {
@@ -963,7 +963,7 @@ mod process_nfts_tests {
         // Create processor with IPFS URLs for testing IPFS pinning
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
-            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
+            ipfs_pinning_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
             fetch_metadata_result: Ok((
                 MockMetadata {
                     name: "Test NFT".to_string(),
@@ -1037,7 +1037,7 @@ mod process_nfts_tests {
         // Create processor with IPFS URLs for testing IPFS pinning
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
-            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
+            ipfs_pinning_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
             fetch_metadata_result: Ok((
                 MockMetadata {
                     name: "Test NFT".to_string(),
@@ -1081,7 +1081,7 @@ mod process_nfts_tests {
         // Create a processor that fails on metadata writing (archive operation)
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
-            ipfs_providers: vec![], // No IPFS providers
+            ipfs_pinning_providers: vec![], // No IPFS providers
             fetch_metadata_result: Ok((
                 MockMetadata {
                     name: "Test NFT".to_string(),
@@ -1137,7 +1137,7 @@ mod process_nfts_tests {
         // Create processor with IPFS URLs for testing IPFS pinning
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
-            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
+            ipfs_pinning_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
             fetch_metadata_result: Ok((
                 MockMetadata {
                     name: "Test NFT".to_string(),
@@ -1201,7 +1201,7 @@ mod process_nfts_tests {
         // Create processor with IPFS URLs but no output path (no archive operations)
         let processor = Arc::new(MockProcessor {
             output_path: None, // No local storage - only IPFS operations
-            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
+            ipfs_pinning_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
             fetch_metadata_result: Ok((
                 MockMetadata {
                     name: "Test NFT".to_string(),
@@ -1261,7 +1261,7 @@ mod process_nfts_tests {
         // Create processor that fails on metadata fetch (archive error) but has IPFS providers
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
-            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
+            ipfs_pinning_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
             fetch_metadata_result: Err(anyhow!("Network timeout")), // This should go to archive_errors
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
             http_client: crate::httpclient::HttpClient::new(),
@@ -1296,7 +1296,7 @@ mod process_nfts_tests {
         // Create a processor that fails on metadata fetch
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
-            ipfs_providers: vec![], // No IPFS providers, but error should still go to both collections
+            ipfs_pinning_providers: vec![], // No IPFS providers, but error should still go to both collections
             fetch_metadata_result: Err(anyhow!("Network timeout")),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
             http_client: crate::httpclient::HttpClient::new(),
@@ -1351,7 +1351,7 @@ mod process_nfts_tests {
         // Create processor with HTTP URLs (not IPFS) to test content download errors
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
-            ipfs_providers: vec![], // No IPFS providers
+            ipfs_pinning_providers: vec![], // No IPFS providers
             fetch_metadata_result: Ok((
                 MockMetadata {
                     name: "Test NFT".to_string(),
@@ -1426,7 +1426,7 @@ mod process_nfts_tests {
         // Create processor with IPFS URLs for testing IPFS pinning
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
-            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
+            ipfs_pinning_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
             fetch_metadata_result: Ok((
                 MockMetadata {
                     name: "Test NFT".to_string(),
@@ -1659,7 +1659,7 @@ mod pin_cid_tests {
             Vec::new()
         }
 
-        fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
+        fn ipfs_pinning_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
             &self.providers
         }
 

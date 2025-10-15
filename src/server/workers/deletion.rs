@@ -275,7 +275,7 @@ async fn run_deletion_task_inner<DB: Database + ?Sized>(
                     Vec::new()
                 }
             };
-            match delete_ipfs_pins(&state.ipfs_provider_instances, &task_id, &pin_requests).await {
+            match delete_ipfs_pins(&state.ipfs_pinning_instances, &task_id, &pin_requests).await {
                 Ok(_) => {
                     info!("IPFS pin cleanup completed for task {task_id}");
                 }

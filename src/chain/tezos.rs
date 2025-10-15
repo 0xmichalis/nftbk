@@ -39,22 +39,22 @@ pub struct NFTFormat {
 pub struct TezosChainProcessor {
     pub rpc: TezosRpc<TezosHttpClient>,
     pub output_path: Option<PathBuf>,
-    pub ipfs_providers: Vec<Box<dyn IpfsPinningProvider>>,
+    pub ipfs_pinning_providers: Vec<Box<dyn IpfsPinningProvider>>,
     pub http_client: crate::httpclient::HttpClient,
 }
 
 impl TezosChainProcessor {
     pub fn new(rpc_url: &str, storage_config: StorageConfig) -> anyhow::Result<Self> {
         let rpc = TezosRpc::<TezosHttpClient>::new(rpc_url.to_string());
-        let ipfs_providers: Vec<Box<dyn IpfsPinningProvider>> = storage_config
-            .ipfs_providers
+        let ipfs_pinning_providers: Vec<Box<dyn IpfsPinningProvider>> = storage_config
+            .ipfs_pinning_configs
             .iter()
             .map(|config| config.create_provider())
             .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             rpc,
             output_path: storage_config.output_path,
-            ipfs_providers,
+            ipfs_pinning_providers,
             http_client: crate::httpclient::HttpClient::new(),
         })
     }
@@ -150,8 +150,8 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
         Ok(get_uri_from_token_metadata(&json_value).unwrap_or_default())
     }
 
-    fn ipfs_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
-        &self.ipfs_providers
+    fn ipfs_pinning_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
+        &self.ipfs_pinning_providers
     }
 
     fn http_client(&self) -> &crate::httpclient::HttpClient {
@@ -372,18 +372,18 @@ mod new_tests {
         let storage = crate::StorageConfig {
             output_path: Some(std::path::PathBuf::from("/tmp")),
             prune_redundant: false,
-            ipfs_providers: vec![],
+            ipfs_pinning_configs: vec![],
         };
         let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
             .expect("new ok");
         let _ = proc.http_client();
-        let _ = proc.ipfs_providers();
+        let _ = proc.ipfs_pinning_providers();
         assert!(proc.output_path().is_some());
     }
 }
 
 #[cfg(test)]
-mod ipfs_providers_tests {
+mod ipfs_pinning_providers_tests {
     use super::*;
     use crate::chain::NFTChainProcessor;
 
@@ -392,14 +392,14 @@ mod ipfs_providers_tests {
         let storage = crate::StorageConfig {
             output_path: None,
             prune_redundant: false,
-            ipfs_providers: vec![crate::ipfs::IpfsProviderConfig::IpfsPinningService {
+            ipfs_pinning_configs: vec![crate::ipfs::IpfsPinningConfig::IpfsPinningService {
                 base_url: "http://example.com".to_string(),
                 bearer_token_env: None,
             }],
         };
         let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
             .expect("new ok");
-        assert_eq!(proc.ipfs_providers().len(), 1);
+        assert_eq!(proc.ipfs_pinning_providers().len(), 1);
     }
 }
 
@@ -413,7 +413,7 @@ mod http_client_tests {
         let storage = crate::StorageConfig {
             output_path: None,
             prune_redundant: false,
-            ipfs_providers: vec![],
+            ipfs_pinning_configs: vec![],
         };
         let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
             .expect("new ok");
@@ -431,7 +431,7 @@ mod output_path_tests {
         let storage = crate::StorageConfig {
             output_path: Some(std::path::PathBuf::from("/tmp")),
             prune_redundant: false,
-            ipfs_providers: vec![],
+            ipfs_pinning_configs: vec![],
         };
         let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
             .expect("new ok");

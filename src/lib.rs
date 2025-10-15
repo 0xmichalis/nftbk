@@ -83,7 +83,7 @@ pub struct StorageConfig {
     pub output_path: Option<PathBuf>,
     pub prune_redundant: bool,
     /// IPFS pinning providers - content will be pinned to all configured providers
-    pub ipfs_providers: Vec<ipfs::IpfsProviderConfig>,
+    pub ipfs_pinning_configs: Vec<ipfs::IpfsPinningConfig>,
 }
 
 pub struct BackupConfig {
@@ -99,10 +99,11 @@ pub mod backup {
 
     /// Validates that the backup configuration has at least one storage option enabled
     pub fn validate_backup_config(cfg: &BackupConfig) -> Result<()> {
-        if cfg.storage_config.output_path.is_none() && cfg.storage_config.ipfs_providers.is_empty()
+        if cfg.storage_config.output_path.is_none()
+            && cfg.storage_config.ipfs_pinning_configs.is_empty()
         {
             return Err(anyhow::anyhow!(
-                "At least one storage option must be enabled: either output_path or ipfs_providers"
+                "At least one storage option must be enabled: either output_path or ipfs_pinning_configs"
             ));
         }
         Ok(())
@@ -121,7 +122,7 @@ pub mod backup {
             info!(
                 "Protection requested: download to disk={}, pin to IPFS={}",
                 cfg.storage_config.output_path.is_some(),
-                !cfg.storage_config.ipfs_providers.is_empty(),
+                !cfg.storage_config.ipfs_pinning_configs.is_empty(),
             );
 
             if let Some(ref out) = cfg.storage_config.output_path {
@@ -198,7 +199,7 @@ pub mod backup {
             if let Some(ref out) = cfg.storage_config.output_path {
                 info!("{} files saved in {}.", all_files.len(), out.display(),);
             }
-            if !cfg.storage_config.ipfs_providers.is_empty() {
+            if !cfg.storage_config.ipfs_pinning_configs.is_empty() {
                 let total_pins: usize = all_token_pin_mappings
                     .iter()
                     .map(|mapping| mapping.pin_responses.len())
@@ -206,7 +207,7 @@ pub mod backup {
                 info!(
                     "{} CID pins were requested across {} provider(s) for {} tokens.",
                     total_pins,
-                    cfg.storage_config.ipfs_providers.len(),
+                    cfg.storage_config.ipfs_pinning_configs.len(),
                     all_token_pin_mappings.len()
                 );
             }
@@ -252,7 +253,7 @@ mod tests {
             storage_config: StorageConfig {
                 output_path: Some(PathBuf::from("/tmp/test")),
                 prune_redundant: false,
-                ipfs_providers: vec![ipfs::IpfsProviderConfig::IpfsPinningService {
+                ipfs_pinning_configs: vec![ipfs::IpfsPinningConfig::IpfsPinningService {
                     base_url: "http://example.com".to_string(),
                     bearer_token_env: None,
                 }],
@@ -274,7 +275,7 @@ mod tests {
             storage_config: StorageConfig {
                 output_path: Some(PathBuf::from("/tmp/test")),
                 prune_redundant: false,
-                ipfs_providers: vec![],
+                ipfs_pinning_configs: vec![],
             },
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
@@ -293,7 +294,7 @@ mod tests {
             storage_config: StorageConfig {
                 output_path: None,
                 prune_redundant: false,
-                ipfs_providers: vec![ipfs::IpfsProviderConfig::IpfsPinningService {
+                ipfs_pinning_configs: vec![ipfs::IpfsPinningConfig::IpfsPinningService {
                     base_url: "http://example.com".to_string(),
                     bearer_token_env: None,
                 }],
@@ -315,7 +316,7 @@ mod tests {
             storage_config: StorageConfig {
                 output_path: None,
                 prune_redundant: false,
-                ipfs_providers: vec![],
+                ipfs_pinning_configs: vec![],
             },
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
@@ -348,7 +349,7 @@ mod tests {
             storage_config: StorageConfig {
                 output_path: Some("/tmp/test_backup".into()),
                 prune_redundant: false,
-                ipfs_providers: vec![],
+                ipfs_pinning_configs: vec![],
             },
             process_config: ProcessManagementConfig {
                 exit_on_error: false,

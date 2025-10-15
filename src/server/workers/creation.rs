@@ -176,7 +176,7 @@ fn prepare_backup_config(
     let token_config = TokenConfig { chains: token_map };
 
     // Determine output path and IPFS settings based on storage mode
-    let (output_path, ipfs_providers) = match scope {
+    let (output_path, ipfs_pinning_configs) = match scope {
         StorageMode::Archive => {
             // Filesystem only: permanent directory, no IPFS
             let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
@@ -184,12 +184,15 @@ fn prepare_backup_config(
         }
         StorageMode::Ipfs => {
             // IPFS only: no downloads, just pin existing CIDs
-            (None, state.ipfs_providers.clone())
+            (None, state.ipfs_pinning_configs.clone())
         }
         StorageMode::Full => {
             // Both: permanent directory and IPFS pinning
             let out_dir = format!("{}/nftbk-{}", state.base_dir, task_id);
-            (Some(PathBuf::from(out_dir)), state.ipfs_providers.clone())
+            (
+                Some(PathBuf::from(out_dir)),
+                state.ipfs_pinning_configs.clone(),
+            )
         }
     };
 
@@ -199,7 +202,7 @@ fn prepare_backup_config(
         storage_config: StorageConfig {
             output_path: output_path.clone(),
             prune_redundant: false,
-            ipfs_providers,
+            ipfs_pinning_configs,
         },
         process_config: ProcessManagementConfig {
             exit_on_error: false,

@@ -274,8 +274,8 @@ mod handle_download_tests {
             backup_task_sender: mpsc::channel(1).0,
             db,
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            ipfs_providers: Vec::new(),
-            ipfs_provider_instances: Arc::new(Vec::new()),
+            ipfs_pinning_configs: Vec::new(),
+            ipfs_pinning_instances: Arc::new(Vec::new()),
         }
     }
 

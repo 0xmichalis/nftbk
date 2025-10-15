@@ -2,19 +2,19 @@
 # This file configures IPFS pinning providers for the nftbk server
 
 # Example 1: Filebase
-[[ipfs_provider]]
+[[ipfs_pinning_provider]]
 type = "pinning-service"
 base_url = "https://api.filebase.io/v1/ipfs"
 bearer_token_env = "FILEBASE_TOKEN"
 
 # Example 2: Pinata
-[[ipfs_provider]]
+[[ipfs_pinning_provider]]
 type = "pinata"
 base_url = "https://api.pinata.cloud"
 bearer_token_env = "PINATA_TOKEN"
 
 # Example 3: Another pinning service instance with a different token
-#[[ipfs_provider]]
+#[[ipfs_pinning_provider]]
 #type = "pinning-service"
 #base_url = "https://my-ipfs-service.example.com"
 #bearer_token_env = "PINNING_SERVICE_BACKUP_TOKEN"

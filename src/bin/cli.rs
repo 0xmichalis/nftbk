@@ -15,7 +15,7 @@ use zip::ZipArchive;
 
 use nftbk::backup::{backup_from_config, BackupConfig, ChainConfig, TokenConfig};
 use nftbk::envvar::is_defined;
-use nftbk::ipfs::IpfsProviderConfig;
+use nftbk::ipfs::IpfsPinningConfig;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
@@ -26,7 +26,7 @@ const BACKUPS_API_PATH: &str = "/v1/backups";
 
 #[derive(serde::Deserialize)]
 struct IpfsConfigFile {
-    ipfs_provider: Vec<IpfsProviderConfig>,
+    ipfs_pinning_configs: Vec<IpfsPinningConfig>,
 }
 
 #[derive(Parser, Debug)]
@@ -641,7 +641,7 @@ async fn main() -> Result<()> {
     chain_config.resolve_env_vars()?;
 
     // Load IPFS provider configuration from file if provided
-    let ipfs_providers = if args.ipfs_config.is_none() {
+    let ipfs_pinning_configs = if args.ipfs_config.is_none() {
         Vec::new()
     } else {
         let path = args.ipfs_config.as_ref().unwrap();
@@ -649,7 +649,7 @@ async fn main() -> Result<()> {
             .with_context(|| format!("Failed to read IPFS config file '{path}'"))?;
         let config: IpfsConfigFile = toml::from_str(&contents)
             .with_context(|| format!("Failed to parse IPFS config file '{path}'"))?;
-        config.ipfs_provider
+        config.ipfs_pinning_configs
     };
 
     let output_path = args.output_path.clone();
@@ -659,7 +659,7 @@ async fn main() -> Result<()> {
         storage_config: StorageConfig {
             output_path: output_path.clone(),
             prune_redundant: args.prune_redundant,
-            ipfs_providers,
+            ipfs_pinning_configs,
         },
         process_config: ProcessManagementConfig {
             exit_on_error: args.exit_on_error,

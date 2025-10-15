@@ -59,13 +59,13 @@ Both the server and CLI can be configured to pin CIDs on IPFS via a TOML file pa
 
 ```toml
 # Pin to Filebase (supports the IPFS Pinning Service API)
-[[ipfs_provider]]
+[[ipfs_pinning_provider]]
 type = "pinning-service"
 base_url = "https://api.filebase.io/v1/ipfs"
 bearer_token_env = "FILEBASE_TOKEN"
 
 # Pin to Pinata
-[[ipfs_provider]]
+[[ipfs_pinning_provider]]
 type = "pinata"
 base_url = "https://api.pinata.cloud"
 bearer_token_env = "PINATA_TOKEN"

@@ -54,12 +54,12 @@ fn validate_deletion_with_scope(
 }
 
 fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), String> {
-    validate_backup_request_impl(&state.chain_config, state.ipfs_providers.len(), req)
+    validate_backup_request_impl(&state.chain_config, state.ipfs_pinning_configs.len(), req)
 }
 
 fn validate_backup_request_impl(
     chain_config: &crate::backup::ChainConfig,
-    ipfs_providers_len: usize,
+    ipfs_pinning_configs_len: usize,
     req: &BackupRequest,
 ) -> Result<(), String> {
     // Validate requested chains
@@ -79,8 +79,8 @@ fn validate_backup_request_impl(
         return Err("Either create_archive must be true or pin_on_ipfs must be true".to_string());
     }
     // Validate IPFS pinning configuration
-    if req.pin_on_ipfs && ipfs_providers_len == 0 {
-        return Err("pin_on_ipfs requested but no IPFS provider configured".to_string());
+    if req.pin_on_ipfs && ipfs_pinning_configs_len == 0 {
+        return Err("pin_on_ipfs requested but no IPFS pinning providers configured".to_string());
     }
     Ok(())
 }
@@ -323,7 +323,7 @@ mod validate_backup_request_impl_tests {
     }
 
     #[test]
-    fn rejects_pin_without_ipfs_providers() {
+    fn rejects_pin_without_ipfs_pinning_configs() {
         let chain_config = make_chain_config(&["ethereum"]);
         let req = BackupRequest {
             tokens: vec![Tokens {
@@ -337,7 +337,7 @@ mod validate_backup_request_impl_tests {
         assert!(result.is_err());
         assert_eq!(
             result.err().unwrap(),
-            "pin_on_ipfs requested but no IPFS provider configured"
+            "pin_on_ipfs requested but no IPFS pinning providers configured"
         );
     }
 
@@ -401,11 +401,11 @@ mod handle_backup_endpoint_tests {
     use tokio::sync::{mpsc, Mutex};
     use tower::Service;
 
-    use crate::ipfs::IpfsProviderConfig;
+    use crate::ipfs::IpfsPinningConfig;
     use crate::server::database::Db;
     use crate::server::AppState;
 
-    fn make_state(ipfs_providers: Vec<IpfsProviderConfig>) -> AppState {
+    fn make_state(ipfs_pinning_configs: Vec<IpfsPinningConfig>) -> AppState {
         let mut chains = HashMap::new();
         chains.insert("ethereum".to_string(), "rpc://dummy".to_string());
         let chain_config = crate::backup::ChainConfig(chains);
@@ -425,8 +425,8 @@ mod handle_backup_endpoint_tests {
             backup_task_sender: tx,
             db,
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            ipfs_providers,
-            ipfs_provider_instances: Arc::new(Vec::new()),
+            ipfs_pinning_configs,
+            ipfs_pinning_instances: Arc::new(Vec::new()),
         }
     }
 
@@ -455,7 +455,7 @@ mod handle_backup_endpoint_tests {
     }
 
     #[tokio::test]
-    async fn returns_400_for_pin_without_ipfs_providers() {
+    async fn returns_400_for_pin_without_ipfs_pinning_configs() {
         let state = make_state(Vec::new());
         let app = Router::new()
             .route("/backup", post(handle_backup))

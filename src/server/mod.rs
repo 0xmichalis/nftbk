@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info};
 
 use crate::backup::ChainConfig;
-use crate::ipfs::{IpfsPinningProvider, IpfsProviderConfig};
+use crate::ipfs::{IpfsPinningConfig, IpfsPinningProvider};
 use crate::server::api::{BackupRequest, Tokens};
 use crate::server::database::Db;
 
@@ -106,8 +106,8 @@ pub struct AppState {
     pub backup_task_sender: mpsc::Sender<BackupTaskOrShutdown>,
     pub db: Arc<Db>,
     pub shutdown_flag: Arc<AtomicBool>,
-    pub ipfs_providers: Vec<IpfsProviderConfig>,
-    pub ipfs_provider_instances: Arc<Vec<Arc<dyn IpfsPinningProvider>>>,
+    pub ipfs_pinning_configs: Vec<IpfsPinningConfig>,
+    pub ipfs_pinning_instances: Arc<Vec<Arc<dyn IpfsPinningProvider>>>,
 }
 
 impl Default for AppState {
@@ -129,7 +129,7 @@ impl AppState {
         db_url: &str,
         max_connections: u32,
         shutdown_flag: Arc<AtomicBool>,
-        ipfs_providers: Vec<IpfsProviderConfig>,
+        ipfs_pinning_configs: Vec<IpfsPinningConfig>,
     ) -> Self {
         let config_content = tokio::fs::read_to_string(chain_config_path)
             .await
@@ -143,8 +143,8 @@ impl AppState {
         let db = Arc::new(Db::new(db_url, max_connections).await);
 
         // Create IPFS provider instances at startup
-        let mut ipfs_provider_instances = Vec::new();
-        for config in &ipfs_providers {
+        let mut ipfs_pinning_instances = Vec::new();
+        for config in &ipfs_pinning_configs {
             match config.create_provider() {
                 Ok(provider) => {
                     info!(
@@ -152,7 +152,7 @@ impl AppState {
                         provider.provider_type(),
                         provider.provider_url()
                     );
-                    ipfs_provider_instances.push(Arc::from(provider));
+                    ipfs_pinning_instances.push(Arc::from(provider));
                 }
                 Err(e) => {
                     error!(
@@ -174,8 +174,8 @@ impl AppState {
             backup_task_sender,
             db,
             shutdown_flag,
-            ipfs_providers,
-            ipfs_provider_instances: Arc::new(ipfs_provider_instances),
+            ipfs_pinning_configs,
+            ipfs_pinning_instances: Arc::new(ipfs_pinning_instances),
         }
     }
 }
