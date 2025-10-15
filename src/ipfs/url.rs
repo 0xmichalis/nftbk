@@ -82,16 +82,20 @@ pub fn extract_ipfs_cid(url: &str) -> Option<String> {
 }
 
 pub fn extract_ipfs_content(url: &str) -> Option<String> {
-    if url.starts_with("ipfs://ipfs/") {
-        return Some(url.trim_start_matches("ipfs://ipfs/").to_string());
+    // Normalize by stripping query and fragment which sometimes appear on raw CIDs (e.g., fxhash)
+    let end = url.find(&['?', '#'][..]).unwrap_or(url.len());
+    let base = &url[..end];
+
+    if base.starts_with("ipfs://ipfs/") {
+        return Some(base.trim_start_matches("ipfs://ipfs/").to_string());
     }
-    if url.starts_with("ipfs://") {
-        return Some(url.trim_start_matches("ipfs://").to_string());
+    if base.starts_with("ipfs://") {
+        return Some(base.trim_start_matches("ipfs://").to_string());
     }
-    if (url.starts_with("Qm") && url.len() == 46) || url.starts_with("bafy") {
-        return Some(url.to_string());
+    if (base.starts_with("Qm") && base.len() == 46) || base.starts_with("bafy") {
+        return Some(base.to_string());
     }
-    if let Some(content) = extract_ipfs_content_from_gateway_url(url) {
+    if let Some(content) = extract_ipfs_content_from_gateway_url(base) {
         return Some(content);
     }
     None
@@ -183,6 +187,19 @@ mod tests {
             let sub = "https://QmHash.ipfs.4everland.io/path/file";
             assert_eq!(extract_ipfs_cid(sub).as_deref(), Some("QmHash"));
             assert!(extract_ipfs_cid("https://example.com").is_none());
+
+            // New: raw CID with query params (e.g., fxhash)
+            assert_eq!(
+                extract_ipfs_cid("Qmes8gbwpWoFLsReGqCGnvjVq2FeSBTVDasKPq8Jr3sef9?fxhash=onh7ZQAaN9y1U5ZVSjBCPRsdptQpS39eJsHJEorp8Vm14dcxTjd")
+                    .as_deref(),
+                Some("Qmes8gbwpWoFLsReGqCGnvjVq2FeSBTVDasKPq8Jr3sef9")
+            );
+
+            // New: ipfs:// URL with query/fragment
+            assert_eq!(
+                extract_ipfs_cid("ipfs://QmHash/path?foo=bar#frag").as_deref(),
+                Some("QmHash")
+            );
         }
     }
 
