@@ -5,9 +5,9 @@ use tokio::time::{sleep, Duration as TokioDuration};
 use tracing::{info, warn};
 
 use crate::server::archive::get_zipped_backup_paths;
-use crate::server::database::{Db, ExpiredBackup};
+use crate::server::database::{r#trait::Database, Db, ExpiredBackup};
 
-async fn prune_backups(db: &Db, base_dir: &str, expired: &[ExpiredBackup]) {
+async fn prune_backups<DB: Database + ?Sized>(db: &DB, base_dir: &str, expired: &[ExpiredBackup]) {
     let mut pruned_task_ids = Vec::new();
     for ExpiredBackup {
         task_id,
@@ -43,7 +43,7 @@ pub async fn run_pruner(
         info!("Running pruning process...");
         match db.list_unprocessed_expired_backups().await {
             Ok(expired) => {
-                prune_backups(&db, &base_dir, &expired).await;
+                prune_backups(&*db, &base_dir, &expired).await;
             }
             Err(e) => {
                 warn!("Failed to query expired backups: {}", e);

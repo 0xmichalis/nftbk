@@ -198,6 +198,12 @@ pub struct MockDatabase {
     pub get_pinned_tokens_by_requestor_error: Option<String>,
     pub get_pinned_token_by_requestor_result: Option<TokenWithPins>,
     pub get_pinned_token_by_requestor_error: Option<String>,
+
+    // Call counters for verifying interactions in tests
+    pub get_active_pins_calls: std::sync::Mutex<u32>,
+    pub update_pin_statuses_calls: std::sync::Mutex<u32>,
+    pub get_incomplete_backup_tasks_calls: std::sync::Mutex<u32>,
+    pub set_backup_error_calls: std::sync::Mutex<u32>,
 }
 
 impl MockDatabase {
@@ -358,6 +364,23 @@ impl MockDatabase {
     pub fn set_get_pinned_token_by_requestor_error(&mut self, error: Option<String>) {
         self.get_pinned_token_by_requestor_error = error;
     }
+
+    // Call counter getters
+    pub fn get_active_pins_calls(&self) -> u32 {
+        *self.get_active_pins_calls.lock().unwrap()
+    }
+
+    pub fn get_update_pin_statuses_calls(&self) -> u32 {
+        *self.update_pin_statuses_calls.lock().unwrap()
+    }
+
+    pub fn get_get_incomplete_backup_tasks_calls(&self) -> u32 {
+        *self.get_incomplete_backup_tasks_calls.lock().unwrap()
+    }
+
+    pub fn get_set_backup_error_calls(&self) -> u32 {
+        *self.set_backup_error_calls.lock().unwrap()
+    }
 }
 
 #[async_trait]
@@ -397,6 +420,7 @@ impl Database for MockDatabase {
     }
 
     async fn get_incomplete_backup_tasks(&self) -> Result<Vec<BackupTask>, sqlx::Error> {
+        *self.get_incomplete_backup_tasks_calls.lock().unwrap() += 1;
         if let Some(error) = &self.get_incomplete_backup_tasks_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
@@ -444,6 +468,7 @@ impl Database for MockDatabase {
     }
 
     async fn set_backup_error(&self, _task_id: &str, _error: &str) -> Result<(), sqlx::Error> {
+        *self.set_backup_error_calls.lock().unwrap() += 1;
         if let Some(error) = &self.set_backup_error_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
@@ -635,6 +660,7 @@ impl Database for MockDatabase {
     }
 
     async fn get_active_pins(&self) -> Result<Vec<PinRow>, sqlx::Error> {
+        *self.get_active_pins_calls.lock().unwrap() += 1;
         if let Some(error) = &self.get_active_pins_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
@@ -643,6 +669,7 @@ impl Database for MockDatabase {
     }
 
     async fn update_pin_statuses(&self, _updates: &[(i64, String)]) -> Result<(), sqlx::Error> {
+        *self.update_pin_statuses_calls.lock().unwrap() += 1;
         if let Some(error) = &self.update_pin_statuses_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {

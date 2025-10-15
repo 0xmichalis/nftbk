@@ -30,7 +30,7 @@ pub use handlers::handle_backups::handle_backups;
 pub use handlers::handle_download::handle_download;
 pub use handlers::handle_download::handle_download_token;
 pub use handlers::handle_status::handle_status;
-pub use recovery::{recover_incomplete_tasks, RecoveryDb};
+pub use recovery::recover_incomplete_tasks;
 pub use workers::deletion::{complete_deletion_for_scope, start_deletion_for_scope};
 pub use workers::spawn_backup_workers;
 
