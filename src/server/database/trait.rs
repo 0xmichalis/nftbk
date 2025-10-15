@@ -94,7 +94,7 @@ pub trait Database {
         ipfs_status: &str,
     ) -> Result<(), sqlx::Error>;
 
-    async fn batch_update_backup_status(
+    async fn update_archive_request_statuses(
         &self,
         task_ids: &[String],
         status: &str,
@@ -174,7 +174,7 @@ pub struct MockDatabase {
     pub update_archive_request_status_error: Option<String>,
     pub update_pin_request_status_error: Option<String>,
     pub update_backup_statuses_error: Option<String>,
-    pub batch_update_backup_status_error: Option<String>,
+    pub update_archive_request_statuses_error: Option<String>,
 
     // Deletion operations
     pub start_deletion_error: Option<String>,
@@ -288,8 +288,8 @@ impl MockDatabase {
         self.update_backup_statuses_error = error;
     }
 
-    pub fn set_batch_update_backup_status_error(&mut self, error: Option<String>) {
-        self.batch_update_backup_status_error = error;
+    pub fn set_update_archive_request_statuses_error(&mut self, error: Option<String>) {
+        self.update_archive_request_statuses_error = error;
     }
 
     // Configuration methods for deletion operations
@@ -552,12 +552,12 @@ impl Database for MockDatabase {
         }
     }
 
-    async fn batch_update_backup_status(
+    async fn update_archive_request_statuses(
         &self,
         _task_ids: &[String],
         _status: &str,
     ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.batch_update_backup_status_error {
+        if let Some(error) = &self.update_archive_request_statuses_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
             Ok(())

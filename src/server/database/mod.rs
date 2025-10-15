@@ -387,7 +387,7 @@ impl Db {
     }
 
     /// Batch update: set status for multiple backup task_ids at once
-    pub async fn batch_update_backup_status(
+    pub async fn update_archive_request_statuses(
         &self,
         task_ids: &[String],
         status: &str,
@@ -1342,12 +1342,12 @@ impl Database for Db {
         Db::update_backup_statuses(self, task_id, scope, archive_status, ipfs_status).await
     }
 
-    async fn batch_update_backup_status(
+    async fn update_archive_request_statuses(
         &self,
         task_ids: &[String],
         status: &str,
     ) -> Result<(), sqlx::Error> {
-        Db::batch_update_backup_status(self, task_ids, status).await
+        Db::update_archive_request_statuses(self, task_ids, status).await
     }
 
     // Deletion operations

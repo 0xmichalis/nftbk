@@ -25,7 +25,7 @@ async fn prune_backups(db: &Db, base_dir: &str, expired: &[ExpiredBackup]) {
     }
     if !pruned_task_ids.is_empty() {
         if let Err(e) = db
-            .batch_update_backup_status(&pruned_task_ids, "expired")
+            .update_archive_request_statuses(&pruned_task_ids, "expired")
             .await
         {
             warn!("Failed to update status for pruned backups: {}", e);
