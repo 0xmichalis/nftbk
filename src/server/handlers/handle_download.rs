@@ -15,7 +15,7 @@ use tokio_util::io::ReaderStream;
 
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::database::r#trait::Database;
-use crate::server::{check_backup_on_disk, AppState};
+use crate::server::{archive::check_backup_on_disk, AppState};
 
 #[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct DownloadQuery {

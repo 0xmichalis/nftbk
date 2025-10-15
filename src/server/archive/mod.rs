@@ -7,8 +7,10 @@ use std::path::Path as StdPath;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tracing::warn;
+use tracing::{debug, info, warn};
 use zip::write::FileOptions;
+
+use crate::server::hashing::compute_file_sha256;
 
 /// Error message used when archiving is interrupted by shutdown signal
 pub const ARCHIVE_INTERRUPTED_BY_SHUTDOWN: &str =
@@ -197,6 +199,58 @@ pub fn get_zipped_backup_paths(
     let zip_path = PathBuf::from(format!("{base_dir}/nftbk-{task_id}.{archive_format}"));
     let checksum_path = PathBuf::from(format!("{}.sha256", zip_path.display()));
     (zip_path, checksum_path)
+}
+
+pub async fn check_backup_on_disk(
+    base_dir: &str,
+    task_id: &str,
+    unsafe_skip_checksum_check: bool,
+    archive_format: &str,
+) -> Option<PathBuf> {
+    let (path, checksum_path) = get_zipped_backup_paths(base_dir, task_id, archive_format);
+
+    // First check if both files exist
+    match (
+        tokio::fs::try_exists(&path).await,
+        tokio::fs::try_exists(&checksum_path).await,
+    ) {
+        (Ok(true), Ok(true)) => {
+            if unsafe_skip_checksum_check {
+                // Only check for existence, skip reading and comparing checksums
+                return Some(path);
+            }
+            // Read stored checksum
+            info!("Checking backup on disk for task {}", task_id);
+            let stored_checksum = match tokio::fs::read_to_string(&checksum_path).await {
+                Ok(checksum) => checksum,
+                Err(e) => {
+                    warn!("Failed to read checksum file for {}: {}", path.display(), e);
+                    return None;
+                }
+            };
+
+            // Compute current checksum
+            debug!("Computing backup checksum for task {}", task_id);
+            let current_checksum = match compute_file_sha256(&path).await {
+                Ok(checksum) => checksum,
+                Err(e) => {
+                    warn!("Failed to compute checksum for {}: {}", path.display(), e);
+                    return None;
+                }
+            };
+
+            if stored_checksum.trim() != current_checksum {
+                warn!(
+                    "Backup archive {} is corrupted: checksum mismatch",
+                    path.display()
+                );
+                return None;
+            }
+
+            Some(path)
+        }
+        _ => None,
+    }
 }
 
 pub fn archive_format_from_user_agent(user_agent: &str) -> String {

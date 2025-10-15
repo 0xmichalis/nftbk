@@ -1,18 +1,15 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
-use tokio::fs;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info};
 
 use crate::backup::ChainConfig;
 use crate::ipfs::{IpfsPinningProvider, IpfsProviderConfig};
 use crate::server::api::{BackupRequest, Tokens};
 use crate::server::database::Db;
-use crate::server::hashing::compute_file_sha256;
 
 pub mod api;
 pub mod archive;
@@ -180,58 +177,5 @@ impl AppState {
             ipfs_providers,
             ipfs_provider_instances: Arc::new(ipfs_provider_instances),
         }
-    }
-}
-
-pub async fn check_backup_on_disk(
-    base_dir: &str,
-    task_id: &str,
-    unsafe_skip_checksum_check: bool,
-    archive_format: &str,
-) -> Option<PathBuf> {
-    let (path, checksum_path) =
-        crate::server::archive::get_zipped_backup_paths(base_dir, task_id, archive_format);
-
-    // First check if both files exist
-    match (
-        fs::try_exists(&path).await,
-        fs::try_exists(&checksum_path).await,
-    ) {
-        (Ok(true), Ok(true)) => {
-            if unsafe_skip_checksum_check {
-                // Only check for existence, skip reading and comparing checksums
-                return Some(path);
-            }
-            // Read stored checksum
-            info!("Checking backup on disk for task {}", task_id);
-            let stored_checksum = match fs::read_to_string(&checksum_path).await {
-                Ok(checksum) => checksum,
-                Err(e) => {
-                    warn!("Failed to read checksum file for {}: {}", path.display(), e);
-                    return None;
-                }
-            };
-
-            // Compute current checksum
-            debug!("Computing backup checksum for task {}", task_id);
-            let current_checksum = match compute_file_sha256(&path).await {
-                Ok(checksum) => checksum,
-                Err(e) => {
-                    warn!("Failed to compute checksum for {}: {}", path.display(), e);
-                    return None;
-                }
-            };
-
-            if stored_checksum.trim() != current_checksum {
-                warn!(
-                    "Backup archive {} is corrupted: checksum mismatch",
-                    path.display()
-                );
-                return None;
-            }
-
-            Some(path)
-        }
-        _ => None,
     }
 }
