@@ -25,6 +25,11 @@ pub async fn recover_incomplete_tasks<DB: Database + ?Sized>(
 
     for task_meta in incomplete_tasks {
         let task_id = task_meta.task_id.clone();
+        let scope = task_meta.storage_mode.parse().unwrap_or(StorageMode::Full);
+
+        // TODO: This could be batched
+        let _ = db.clear_backup_errors(&task_id, scope.as_str()).await;
+
         // Parse the tokens JSON back to Vec<Tokens>
         let tokens: Vec<Tokens> = match serde_json::from_value(task_meta.tokens.clone()) {
             Ok(tokens) => tokens,
@@ -52,7 +57,6 @@ pub async fn recover_incomplete_tasks<DB: Database + ?Sized>(
                 pin_on_ipfs,
                 create_archive,
             },
-            force: true, // Force recovery to ensure backup actually runs
             scope: storage_mode,
             archive_format: task_meta.archive_format,
             requestor: Some(task_meta.requestor),
@@ -162,13 +166,11 @@ mod tests {
                 BackupTaskOrShutdown::Task(TaskType::Creation(task)) => {
                     if task.task_id == "task1" {
                         seen_task1 = true;
-                        assert!(task.force);
                         assert_eq!(task.scope, StorageMode::Archive);
                         assert_eq!(task.archive_format, Some("zip".to_string()));
                         assert_eq!(task.requestor, Some("user1".to_string()));
                     } else if task.task_id == "task2" {
                         seen_task2 = true;
-                        assert!(task.force);
                         assert_eq!(task.scope, StorageMode::Full);
                         assert_eq!(task.archive_format, None);
                         assert_eq!(task.requestor, Some("user2".to_string()));

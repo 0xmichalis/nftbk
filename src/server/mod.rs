@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fmt;
 use std::str::FromStr;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -25,7 +26,7 @@ pub mod workers;
 pub use handlers::handle_backup::handle_backup;
 pub use handlers::handle_backup_delete_archive::handle_backup_delete_archive;
 pub use handlers::handle_backup_delete_pins::handle_backup_delete_pins;
-pub use handlers::handle_backup_retry::handle_backup_retry;
+pub use handlers::handle_backup_retries::handle_backup_retries;
 pub use handlers::handle_backups::handle_backups;
 pub use handlers::handle_download::handle_download;
 pub use handlers::handle_download::handle_download_token;
@@ -50,7 +51,6 @@ pub enum TaskType {
 pub struct BackupTask {
     pub task_id: String,
     pub request: BackupRequest,
-    pub force: bool,
     pub scope: StorageMode,
     pub archive_format: Option<String>,
     pub requestor: Option<String>,
@@ -78,6 +78,21 @@ impl StorageMode {
             StorageMode::Ipfs => "ipfs",
             StorageMode::Full => "full",
         }
+    }
+}
+
+impl fmt::Display for StorageMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+pub fn parse_scope(scope: &str) -> Option<StorageMode> {
+    match scope {
+        "archive" => Some(StorageMode::Archive),
+        "ipfs" => Some(StorageMode::Ipfs),
+        "full" => Some(StorageMode::Full),
+        _ => None,
     }
 }
 

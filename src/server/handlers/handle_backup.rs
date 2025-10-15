@@ -42,7 +42,7 @@ fn derive_status(meta: &crate::server::database::BackupTask) -> String {
 /// For Archive scope, treat deletion as active when `archive_deleted_at` is set.
 /// For Ipfs scope, treat deletion as active when `pins_deleted_at` is set.
 /// For Full scope, treat deletion as active when either subresource has deletion started.
-fn validate_deletion_with_scope(
+pub(crate) fn validate_deletion_with_scope(
     storage_mode: &StorageMode,
     meta: &crate::server::database::BackupTask,
 ) -> bool {
@@ -253,7 +253,6 @@ async fn handle_backup_core<DB: Database + ?Sized>(
     let backup_task = BackupTask {
         task_id: task_id.clone(),
         request: req.clone(),
-        force: false,
         scope: storage_mode.clone(),
         archive_format: archive_format_opt.clone(),
         requestor: Some(requestor_str.clone()),

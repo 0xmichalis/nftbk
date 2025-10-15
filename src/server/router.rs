@@ -23,8 +23,8 @@ use crate::server::handlers::handle_backup_delete_archive::{
 use crate::server::handlers::handle_backup_delete_pins::{
     __path_handle_backup_delete_pins, handle_backup_delete_pins,
 };
-use crate::server::handlers::handle_backup_retry::{
-    __path_handle_backup_retry, handle_backup_retry,
+use crate::server::handlers::handle_backup_retries::{
+    __path_handle_backup_retries, handle_backup_retries,
 };
 use crate::server::handlers::handle_backups::BackupsQuery;
 use crate::server::handlers::handle_backups::{__path_handle_backups, handle_backups};
@@ -44,7 +44,7 @@ use crate::server::AppState;
         handle_status,
         handle_download_token,
         handle_download,
-        handle_backup_retry,
+        handle_backup_retries,
         handle_backup_delete_archive,
         handle_backup_delete_pins,
         handle_backups,
@@ -195,7 +195,7 @@ pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -
             "/v1/backups/:task_id/download-tokens",
             post(handle_download_token),
         )
-        .route("/v1/backups/:task_id/retry", post(handle_backup_retry))
+        .route("/v1/backups/:task_id/retries", post(handle_backup_retries))
         .route(
             "/v1/backups/:task_id/archive",
             delete(handle_backup_delete_archive),

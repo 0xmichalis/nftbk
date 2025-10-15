@@ -214,18 +214,12 @@ fn prepare_backup_config(
 
 async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: BackupTask, db: &DB) {
     let task_id = task.task_id.clone();
-    let force = task.force;
     let scope = task.scope.clone();
     info!(
         "Running backup task for task {} (scope: {})",
         task_id,
         scope.as_str()
     );
-
-    // If force is set, clean up the error log if it exists
-    if force {
-        let _ = db.clear_backup_errors(&task_id, scope.as_str()).await;
-    }
 
     // Prepare backup config
     let backup_cfg = prepare_backup_config(&state, &task_id, &scope, &task.request.tokens);

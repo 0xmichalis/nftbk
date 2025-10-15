@@ -112,7 +112,12 @@ pub trait Database {
     async fn complete_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
 
     // Retry operations
-    async fn retry_backup(&self, task_id: &str, retention_days: u64) -> Result<(), sqlx::Error>;
+    async fn retry_backup(
+        &self,
+        task_id: &str,
+        scope: &str,
+        retention_days: u64,
+    ) -> Result<(), sqlx::Error>;
 
     // Pin operations
     async fn insert_pins_with_tokens(
@@ -630,7 +635,12 @@ impl Database for MockDatabase {
     }
 
     // Retry operations
-    async fn retry_backup(&self, _task_id: &str, _retention_days: u64) -> Result<(), sqlx::Error> {
+    async fn retry_backup(
+        &self,
+        _task_id: &str,
+        _scope: &str,
+        _retention_days: u64,
+    ) -> Result<(), sqlx::Error> {
         if let Some(error) = &self.retry_backup_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {

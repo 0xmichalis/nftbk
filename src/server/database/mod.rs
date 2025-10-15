@@ -366,38 +366,50 @@ impl Db {
         Ok(())
     }
 
-    // TODO: Should support pin request retries
     pub async fn retry_backup(
         &self,
         task_id: &str,
+        scope: &str,
         retention_days: u64,
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
-        // Reset archive subresource status and fatal_error
-        sqlx::query(
-            r#"
-            UPDATE archive_requests
-            SET status = 'in_progress', fatal_error = NULL
-            WHERE task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .execute(&mut *tx)
-        .await?;
-
-        // Update archive_requests expires_at if it exists
-        sqlx::query!(
-            r#"
-            UPDATE archive_requests
-            SET expires_at = NOW() + ($2 || ' days')::interval
-            WHERE task_id = $1
-            "#,
-            task_id,
-            retention_days as i64
-        )
-        .execute(&mut *tx)
-        .await?;
+        // Reset statuses per requested scope
+        if scope == "archive" || scope == "full" {
+            sqlx::query(
+                r#"
+                UPDATE archive_requests
+                SET status = 'in_progress', fatal_error = NULL, error_log = NULL
+                WHERE task_id = $1
+                "#,
+            )
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                r#"
+                UPDATE archive_requests
+                SET expires_at = NOW() + ($2 || ' days')::interval
+                WHERE task_id = $1
+                "#,
+            )
+            .bind(task_id)
+            .bind(retention_days as i64)
+            .execute(&mut *tx)
+            .await?;
+        }
+        if scope == "ipfs" || scope == "full" {
+            sqlx::query(
+                r#"
+                UPDATE pin_requests
+                SET status = 'in_progress', fatal_error = NULL, error_log = NULL
+                WHERE task_id = $1
+                "#,
+            )
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await?;
+        }
 
         tx.commit().await?;
         Ok(())
@@ -1405,8 +1417,13 @@ impl Database for Db {
     }
 
     // Retry operations
-    async fn retry_backup(&self, task_id: &str, retention_days: u64) -> Result<(), sqlx::Error> {
-        Db::retry_backup(self, task_id, retention_days).await
+    async fn retry_backup(
+        &self,
+        task_id: &str,
+        scope: &str,
+        retention_days: u64,
+    ) -> Result<(), sqlx::Error> {
+        Db::retry_backup(self, task_id, scope, retention_days).await
     }
 
     // Pin operations
