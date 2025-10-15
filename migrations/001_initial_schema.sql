@@ -2,8 +2,6 @@
 -- This migration creates the complete schema for the NFT protection service
 -- reflecting the latest table names and constraints
 
-BEGIN;
-
 -- Core backup tasks table
 CREATE TABLE IF NOT EXISTS backup_tasks (
     task_id VARCHAR(255) PRIMARY KEY,
@@ -12,8 +10,7 @@ CREATE TABLE IF NOT EXISTS backup_tasks (
     requestor VARCHAR(255) NOT NULL,
     nft_count INTEGER NOT NULL,
     tokens JSONB NOT NULL,
-    storage_mode VARCHAR(20) NOT NULL DEFAULT 'full' CHECK (storage_mode IN ('archive', 'ipfs', 'full')),
-    deleted_at TIMESTAMPTZ
+    storage_mode VARCHAR(20) NOT NULL DEFAULT 'full' CHECK (storage_mode IN ('archive', 'ipfs', 'full'))
 );
 
 -- Archive requests table
@@ -60,16 +57,13 @@ CREATE TABLE IF NOT EXISTS pinned_tokens (
 -- Indexes for backup_tasks
 CREATE INDEX IF NOT EXISTS idx_backup_tasks_requestor ON backup_tasks (requestor);
 CREATE INDEX IF NOT EXISTS idx_backup_tasks_tokens_gin ON backup_tasks USING GIN (tokens);
-CREATE INDEX IF NOT EXISTS idx_backup_tasks_deleted_at ON backup_tasks (deleted_at);
 
 -- Indexes for archive_requests
 CREATE INDEX IF NOT EXISTS idx_archive_requests_expires_at ON archive_requests (expires_at);
 CREATE INDEX IF NOT EXISTS idx_archive_requests_status ON archive_requests (status);
-CREATE INDEX IF NOT EXISTS idx_archive_requests_deleted_at ON archive_requests (deleted_at);
 
 -- Indexes for pin_requests
 CREATE INDEX IF NOT EXISTS idx_pin_requests_status ON pin_requests (status);
-CREATE INDEX IF NOT EXISTS idx_pin_requests_deleted_at ON pin_requests (deleted_at);
 
 -- Indexes for pins
 CREATE INDEX IF NOT EXISTS idx_pins_task_id ON pins (task_id);
@@ -80,6 +74,3 @@ CREATE INDEX IF NOT EXISTS idx_pins_request_id ON pins (request_id);
 
 -- Indexes for pinned_tokens
 CREATE INDEX IF NOT EXISTS pinned_tokens_token_idx ON pinned_tokens(chain, contract_address, token_id);
-
-
-COMMIT;
