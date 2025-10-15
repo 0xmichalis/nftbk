@@ -346,6 +346,31 @@ impl Db {
         Ok(())
     }
 
+    pub async fn update_archive_request_statuses(
+        &self,
+        task_ids: &[String],
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        if task_ids.is_empty() {
+            return Ok(());
+        }
+
+        // Use a transaction for atomicity
+        let mut tx = self.pool.begin().await?;
+
+        // Update each task_id individually with a prepared statement
+        for task_id in task_ids {
+            sqlx::query("UPDATE archive_requests SET status = $1 WHERE task_id = $2")
+                .bind(status)
+                .bind(task_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
     // TODO: Should support pin request retries
     pub async fn retry_backup(
         &self,
@@ -378,32 +403,6 @@ impl Db {
         )
         .execute(&mut *tx)
         .await?;
-
-        tx.commit().await?;
-        Ok(())
-    }
-
-    /// Batch update: set status for multiple backup task_ids at once
-    pub async fn update_archive_request_statuses(
-        &self,
-        task_ids: &[String],
-        status: &str,
-    ) -> Result<(), sqlx::Error> {
-        if task_ids.is_empty() {
-            return Ok(());
-        }
-
-        // Use a transaction for atomicity
-        let mut tx = self.pool.begin().await?;
-
-        // Update each task_id individually with a prepared statement
-        for task_id in task_ids {
-            sqlx::query("UPDATE archive_requests SET status = $1 WHERE task_id = $2")
-                .bind(status)
-                .bind(task_id)
-                .execute(&mut *tx)
-                .await?;
-        }
 
         tx.commit().await?;
         Ok(())
@@ -447,6 +446,25 @@ impl Db {
         sqlx::query(
             r#"
             UPDATE archive_requests
+            SET status = 'error', fatal_error = $2
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .bind(fatal_error)
+        .execute(&self.pool)
+        .await?;
+        Ok(())
+    }
+
+    pub async fn set_pin_request_error(
+        &self,
+        task_id: &str,
+        fatal_error: &str,
+    ) -> Result<(), sqlx::Error> {
+        sqlx::query(
+            r#"
+            UPDATE pin_requests
             SET status = 'error', fatal_error = $2
             WHERE task_id = $1
             "#,
@@ -1127,26 +1145,6 @@ impl Db {
             .bind(scope)
             .execute(&self.pool)
             .await?;
-        Ok(())
-    }
-
-    /// Set IPFS task-level fatal error and mark status as error
-    pub async fn set_pin_request_error(
-        &self,
-        task_id: &str,
-        fatal_error: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            UPDATE pin_requests
-            SET status = 'error', fatal_error = $2
-            WHERE task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(fatal_error)
-        .execute(&self.pool)
-        .await?;
         Ok(())
     }
 
