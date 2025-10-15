@@ -1171,36 +1171,52 @@ impl Db {
         Ok(())
     }
 
-    /// Complete archive deletion by updating storage mode to ipfs
+    /// Complete archive deletion:
+    /// - If current storage_mode is 'archive', delete the whole backup (finalize deletion)
+    /// - Else if current storage_mode is 'full', flip to 'ipfs' to reflect archive removed
     pub async fn complete_archive_request_deletion(
         &self,
         task_id: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
-            r#"
-            UPDATE backup_tasks
-            SET storage_mode = 'ipfs', updated_at = NOW()
-            WHERE task_id = $1
-            "#,
-            task_id
-        )
-        .execute(&self.pool)
-        .await?;
+        // Atomically: delete when archive-only; else if full, flip to ipfs
+        let sql = r#"
+            WITH del AS (
+                DELETE FROM backup_tasks
+                WHERE task_id = $1 AND storage_mode = 'archive'
+                RETURNING 1
+            ), upd AS (
+                UPDATE backup_tasks
+                SET storage_mode = 'ipfs', updated_at = NOW()
+                WHERE task_id = $1 AND storage_mode = 'full' AND NOT EXISTS (SELECT 1 FROM del)
+                RETURNING 1
+            )
+            SELECT COALESCE((SELECT COUNT(*) FROM del), 0) AS deleted,
+                   COALESCE((SELECT COUNT(*) FROM upd), 0) AS updated
+        "#;
+        let _ = sqlx::query(sql).bind(task_id).execute(&self.pool).await?;
         Ok(())
     }
 
-    /// Complete IPFS pins deletion by updating storage mode to archive
+    /// Complete IPFS pins deletion:
+    /// - If current storage_mode is 'ipfs', delete the whole backup (finalize deletion)
+    /// - Else if current storage_mode is 'full', flip to 'archive' to reflect pins removed
     pub async fn complete_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query!(
-            r#"
-            UPDATE backup_tasks
-            SET storage_mode = 'archive', updated_at = NOW()
-            WHERE task_id = $1
-            "#,
-            task_id
-        )
-        .execute(&self.pool)
-        .await?;
+        // Atomically: delete when ipfs-only; else if full, flip to archive
+        let sql = r#"
+            WITH del AS (
+                DELETE FROM backup_tasks
+                WHERE task_id = $1 AND storage_mode = 'ipfs'
+                RETURNING 1
+            ), upd AS (
+                UPDATE backup_tasks
+                SET storage_mode = 'archive', updated_at = NOW()
+                WHERE task_id = $1 AND storage_mode = 'full' AND NOT EXISTS (SELECT 1 FROM del)
+                RETURNING 1
+            )
+            SELECT COALESCE((SELECT COUNT(*) FROM del), 0) AS deleted,
+                   COALESCE((SELECT COUNT(*) FROM upd), 0) AS updated
+        "#;
+        let _ = sqlx::query(sql).bind(task_id).execute(&self.pool).await?;
         Ok(())
     }
 }
