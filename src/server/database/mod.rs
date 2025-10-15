@@ -185,8 +185,7 @@ impl Db {
                     VALUES ($1, $2, NOW() + ($3 || ' days')::interval, 'in_progress')
                     ON CONFLICT (task_id) DO UPDATE SET
                         archive_format = EXCLUDED.archive_format,
-                        expires_at = EXCLUDED.expires_at,
-                        status = COALESCE(archive_requests.status, 'in_progress')
+                        expires_at = EXCLUDED.expires_at
                     "#,
                 )
                 .bind(task_id)
@@ -201,8 +200,7 @@ impl Db {
                     VALUES ($1, $2, NULL, 'in_progress')
                     ON CONFLICT (task_id) DO UPDATE SET
                         archive_format = EXCLUDED.archive_format,
-                        expires_at = EXCLUDED.expires_at,
-                        status = COALESCE(archive_requests.status, 'in_progress')
+                        expires_at = EXCLUDED.expires_at
                     "#,
                 )
                 .bind(task_id)
@@ -219,7 +217,7 @@ impl Db {
                 INSERT INTO pin_requests (task_id, status)
                 VALUES ($1, 'in_progress')
                 ON CONFLICT (task_id) DO UPDATE SET
-                    status = COALESCE(pin_requests.status, 'in_progress')
+                    status = EXCLUDED.status
                 "#,
             )
             .bind(task_id)
@@ -667,7 +665,7 @@ impl Db {
             SELECT b.task_id, ar.archive_format 
             FROM backup_tasks b
             JOIN archive_requests ar ON b.task_id = ar.task_id
-            WHERE ar.expires_at IS NOT NULL AND ar.expires_at < NOW() AND COALESCE(ar.status, 'in_progress') != 'expired'
+            WHERE ar.expires_at IS NOT NULL AND ar.expires_at < NOW() AND ar.status != 'expired'
             "#,
         )
         .fetch_all(&self.pool)
