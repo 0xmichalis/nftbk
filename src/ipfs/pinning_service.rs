@@ -144,9 +144,9 @@ impl IpfsPinningProvider for IpfsPinningClient {
         })
     }
 
-    async fn get_pin(&self, pin_id: &str) -> Result<PinResponse> {
+    async fn get_pin(&self, request_id: &str) -> Result<PinResponse> {
         // Call the inherent method directly
-        let url = format!("{}/pins/{}", self.base_url, pin_id);
+        let url = format!("{}/pins/{}", self.base_url, request_id);
         let req = self.http.get(url);
         let res = self
             .auth(req)

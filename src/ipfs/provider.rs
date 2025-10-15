@@ -49,8 +49,8 @@ pub trait IpfsPinningProvider: Send + Sync {
     /// Pin a CID to the IPFS network
     async fn create_pin(&self, request: &PinRequest) -> Result<PinResponse>;
 
-    /// Get the status of a pin by its ID
-    async fn get_pin(&self, pin_id: &str) -> Result<PinResponse>;
+    /// Get the status of a pin by its request ID
+    async fn get_pin(&self, request_id: &str) -> Result<PinResponse>;
 
     /// List all pins from the provider
     async fn list_pins(&self) -> Result<Vec<PinResponse>>;
