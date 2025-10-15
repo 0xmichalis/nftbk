@@ -6,6 +6,7 @@ use axum::{
 use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
+use crate::server::database_trait::Database;
 use crate::server::AppState;
 
 /// Delete only the IPFS pins for a backup task.
@@ -38,106 +39,7 @@ pub async fn handle_backup_delete_pins(
     handle_backup_delete_pins_core(&*state.db, &state.backup_task_sender, &task_id, requestor).await
 }
 
-// Minimal trait to mock DB calls
-pub trait DeletePinsDb {
-    fn get_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
-                > + Send
-                + 'a,
-        >,
-    >;
-    fn get_pins_by_task_id<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<Vec<crate::server::db::PinRow>, sqlx::Error>>
-                + Send
-                + 'a,
-        >,
-    >;
-    fn delete_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>;
-}
-
-impl DeletePinsDb for crate::server::db::Db {
-    fn get_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move { crate::server::db::Db::get_backup_task(self, task_id).await })
-    }
-    fn get_pins_by_task_id<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<Vec<crate::server::db::PinRow>, sqlx::Error>>
-                + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move { crate::server::db::Db::get_pins_by_task_id(self, task_id).await })
-    }
-    fn delete_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
-    {
-        Box::pin(async move { crate::server::db::Db::delete_backup_task(self, task_id).await })
-    }
-}
-
-impl DeletePinsDb for std::sync::Arc<crate::server::db::Db> {
-    fn get_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move { crate::server::db::Db::get_backup_task(self, task_id).await })
-    }
-    fn get_pins_by_task_id<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<Vec<crate::server::db::PinRow>, sqlx::Error>>
-                + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move { crate::server::db::Db::get_pins_by_task_id(self, task_id).await })
-    }
-    fn delete_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
-    {
-        Box::pin(async move { crate::server::db::Db::delete_backup_task(self, task_id).await })
-    }
-}
-
-async fn handle_backup_delete_pins_core<DB: DeletePinsDb + ?Sized>(
+async fn handle_backup_delete_pins_core<DB: Database + ?Sized>(
     db: &DB,
     backup_task_sender: &tokio::sync::mpsc::Sender<crate::server::BackupTaskOrShutdown>,
     task_id: &str,
@@ -233,73 +135,10 @@ async fn handle_backup_delete_pins_core<DB: DeletePinsDb + ?Sized>(
 
 #[cfg(test)]
 mod handle_backup_delete_pins_core_tests {
-    use super::{handle_backup_delete_pins_core, DeletePinsDb};
+    use super::handle_backup_delete_pins_core;
+    use crate::server::database_trait::MockDatabase;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
-
-    #[derive(Clone, Default)]
-    struct MockDb {
-        meta: Option<crate::server::db::BackupTask>,
-        get_error: bool,
-        delete_error: bool,
-        pin_requests: Vec<crate::server::db::PinRow>,
-        delete_calls: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
-    }
-
-    impl DeletePinsDb for MockDb {
-        fn get_backup_task<'a>(
-            &'a self,
-            _task_id: &'a str,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            let meta = self.meta.clone();
-            let err = self.get_error;
-            Box::pin(async move {
-                if err {
-                    Err(sqlx::Error::PoolTimedOut)
-                } else {
-                    Ok(meta)
-                }
-            })
-        }
-        fn get_pins_by_task_id<'a>(
-            &'a self,
-            _task_id: &'a str,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<Vec<crate::server::db::PinRow>, sqlx::Error>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            let pin_requests = self.pin_requests.clone();
-            Box::pin(async move { Ok(pin_requests) })
-        }
-        fn delete_backup_task<'a>(
-            &'a self,
-            task_id: &'a str,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
-        {
-            let delete_calls = self.delete_calls.clone();
-            let task_id = task_id.to_string();
-            let err = self.delete_error;
-            Box::pin(async move {
-                if err {
-                    Err(sqlx::Error::PoolTimedOut)
-                } else {
-                    delete_calls.lock().unwrap().push(task_id);
-                    Ok(())
-                }
-            })
-        }
-    }
 
     fn sample_meta(owner: &str, status: &str, storage_mode: &str) -> crate::server::db::BackupTask {
         use chrono::{TimeZone, Utc};
@@ -327,7 +166,7 @@ mod handle_backup_delete_pins_core_tests {
 
     #[tokio::test]
     async fn returns_400_when_missing_requestor() {
-        let db = MockDb::default();
+        let db = MockDatabase::default();
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", None)
             .await
@@ -337,13 +176,8 @@ mod handle_backup_delete_pins_core_tests {
 
     #[tokio::test]
     async fn returns_404_when_missing_task() {
-        let db = MockDb {
-            meta: None,
-            get_error: false,
-            delete_error: false,
-            pin_requests: Vec::new(),
-            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(None);
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -353,13 +187,8 @@ mod handle_backup_delete_pins_core_tests {
 
     #[tokio::test]
     async fn returns_500_on_db_error() {
-        let db = MockDb {
-            meta: None,
-            get_error: true,
-            delete_error: false,
-            pin_requests: Vec::new(),
-            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_error(Some("Database error".to_string()));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -369,13 +198,8 @@ mod handle_backup_delete_pins_core_tests {
 
     #[tokio::test]
     async fn returns_403_on_owner_mismatch() {
-        let db = MockDb {
-            meta: Some(sample_meta("did:other", "done", "ipfs")),
-            get_error: false,
-            delete_error: false,
-            pin_requests: Vec::new(),
-            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta("did:other", "done", "ipfs")));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -385,13 +209,8 @@ mod handle_backup_delete_pins_core_tests {
 
     #[tokio::test]
     async fn returns_409_when_in_progress() {
-        let db = MockDb {
-            meta: Some(sample_meta("did:me", "in_progress", "ipfs")),
-            get_error: false,
-            delete_error: false,
-            pin_requests: Vec::new(),
-            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta("did:me", "in_progress", "ipfs")));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -401,13 +220,8 @@ mod handle_backup_delete_pins_core_tests {
 
     #[tokio::test]
     async fn returns_422_when_archive_only() {
-        let db = MockDb {
-            meta: Some(sample_meta("did:me", "done", "archive")),
-            get_error: false,
-            delete_error: false,
-            pin_requests: Vec::new(),
-            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta("did:me", "done", "archive")));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -417,13 +231,8 @@ mod handle_backup_delete_pins_core_tests {
 
     #[tokio::test]
     async fn deletes_ipfs_task_on_success() {
-        let db = MockDb {
-            meta: Some(sample_meta("did:me", "done", "ipfs")),
-            get_error: false,
-            delete_error: false,
-            pin_requests: Vec::new(),
-            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta("did:me", "done", "ipfs")));
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -437,13 +246,8 @@ mod handle_backup_delete_pins_core_tests {
 
     #[tokio::test]
     async fn updates_storage_mode_for_full_task() {
-        let db = MockDb {
-            meta: Some(sample_meta("did:me", "done", "full")),
-            get_error: false,
-            delete_error: false,
-            pin_requests: Vec::new(),
-            delete_calls: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta("did:me", "done", "full")));
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await

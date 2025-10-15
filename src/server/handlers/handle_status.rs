@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::server::api::{ApiProblem, ProblemJson, StatusResponse, SubresourceStatus};
-use crate::server::db::{BackupTask, Db};
+use crate::server::database_trait::Database;
 use crate::server::AppState;
 
 /// Get the status of a backup task
@@ -38,28 +38,7 @@ pub async fn handle_status(
     }
 }
 
-// Minimal trait to mock DB calls for unit tests
-pub trait StatusDb {
-    fn get_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<BackupTask>, sqlx::Error>> + Send + 'a>,
-    >;
-}
-
-impl StatusDb for Db {
-    fn get_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<BackupTask>, sqlx::Error>> + Send + 'a>,
-    > {
-        Box::pin(async move { Db::get_backup_task(self, task_id).await })
-    }
-}
-
-async fn handle_status_core<DB: StatusDb + ?Sized>(
+async fn handle_status_core<DB: Database + ?Sized>(
     db: &DB,
     task_id: &str,
 ) -> Result<Json<StatusResponse>, AxumStatusCode> {
@@ -83,40 +62,12 @@ async fn handle_status_core<DB: StatusDb + ?Sized>(
 
 #[cfg(test)]
 mod handle_status_core_tests {
-    use super::{handle_status_core, StatusDb};
+    use super::handle_status_core;
     use crate::server::api::StatusResponse;
+    use crate::server::database_trait::MockDatabase;
     use crate::server::db::BackupTask;
     use axum::http::StatusCode as AxumStatusCode;
     use chrono::{TimeZone, Utc};
-
-    #[derive(Default)]
-    struct MockDb {
-        pub meta: Option<BackupTask>,
-        pub error: bool,
-    }
-
-    impl StatusDb for MockDb {
-        fn get_backup_task<'a>(
-            &'a self,
-            _task_id: &'a str,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<Output = Result<Option<BackupTask>, sqlx::Error>>
-                    + Send
-                    + 'a,
-            >,
-        > {
-            let has_error = self.error;
-            let meta = self.meta.clone();
-            Box::pin(async move {
-                if has_error {
-                    Err(sqlx::Error::PoolTimedOut)
-                } else {
-                    Ok(meta)
-                }
-            })
-        }
-    }
 
     fn sample_meta() -> BackupTask {
         BackupTask {
@@ -143,10 +94,8 @@ mod handle_status_core_tests {
 
     #[tokio::test]
     async fn returns_200_with_status_payload() {
-        let db = MockDb {
-            meta: Some(sample_meta()),
-            error: false,
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta()));
         let resp = handle_status_core(&db, "t1").await.unwrap();
         let StatusResponse { archive, ipfs } = resp.0;
         assert_eq!(archive.status.as_deref(), Some("done"));
@@ -162,10 +111,8 @@ mod handle_status_core_tests {
         let mut m = sample_meta();
         m.archive_status = None;
         m.ipfs_status = None;
-        let db = MockDb {
-            meta: Some(m),
-            error: false,
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(m));
         let resp = handle_status_core(&db, "t1").await.unwrap();
         let StatusResponse { archive, ipfs } = resp.0;
         assert_eq!(archive.status, None);
@@ -174,20 +121,15 @@ mod handle_status_core_tests {
 
     #[tokio::test]
     async fn returns_404_when_missing() {
-        let db = MockDb {
-            meta: None,
-            error: false,
-        };
+        let db = MockDatabase::default();
         let err = handle_status_core(&db, "missing").await.err().unwrap();
         assert_eq!(err, AxumStatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
     async fn returns_500_on_db_error() {
-        let db = MockDb {
-            meta: None,
-            error: true,
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_error(Some("Database error".to_string()));
         let err = handle_status_core(&db, "t1").await.err().unwrap();
         assert_eq!(err, AxumStatusCode::INTERNAL_SERVER_ERROR);
     }

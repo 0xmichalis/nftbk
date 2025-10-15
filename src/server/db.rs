@@ -2,6 +2,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
+use crate::server::database_trait::Database;
+
 /// Combined view of backup_tasks + archive_requests
 #[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
 #[schema(description = "Backup task information including metadata and status")]
@@ -1224,5 +1226,223 @@ impl Db {
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+}
+
+// Implement the unified Database trait for the real Db struct
+#[async_trait::async_trait]
+impl Database for Db {
+    // Backup task operations
+    async fn insert_backup_task(
+        &self,
+        task_id: &str,
+        requestor: &str,
+        nft_count: i32,
+        tokens: &serde_json::Value,
+        storage_mode: &str,
+        archive_format: Option<&str>,
+        retention_days: Option<u64>,
+    ) -> Result<(), sqlx::Error> {
+        Db::insert_backup_task(
+            self,
+            task_id,
+            requestor,
+            nft_count,
+            tokens,
+            storage_mode,
+            archive_format,
+            retention_days,
+        )
+        .await
+    }
+
+    async fn get_backup_task(&self, task_id: &str) -> Result<Option<BackupTask>, sqlx::Error> {
+        Db::get_backup_task(self, task_id).await
+    }
+
+    async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::delete_backup_task(self, task_id).await
+    }
+
+    async fn get_incomplete_backup_tasks(&self) -> Result<Vec<BackupTask>, sqlx::Error> {
+        Db::get_incomplete_backup_tasks(self).await
+    }
+
+    async fn list_requestor_backup_tasks_paginated(
+        &self,
+        requestor: &str,
+        include_tokens: bool,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<BackupTask>, u32), sqlx::Error> {
+        Db::list_requestor_backup_tasks_paginated(self, requestor, include_tokens, limit, offset)
+            .await
+    }
+
+    async fn list_unprocessed_expired_backups(&self) -> Result<Vec<ExpiredBackup>, sqlx::Error> {
+        Db::list_unprocessed_expired_backups(self).await
+    }
+
+    // Backup task status and error operations
+    async fn clear_backup_errors(&self, task_id: &str, scope: &str) -> Result<(), sqlx::Error> {
+        Db::clear_backup_errors(self, task_id, scope).await
+    }
+
+    async fn set_backup_error(&self, task_id: &str, error: &str) -> Result<(), sqlx::Error> {
+        Db::set_backup_error(self, task_id, error).await
+    }
+
+    async fn set_error_logs(
+        &self,
+        task_id: &str,
+        archive_error_log: Option<&str>,
+        ipfs_error_log: Option<&str>,
+    ) -> Result<(), sqlx::Error> {
+        Db::set_error_logs(self, task_id, archive_error_log, ipfs_error_log).await
+    }
+
+    async fn update_archive_error_log(
+        &self,
+        task_id: &str,
+        error_log: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_archive_error_log(self, task_id, error_log).await
+    }
+
+    async fn update_ipfs_task_error_log(
+        &self,
+        task_id: &str,
+        error_log: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_ipfs_task_error_log(self, task_id, error_log).await
+    }
+
+    async fn set_archive_request_error(
+        &self,
+        task_id: &str,
+        fatal_error: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::set_archive_request_error(self, task_id, fatal_error).await
+    }
+
+    async fn set_ipfs_task_error(
+        &self,
+        task_id: &str,
+        fatal_error: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::set_ipfs_task_error(self, task_id, fatal_error).await
+    }
+
+    // Status update operations
+    async fn update_archive_request_status(
+        &self,
+        task_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_archive_request_status(self, task_id, status).await
+    }
+
+    async fn update_pin_request_status(
+        &self,
+        task_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_pin_request_status(self, task_id, status).await
+    }
+
+    async fn update_backup_statuses(
+        &self,
+        task_id: &str,
+        scope: &str,
+        archive_status: &str,
+        ipfs_status: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_backup_statuses(self, task_id, scope, archive_status, ipfs_status).await
+    }
+
+    async fn update_ipfs_task_status(
+        &self,
+        task_id: &str,
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::update_ipfs_task_status(self, task_id, status).await
+    }
+
+    async fn batch_update_backup_status(
+        &self,
+        task_ids: &[String],
+        status: &str,
+    ) -> Result<(), sqlx::Error> {
+        Db::batch_update_backup_status(self, task_ids, status).await
+    }
+
+    // Deletion operations
+    async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::start_deletion(self, task_id).await
+    }
+
+    async fn start_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::start_archive_deletion(self, task_id).await
+    }
+
+    async fn start_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::start_ipfs_pins_deletion(self, task_id).await
+    }
+
+    async fn complete_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::complete_archive_deletion(self, task_id).await
+    }
+
+    async fn complete_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::complete_ipfs_pins_deletion(self, task_id).await
+    }
+
+    // Retry operations
+    async fn retry_backup(&self, task_id: &str, retention_days: u64) -> Result<(), sqlx::Error> {
+        Db::retry_backup(self, task_id, retention_days).await
+    }
+
+    // Pin operations
+    async fn insert_pins_with_tokens(
+        &self,
+        task_id: &str,
+        token_pin_mappings: &[crate::TokenPinMapping],
+    ) -> Result<(), sqlx::Error> {
+        Db::insert_pins_with_tokens(self, task_id, token_pin_mappings).await
+    }
+
+    async fn get_pins_by_task_id(&self, task_id: &str) -> Result<Vec<PinRow>, sqlx::Error> {
+        Db::get_pins_by_task_id(self, task_id).await
+    }
+
+    async fn get_active_pins(&self) -> Result<Vec<PinRow>, sqlx::Error> {
+        Db::get_active_pins(self).await
+    }
+
+    async fn batch_update_pin_statuses(
+        &self,
+        updates: &[(i64, String)],
+    ) -> Result<(), sqlx::Error> {
+        Db::batch_update_pin_statuses(self, updates).await
+    }
+
+    // Pinned tokens operations
+    async fn get_pinned_tokens_by_requestor(
+        &self,
+        requestor: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<(Vec<TokenWithPins>, u32), sqlx::Error> {
+        Db::get_pinned_tokens_by_requestor(self, requestor, limit, offset).await
+    }
+
+    async fn get_pinned_token_by_requestor(
+        &self,
+        requestor: &str,
+        chain: &str,
+        contract_address: &str,
+        token_id: &str,
+    ) -> Result<Option<TokenWithPins>, sqlx::Error> {
+        Db::get_pinned_token_by_requestor(self, requestor, chain, contract_address, token_id).await
     }
 }

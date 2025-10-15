@@ -14,7 +14,7 @@ use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 
 use crate::server::api::{ApiProblem, ProblemJson};
-use crate::server::db::{BackupTask, Db};
+use crate::server::database_trait::Database;
 use crate::server::{check_backup_on_disk, AppState};
 
 #[derive(serde::Deserialize, utoipa::ToSchema)]
@@ -128,28 +128,7 @@ pub async fn handle_download(
         .into_response()
 }
 
-// Minimal trait to mock DB calls
-pub trait DownloadDb {
-    fn get_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<BackupTask>, sqlx::Error>> + Send + 'a>,
-    >;
-}
-
-impl DownloadDb for Db {
-    fn get_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<dyn std::future::Future<Output = Result<Option<BackupTask>, sqlx::Error>> + Send + 'a>,
-    > {
-        Box::pin(async move { Db::get_backup_task(self, task_id).await })
-    }
-}
-
-async fn serve_zip_file_for_token_core<DB: DownloadDb + ?Sized>(
+async fn serve_zip_file_for_token_core<DB: Database + ?Sized>(
     db: &DB,
     state: &AppState,
     task_id: &str,

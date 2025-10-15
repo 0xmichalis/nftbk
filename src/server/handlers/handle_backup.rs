@@ -9,7 +9,7 @@ use tracing::{debug, error, info};
 
 use crate::server::api::{ApiProblem, BackupRequest, BackupResponse, ProblemJson};
 use crate::server::archive::negotiate_archive_format;
-use crate::server::db::Db;
+use crate::server::database_trait::Database;
 use crate::server::hashing::compute_task_id;
 use crate::server::{AppState, BackupTask, BackupTaskOrShutdown, StorageMode, TaskType};
 
@@ -117,51 +117,7 @@ pub async fn handle_backup(
     response
 }
 
-// A minimal trait to enable mocking DB calls for unit tests of this handler
-pub trait BackupDb {
-    #[allow(clippy::too_many_arguments)]
-    fn insert_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-        requestor: &'a str,
-        nft_count: i32,
-        tokens: &'a serde_json::Value,
-        storage_mode: &'a str,
-        archive_format: Option<&'a str>,
-        retention_days: Option<u64>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>;
-}
-
-impl BackupDb for Db {
-    #[allow(clippy::too_many_arguments)]
-    fn insert_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-        requestor: &'a str,
-        nft_count: i32,
-        tokens: &'a serde_json::Value,
-        storage_mode: &'a str,
-        archive_format: Option<&'a str>,
-        retention_days: Option<u64>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
-    {
-        Box::pin(async move {
-            Db::insert_backup_task(
-                self,
-                task_id,
-                requestor,
-                nft_count,
-                tokens,
-                storage_mode,
-                archive_format,
-                retention_days,
-            )
-            .await
-        })
-    }
-}
-
-async fn handle_backup_core<DB: BackupDb + ?Sized + crate::server::BackupTaskDb>(
+async fn handle_backup_core<DB: Database + ?Sized>(
     db: &DB,
     backup_task_sender: &tokio::sync::mpsc::Sender<BackupTaskOrShutdown>,
     requestor: Option<String>,
@@ -512,175 +468,16 @@ mod handle_backup_endpoint_tests {
 
 #[cfg(test)]
 mod handle_backup_core_tests {
-    use super::BackupDb;
     use crate::server::api::{BackupRequest, Tokens};
+    use crate::server::database_trait::MockDatabase;
     use axum::body::to_bytes;
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
     use tokio::sync::mpsc;
 
-    #[derive(Clone, Default)]
-    struct MockDb {
-        task_meta: Option<crate::server::db::BackupTask>,
-        inserted: std::sync::Arc<std::sync::Mutex<bool>>,
-        last_archive_format: std::sync::Arc<std::sync::Mutex<Option<String>>>,
-    }
-
-    #[async_trait::async_trait]
-    impl crate::server::BackupTaskDb for MockDb {
-        async fn clear_backup_errors(
-            &self,
-            _task_id: &str,
-            _scope: &str,
-        ) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn set_backup_error(&self, _task_id: &str, _error: &str) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn insert_pins_with_tokens(
-            &self,
-            _task_id: &str,
-            _token_pin_mappings: &[crate::TokenPinMapping],
-        ) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn set_error_logs(
-            &self,
-            _task_id: &str,
-            _archive_error_log: Option<&str>,
-            _ipfs_error_log: Option<&str>,
-        ) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn update_ipfs_task_status(
-            &self,
-            _task_id: &str,
-            _status: &str,
-        ) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn set_ipfs_task_error(
-            &self,
-            _task_id: &str,
-            _fatal_error: &str,
-        ) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn update_pin_request_status(
-            &self,
-            _task_id: &str,
-            _status: &str,
-        ) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn update_ipfs_task_error_log(
-            &self,
-            _task_id: &str,
-            _error_log: &str,
-        ) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn update_archive_error_log(
-            &self,
-            _task_id: &str,
-            _error_log: &str,
-        ) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn update_archive_request_status(
-            &self,
-            _task_id: &str,
-            _status: &str,
-        ) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn update_backup_statuses(
-            &self,
-            _task_id: &str,
-            _scope: &str,
-            _archive_status: &str,
-            _ipfs_status: &str,
-        ) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn set_archive_request_error(
-            &self,
-            _task_id: &str,
-            _fatal_error: &str,
-        ) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn get_backup_task(
-            &self,
-            _task_id: &str,
-        ) -> Result<Option<crate::server::db::BackupTask>, sqlx::Error> {
-            Ok(self.task_meta.clone())
-        }
-
-        async fn start_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn start_archive_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn start_ipfs_pins_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn delete_backup_task(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn complete_archive_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-
-        async fn complete_ipfs_pins_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-            Ok(())
-        }
-    }
-
-    impl BackupDb for MockDb {
-        #[allow(clippy::too_many_arguments)]
-        fn insert_backup_task<'a>(
-            &'a self,
-            _task_id: &'a str,
-            _requestor: &'a str,
-            _nft_count: i32,
-            _tokens: &'a serde_json::Value,
-            _storage_mode: &'a str,
-            _archive_format: Option<&'a str>,
-            _retention_days: Option<u64>,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
-        {
-            let flag = self.inserted.clone();
-            let fmt_store = self.last_archive_format.clone();
-            Box::pin(async move {
-                *flag.lock().unwrap() = true;
-                *fmt_store.lock().unwrap() = _archive_format.map(|s| s.to_string());
-                Ok(())
-            })
-        }
-    }
-
     #[tokio::test]
     async fn returns_400_when_missing_requestor() {
-        let db = MockDb::default();
+        let db = MockDatabase::default();
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let req = BackupRequest {
             tokens: vec![Tokens {
@@ -699,7 +496,7 @@ mod handle_backup_core_tests {
 
     #[tokio::test]
     async fn returns_202_and_enqueues_on_new_task() {
-        let db = MockDb::default();
+        let db = MockDatabase::default();
         let (tx, mut rx) = mpsc::channel(1);
         let req = BackupRequest {
             tokens: vec![Tokens {
@@ -734,30 +531,27 @@ mod handle_backup_core_tests {
 
     #[tokio::test]
     async fn returns_409_when_being_deleted() {
-        let db = MockDb {
-            task_meta: Some(crate::server::db::BackupTask {
-                task_id: "test".to_string(),
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                requestor: "test".to_string(),
-                nft_count: 0,
-                tokens: serde_json::Value::Null,
-                archive_status: Some("done".to_string()),
-                ipfs_status: None,
-                archive_error_log: None,
-                ipfs_error_log: None,
-                archive_fatal_error: None,
-                ipfs_fatal_error: None,
-                storage_mode: "archive".to_string(),
-                deleted_at: Some(chrono::Utc::now()),
-                archive_format: None,
-                expires_at: None,
-                archive_deleted_at: None,
-                pins_deleted_at: None,
-            }),
-            inserted: Default::default(),
-            last_archive_format: Default::default(),
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(crate::server::db::BackupTask {
+            task_id: "test".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            requestor: "test".to_string(),
+            nft_count: 0,
+            tokens: serde_json::Value::Null,
+            archive_status: Some("done".to_string()),
+            ipfs_status: None,
+            archive_error_log: None,
+            ipfs_error_log: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
+            storage_mode: "archive".to_string(),
+            deleted_at: Some(chrono::Utc::now()),
+            archive_format: None,
+            expires_at: None,
+            archive_deleted_at: None,
+            pins_deleted_at: None,
+        }));
         let (tx, _rx) = mpsc::channel(1);
         let req = BackupRequest {
             tokens: vec![Tokens {
@@ -777,30 +571,27 @@ mod handle_backup_core_tests {
 
     #[tokio::test]
     async fn returns_200_when_in_progress() {
-        let db = MockDb {
-            task_meta: Some(crate::server::db::BackupTask {
-                task_id: "test".to_string(),
-                created_at: chrono::Utc::now(),
-                updated_at: chrono::Utc::now(),
-                requestor: "did:privy:alice".to_string(),
-                nft_count: 1,
-                tokens: serde_json::json!([]),
-                archive_status: Some("in_progress".to_string()),
-                ipfs_status: None,
-                archive_error_log: None,
-                ipfs_error_log: None,
-                archive_fatal_error: None,
-                ipfs_fatal_error: None,
-                storage_mode: "archive".to_string(),
-                archive_format: Some("zip".to_string()),
-                expires_at: None,
-                deleted_at: None,
-                archive_deleted_at: None,
-                pins_deleted_at: None,
-            }),
-            inserted: Default::default(),
-            last_archive_format: Default::default(),
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(crate::server::db::BackupTask {
+            task_id: "test".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            requestor: "did:privy:alice".to_string(),
+            nft_count: 1,
+            tokens: serde_json::json!([]),
+            archive_status: Some("in_progress".to_string()),
+            ipfs_status: None,
+            archive_error_log: None,
+            ipfs_error_log: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
+            storage_mode: "archive".to_string(),
+            archive_format: Some("zip".to_string()),
+            expires_at: None,
+            deleted_at: None,
+            archive_deleted_at: None,
+            pins_deleted_at: None,
+        }));
         let (tx, _rx) = mpsc::channel(1);
         let req = BackupRequest {
             tokens: vec![Tokens {
@@ -820,8 +611,8 @@ mod handle_backup_core_tests {
 
     #[tokio::test]
     async fn accept_zip_selects_zip() {
-        let db = MockDb::default();
-        let (tx, _rx) = mpsc::channel(1);
+        let db = MockDatabase::default();
+        let (tx, mut rx) = mpsc::channel(1);
         let req = BackupRequest {
             tokens: vec![Tokens {
                 chain: "ethereum".to_string(),
@@ -835,14 +626,23 @@ mod handle_backup_core_tests {
         let _ = super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
             .await
             .into_response();
-        let chosen = db.last_archive_format.lock().unwrap().clone();
-        assert_eq!(chosen.as_deref(), Some("zip"));
+
+        // Check that the backup task was sent with the correct archive format
+        let task = rx.try_recv().unwrap();
+        match task {
+            crate::server::BackupTaskOrShutdown::Task(crate::server::TaskType::Creation(
+                backup_task,
+            )) => {
+                assert_eq!(backup_task.archive_format, Some("zip".to_string()));
+            }
+            _ => panic!("Expected Creation task"),
+        }
     }
 
     #[tokio::test]
     async fn accept_gzip_selects_tar_gz() {
-        let db = MockDb::default();
-        let (tx, _rx) = mpsc::channel(1);
+        let db = MockDatabase::default();
+        let (tx, mut rx) = mpsc::channel(1);
         let req = BackupRequest {
             tokens: vec![Tokens {
                 chain: "ethereum".to_string(),
@@ -856,14 +656,23 @@ mod handle_backup_core_tests {
         let _ = super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
             .await
             .into_response();
-        let chosen = db.last_archive_format.lock().unwrap().clone();
-        assert_eq!(chosen.as_deref(), Some("tar.gz"));
+
+        // Check that the backup task was sent with the correct archive format
+        let task = rx.try_recv().unwrap();
+        match task {
+            crate::server::BackupTaskOrShutdown::Task(crate::server::TaskType::Creation(
+                backup_task,
+            )) => {
+                assert_eq!(backup_task.archive_format, Some("tar.gz".to_string()));
+            }
+            _ => panic!("Expected Creation task"),
+        }
     }
 
     #[tokio::test]
     async fn undecidable_accept_defaults_zip_in_core() {
-        let db = MockDb::default();
-        let (tx, _rx) = mpsc::channel(1);
+        let db = MockDatabase::default();
+        let (tx, mut rx) = mpsc::channel(1);
         let req = BackupRequest {
             tokens: vec![Tokens {
                 chain: "ethereum".to_string(),
@@ -877,14 +686,23 @@ mod handle_backup_core_tests {
         let _ = super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
             .await
             .into_response();
-        let chosen = db.last_archive_format.lock().unwrap().clone();
-        assert_eq!(chosen.as_deref(), Some("zip"));
+
+        // Check that the backup task was sent with the default zip format
+        let task = rx.try_recv().unwrap();
+        match task {
+            crate::server::BackupTaskOrShutdown::Task(crate::server::TaskType::Creation(
+                backup_task,
+            )) => {
+                assert_eq!(backup_task.archive_format, Some("zip".to_string()));
+            }
+            _ => panic!("Expected Creation task"),
+        }
     }
 
     #[tokio::test]
     async fn selects_from_user_agent() {
-        let db = MockDb::default();
-        let (tx, _rx) = mpsc::channel(1);
+        let db = MockDatabase::default();
+        let (tx, mut rx) = mpsc::channel(1);
         let req = BackupRequest {
             tokens: vec![Tokens {
                 chain: "ethereum".to_string(),
@@ -898,14 +716,23 @@ mod handle_backup_core_tests {
         let _ = super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
             .await
             .into_response();
-        let chosen = db.last_archive_format.lock().unwrap().clone();
-        assert!(matches!(chosen.as_deref(), Some("tar.gz")));
+
+        // Check that the backup task was sent with tar.gz format based on user agent
+        let task = rx.try_recv().unwrap();
+        match task {
+            crate::server::BackupTaskOrShutdown::Task(crate::server::TaskType::Creation(
+                backup_task,
+            )) => {
+                assert_eq!(backup_task.archive_format, Some("tar.gz".to_string()));
+            }
+            _ => panic!("Expected Creation task"),
+        }
     }
 
     #[tokio::test]
     async fn both_accept_and_user_agent_present_accept_wins() {
-        let db = MockDb::default();
-        let (tx, _rx) = mpsc::channel(1);
+        let db = MockDatabase::default();
+        let (tx, mut rx) = mpsc::channel(1);
         let req = BackupRequest {
             tokens: vec![Tokens {
                 chain: "ethereum".to_string(),
@@ -920,13 +747,22 @@ mod handle_backup_core_tests {
         let _ = super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
             .await
             .into_response();
-        let chosen = db.last_archive_format.lock().unwrap().clone();
-        assert_eq!(chosen.as_deref(), Some("zip"));
+
+        // Check that the backup task was sent with zip format (accept header wins over user agent)
+        let task = rx.try_recv().unwrap();
+        match task {
+            crate::server::BackupTaskOrShutdown::Task(crate::server::TaskType::Creation(
+                backup_task,
+            )) => {
+                assert_eq!(backup_task.archive_format, Some("zip".to_string()));
+            }
+            _ => panic!("Expected Creation task"),
+        }
     }
 
     #[tokio::test]
     async fn ipfs_only_mode_sets_no_archive_and_accepts() {
-        let db = MockDb::default();
+        let db = MockDatabase::default();
         let (tx, mut rx) = mpsc::channel(1);
         let req = BackupRequest {
             tokens: vec![Tokens {
@@ -942,11 +778,16 @@ mod handle_backup_core_tests {
                 .await
                 .into_response();
         assert_eq!(resp.status(), StatusCode::ACCEPTED);
-        // Ensure no archive format was chosen when not creating an archive
-        let chosen = db.last_archive_format.lock().unwrap().clone();
-        assert_eq!(chosen, None);
-        // Ensure task enqueued
-        let task = rx.try_recv();
-        assert!(task.is_ok());
+
+        // Check that the backup task was sent with no archive format (IPFS only mode)
+        let task = rx.try_recv().unwrap();
+        match task {
+            crate::server::BackupTaskOrShutdown::Task(crate::server::TaskType::Creation(
+                backup_task,
+            )) => {
+                assert_eq!(backup_task.archive_format, None);
+            }
+            _ => panic!("Expected Creation task"),
+        }
     }
 }

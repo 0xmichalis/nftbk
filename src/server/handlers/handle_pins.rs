@@ -7,7 +7,8 @@ use axum::{
 use tracing::{debug, error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
-use crate::server::db::{Db, TokenWithPins};
+use crate::server::database_trait::Database;
+use crate::server::db::TokenWithPins;
 use crate::server::AppState;
 
 pub type PinsResponse = Vec<TokenWithPins>;
@@ -140,44 +141,7 @@ pub async fn handle_pins(
     handle_pins_core(&*state.db, &subject, query).await
 }
 
-// A minimal trait to enable mocking DB calls for unit tests of this handler
-pub trait PinsDb {
-    #[allow(clippy::type_complexity)]
-    fn get_pinned_tokens_by_requestor<'a>(
-        &'a self,
-        requestor: &'a str,
-        limit: i64,
-        offset: i64,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<(Vec<TokenWithPins>, u32), sqlx::Error>>
-                + Send
-                + 'a,
-        >,
-    >;
-}
-
-impl PinsDb for Db {
-    #[allow(clippy::type_complexity)]
-    fn get_pinned_tokens_by_requestor<'a>(
-        &'a self,
-        requestor: &'a str,
-        limit: i64,
-        offset: i64,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<(Vec<TokenWithPins>, u32), sqlx::Error>>
-                + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(
-            async move { Db::get_pinned_tokens_by_requestor(self, requestor, limit, offset).await },
-        )
-    }
-}
-
-async fn handle_pins_core<DB: PinsDb + ?Sized>(
+async fn handle_pins_core<DB: Database + ?Sized>(
     db: &DB,
     subject: &str,
     query: PinsQuery,
@@ -333,50 +297,12 @@ mod filter_tokens_for_query_tests {
 
 #[cfg(test)]
 mod handle_pins_core_mockdb_tests {
-    use super::{handle_pins_core, PinsDb, PinsQuery};
+    use super::{handle_pins_core, PinsQuery};
+    use crate::server::database_trait::MockDatabase;
     use crate::server::db::{PinInfo, TokenWithPins};
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use chrono::{DateTime, Utc};
-
-    #[derive(Clone, Default)]
-    struct MockDb {
-        tokens: Vec<TokenWithPins>,
-        error: bool,
-    }
-
-    impl PinsDb for MockDb {
-        fn get_pinned_tokens_by_requestor<'a>(
-            &'a self,
-            _requestor: &'a str,
-            limit: i64,
-            offset: i64,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<Output = Result<(Vec<TokenWithPins>, u32), sqlx::Error>>
-                    + Send
-                    + 'a,
-            >,
-        > {
-            let tokens = self.tokens.clone();
-            let error = self.error;
-            Box::pin(async move {
-                if error {
-                    Err(sqlx::Error::PoolTimedOut)
-                } else {
-                    let total = tokens.len() as u32;
-                    let start = offset.max(0) as usize;
-                    let end = (start + limit.max(0) as usize).min(tokens.len());
-                    let page = if start < tokens.len() {
-                        tokens[start..end].to_vec()
-                    } else {
-                        Vec::new()
-                    };
-                    Ok((page, total))
-                }
-            })
-        }
-    }
 
     fn create_test_tokens() -> Vec<TokenWithPins> {
         vec![
@@ -424,10 +350,9 @@ mod handle_pins_core_mockdb_tests {
 
     #[tokio::test]
     async fn returns_200_with_all_tokens_for_subject() {
-        let db = MockDb {
-            tokens: create_test_tokens(),
-            error: false,
-        };
+        let mut db = MockDatabase::default();
+        let tokens = create_test_tokens();
+        db.set_get_pinned_tokens_by_requestor_result((tokens, 2));
         let q = PinsQuery {
             page: 1,
             limit: 50,
@@ -441,10 +366,9 @@ mod handle_pins_core_mockdb_tests {
 
     #[tokio::test]
     async fn returns_200_and_filters_by_status() {
-        let db = MockDb {
-            tokens: create_test_tokens(),
-            error: false,
-        };
+        let mut db = MockDatabase::default();
+        let tokens = create_test_tokens();
+        db.set_get_pinned_tokens_by_requestor_result((tokens, 2));
         let q = PinsQuery {
             status: Some("pinned".to_string()),
             page: 1,
@@ -459,10 +383,8 @@ mod handle_pins_core_mockdb_tests {
 
     #[tokio::test]
     async fn returns_500_on_db_error() {
-        let db = MockDb {
-            tokens: Vec::new(),
-            error: true,
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_pinned_tokens_by_requestor_error(Some("Database error".to_string()));
         let q = PinsQuery {
             page: 1,
             limit: 50,

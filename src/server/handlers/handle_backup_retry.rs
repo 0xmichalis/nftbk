@@ -5,15 +5,11 @@ use axum::{
     response::IntoResponse,
     Extension,
 };
-
-use crate::server::api::BackupResponse;
-use crate::server::api::{ApiProblem, BackupRequest, ProblemJson};
-use crate::server::AppState;
-use crate::server::BackupTask;
-use crate::server::BackupTaskOrShutdown;
-use crate::server::TaskType;
-use crate::server::Tokens;
 use tracing::{error, info};
+
+use crate::server::api::{ApiProblem, BackupRequest, BackupResponse, ProblemJson};
+use crate::server::database_trait::Database;
+use crate::server::{AppState, BackupTask, BackupTaskOrShutdown, TaskType, Tokens};
 
 /// Retry a backup task for the authenticated user. This task will be processed asynchronously and the result will be available in the /v1/backups/{task_id} endpoint.
 #[utoipa::path(
@@ -47,53 +43,7 @@ pub async fn handle_backup_retry(
     .await
 }
 
-// Minimal trait to mock DB calls
-pub trait RetryDb {
-    fn get_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
-                > + Send
-                + 'a,
-        >,
-    >;
-    fn retry_backup<'a>(
-        &'a self,
-        task_id: &'a str,
-        retention_days: u64,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>;
-}
-
-impl RetryDb for crate::server::db::Db {
-    fn get_backup_task<'a>(
-        &'a self,
-        task_id: &'a str,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<
-                    Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
-                > + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move { crate::server::db::Db::get_backup_task(self, task_id).await })
-    }
-    fn retry_backup<'a>(
-        &'a self,
-        task_id: &'a str,
-        retention_days: u64,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
-    {
-        Box::pin(
-            async move { crate::server::db::Db::retry_backup(self, task_id, retention_days).await },
-        )
-    }
-}
-
-async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
+async fn handle_backup_retry_core<DB: Database + ?Sized>(
     db: &DB,
     backup_task_sender: &tokio::sync::mpsc::Sender<BackupTaskOrShutdown>,
     task_id: &str,
@@ -215,56 +165,11 @@ async fn handle_backup_retry_core<DB: RetryDb + ?Sized>(
 
 #[cfg(test)]
 mod handle_backup_retry_core_tests {
-    use super::{handle_backup_retry_core, RetryDb};
+    use super::handle_backup_retry_core;
+    use crate::server::database_trait::MockDatabase;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use tokio::sync::mpsc;
-
-    #[derive(Clone, Default)]
-    struct MockDb {
-        meta: Option<crate::server::db::BackupTask>,
-        get_error: bool,
-        retry_error: bool,
-    }
-
-    impl RetryDb for MockDb {
-        fn get_backup_task<'a>(
-            &'a self,
-            _task_id: &'a str,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<Option<crate::server::db::BackupTask>, sqlx::Error>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            let meta = self.meta.clone();
-            let err = self.get_error;
-            Box::pin(async move {
-                if err {
-                    Err(sqlx::Error::PoolTimedOut)
-                } else {
-                    Ok(meta)
-                }
-            })
-        }
-        fn retry_backup<'a>(
-            &'a self,
-            _task_id: &'a str,
-            _retention_days: u64,
-        ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), sqlx::Error>> + Send + 'a>>
-        {
-            let err = self.retry_error;
-            Box::pin(async move {
-                if err {
-                    Err(sqlx::Error::PoolTimedOut)
-                } else {
-                    Ok(())
-                }
-            })
-        }
-    }
 
     fn sample_meta(owner: &str, status: &str) -> crate::server::db::BackupTask {
         use chrono::{TimeZone, Utc};
@@ -292,10 +197,8 @@ mod handle_backup_retry_core_tests {
 
     #[tokio::test]
     async fn returns_404_when_missing_task() {
-        let db = MockDb {
-            meta: None,
-            ..Default::default()
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(None);
         let (tx, _rx) = mpsc::channel(1);
         let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
             .await
@@ -305,11 +208,8 @@ mod handle_backup_retry_core_tests {
 
     #[tokio::test]
     async fn returns_500_on_db_error() {
-        let db = MockDb {
-            meta: None,
-            get_error: true,
-            retry_error: false,
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_error(Some("Database error".to_string()));
         let (tx, _rx) = mpsc::channel(1);
         let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
             .await
@@ -319,10 +219,8 @@ mod handle_backup_retry_core_tests {
 
     #[tokio::test]
     async fn returns_400_when_in_progress() {
-        let db = MockDb {
-            meta: Some(sample_meta("did:me", "in_progress")),
-            ..Default::default()
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta("did:me", "in_progress")));
         let (tx, _rx) = mpsc::channel(1);
         let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
             .await
@@ -334,10 +232,8 @@ mod handle_backup_retry_core_tests {
     async fn returns_400_when_being_deleted() {
         let mut meta = sample_meta("did:me", "done");
         meta.deleted_at = Some(chrono::Utc::now());
-        let db = MockDb {
-            meta: Some(meta),
-            ..Default::default()
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(meta));
         let (tx, _rx) = mpsc::channel(1);
         let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
             .await
@@ -347,10 +243,8 @@ mod handle_backup_retry_core_tests {
 
     #[tokio::test]
     async fn returns_403_on_owner_mismatch() {
-        let db = MockDb {
-            meta: Some(sample_meta("did:other", "done")),
-            ..Default::default()
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta("did:other", "done")));
         let (tx, _rx) = mpsc::channel(1);
         let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
             .await
@@ -360,10 +254,8 @@ mod handle_backup_retry_core_tests {
 
     #[tokio::test]
     async fn returns_500_when_enqueue_fails() {
-        let db = MockDb {
-            meta: Some(sample_meta("did:me", "done")),
-            ..Default::default()
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta("did:me", "done")));
         let (tx, rx) = mpsc::channel(1);
         drop(rx); // close receiver to force send error
         let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
@@ -374,10 +266,8 @@ mod handle_backup_retry_core_tests {
 
     #[tokio::test]
     async fn returns_202_on_success() {
-        let db = MockDb {
-            meta: Some(sample_meta("did:me", "error")),
-            ..Default::default()
-        };
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta("did:me", "error")));
         let (tx, mut rx) = mpsc::channel(1);
         let resp = handle_backup_retry_core(&db, &tx, "t1", Some("did:me".to_string()), 7)
             .await

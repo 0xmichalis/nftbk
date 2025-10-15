@@ -7,7 +7,8 @@ use axum::{
 use serde::Deserialize;
 
 use crate::server::api::{ApiProblem, ProblemJson};
-use crate::server::db::{BackupTask, Db};
+use crate::server::database_trait::Database;
+use crate::server::db::BackupTask;
 use crate::server::AppState;
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -84,53 +85,7 @@ pub async fn handle_backups(
     .await
 }
 
-// Minimal trait and core function for mocking
-pub trait BackupsDb {
-    #[allow(clippy::type_complexity)]
-    fn list_requestor_backup_tasks_paginated<'a>(
-        &'a self,
-        requestor: &'a str,
-        include_tokens: bool,
-        limit: i64,
-        offset: i64,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<(Vec<BackupTask>, u32), sqlx::Error>>
-                + Send
-                + 'a,
-        >,
-    >;
-}
-
-impl BackupsDb for Db {
-    #[allow(clippy::type_complexity)]
-    fn list_requestor_backup_tasks_paginated<'a>(
-        &'a self,
-        requestor: &'a str,
-        include_tokens: bool,
-        limit: i64,
-        offset: i64,
-    ) -> std::pin::Pin<
-        Box<
-            dyn std::future::Future<Output = Result<(Vec<BackupTask>, u32), sqlx::Error>>
-                + Send
-                + 'a,
-        >,
-    > {
-        Box::pin(async move {
-            Db::list_requestor_backup_tasks_paginated(
-                self,
-                requestor,
-                include_tokens,
-                limit,
-                offset,
-            )
-            .await
-        })
-    }
-}
-
-async fn handle_backups_core<DB: BackupsDb + ?Sized>(
+async fn handle_backups_core<DB: Database + ?Sized>(
     db: &DB,
     user_did: &str,
     include_tokens: bool,
@@ -184,56 +139,15 @@ async fn handle_backups_core<DB: BackupsDb + ?Sized>(
 
 #[cfg(test)]
 mod handle_backups_core_mockdb_tests {
-    use super::{handle_backups_core, BackupsDb};
+    use super::handle_backups_core;
+    use crate::server::database_trait::MockDatabase;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
-    #[derive(Default)]
-    struct MockDb {
-        records: Vec<crate::server::db::BackupTask>,
-        error: bool,
-    }
-
-    impl BackupsDb for MockDb {
-        fn list_requestor_backup_tasks_paginated<'a>(
-            &'a self,
-            _requestor: &'a str,
-            _include_tokens: bool,
-            limit: i64,
-            offset: i64,
-        ) -> std::pin::Pin<
-            Box<
-                dyn std::future::Future<
-                        Output = Result<(Vec<crate::server::db::BackupTask>, u32), sqlx::Error>,
-                    > + Send
-                    + 'a,
-            >,
-        > {
-            let error = self.error;
-            let recs = self.records.clone();
-            Box::pin(async move {
-                if error {
-                    Err(sqlx::Error::PoolTimedOut)
-                } else {
-                    let start = offset.max(0) as usize;
-                    let end = (start + limit.max(0) as usize).min(recs.len());
-                    let page = if start < recs.len() {
-                        recs[start..end].to_vec()
-                    } else {
-                        Vec::new()
-                    };
-                    Ok((page, recs.len() as u32))
-                }
-            })
-        }
-    }
-
     #[tokio::test]
     async fn returns_500_problem_on_db_error() {
-        let db = MockDb {
-            records: Vec::new(),
-            error: true,
-        };
+        let mut db = MockDatabase::default();
+        db.set_list_requestor_backup_tasks_paginated_error(Some("Database error".to_string()));
         let resp = handle_backups_core(&db, "did:privy:me", false, 1, 50)
             .await
             .into_response();
@@ -271,10 +185,8 @@ mod handle_backups_core_mockdb_tests {
                 pins_deleted_at: None,
             });
         }
-        let db = MockDb {
-            records: recs,
-            error: false,
-        };
+        let mut db = MockDatabase::default();
+        db.set_list_requestor_backup_tasks_paginated_result((recs, 5));
         let resp = handle_backups_core(&db, "did:privy:me", false, 2, 2)
             .await
             .into_response();
