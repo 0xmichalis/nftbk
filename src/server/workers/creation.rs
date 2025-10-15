@@ -43,7 +43,7 @@ async fn persist_non_fatal_error_logs<DB: Database + ?Sized>(
         }
         crate::server::StorageMode::Archive => {
             if let Some(a) = archive_log.as_deref() {
-                let _ = db.update_archive_error_log(task_id, a).await;
+                let _ = db.update_archive_request_error_log(task_id, a).await;
             }
         }
         crate::server::StorageMode::Ipfs => {

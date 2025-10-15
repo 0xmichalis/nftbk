@@ -49,7 +49,7 @@ pub trait Database {
         ipfs_error_log: Option<&str>,
     ) -> Result<(), sqlx::Error>;
 
-    async fn update_archive_error_log(
+    async fn update_archive_request_error_log(
         &self,
         task_id: &str,
         error_log: &str,
@@ -165,7 +165,7 @@ pub struct MockDatabase {
     pub clear_backup_errors_error: Option<String>,
     pub set_backup_error_error: Option<String>,
     pub set_error_logs_error: Option<String>,
-    pub update_archive_error_log_error: Option<String>,
+    pub update_archive_request_error_log_error: Option<String>,
     pub update_pin_request_error_log_error: Option<String>,
     pub set_archive_request_error_error: Option<String>,
     pub set_pin_request_error_error: Option<String>,
@@ -259,8 +259,8 @@ impl MockDatabase {
         self.set_error_logs_error = error;
     }
 
-    pub fn set_update_archive_error_log_error(&mut self, error: Option<String>) {
-        self.update_archive_error_log_error = error;
+    pub fn set_update_archive_request_error_log_error(&mut self, error: Option<String>) {
+        self.update_archive_request_error_log_error = error;
     }
 
     pub fn set_update_pin_request_error_log_error(&mut self, error: Option<String>) {
@@ -465,12 +465,12 @@ impl Database for MockDatabase {
         }
     }
 
-    async fn update_archive_error_log(
+    async fn update_archive_request_error_log(
         &self,
         _task_id: &str,
         _error_log: &str,
     ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.update_archive_error_log_error {
+        if let Some(error) = &self.update_archive_request_error_log_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
             Ok(())

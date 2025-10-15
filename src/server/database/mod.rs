@@ -272,7 +272,7 @@ impl Db {
         Ok(())
     }
 
-    pub async fn update_archive_error_log(
+    pub async fn update_archive_request_error_log(
         &self,
         task_id: &str,
         error_log: &str,
@@ -1283,12 +1283,12 @@ impl Database for Db {
         Db::set_error_logs(self, task_id, archive_error_log, ipfs_error_log).await
     }
 
-    async fn update_archive_error_log(
+    async fn update_archive_request_error_log(
         &self,
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error> {
-        Db::update_archive_error_log(self, task_id, error_log).await
+        Db::update_archive_request_error_log(self, task_id, error_log).await
     }
 
     async fn update_pin_request_error_log(
