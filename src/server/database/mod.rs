@@ -671,7 +671,7 @@ impl Db {
             r#"
             SELECT 
                 b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
-                b.tokens, COALESCE(ar.status, 'in_progress') as status, ar.status as archive_status, ar.fatal_error, b.storage_mode,
+                b.tokens, ar.status as archive_status, ar.fatal_error, b.storage_mode,
                 b.deleted_at, ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
                 pr.status as ipfs_status,
@@ -681,11 +681,14 @@ impl Db {
             LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
             LEFT JOIN pin_requests pr ON b.task_id = pr.task_id
             WHERE (
-                -- Archive-only or Full mode: check archive status (record must exist and be in_progress)
-                (b.storage_mode IN ('archive', 'full') AND ar.status = 'in_progress')
+                -- Archive-only mode: check archive status (record must exist and be in_progress)
+                (b.storage_mode = 'archive' AND ar.status = 'in_progress')
                 OR
                 -- IPFS-only mode: check IPFS status (record must exist and be in_progress)
                 (b.storage_mode = 'ipfs' AND pr.status = 'in_progress')
+                OR
+                -- Full mode: check both archive and IPFS status (task is incomplete if either is in_progress)
+                (b.storage_mode = 'full' AND (ar.status = 'in_progress' OR pr.status = 'in_progress'))
             )
             ORDER BY b.created_at ASC
             "#,
