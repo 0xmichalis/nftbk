@@ -26,7 +26,7 @@ const BACKUPS_API_PATH: &str = "/v1/backups";
 
 #[derive(serde::Deserialize)]
 struct IpfsConfigFile {
-    ipfs_pinning_providers: Vec<IpfsPinningConfig>,
+    ipfs_pinning_provider: Vec<IpfsPinningConfig>,
 }
 
 #[derive(Parser, Debug)]
@@ -649,7 +649,7 @@ async fn main() -> Result<()> {
             .with_context(|| format!("Failed to read IPFS config file '{path}'"))?;
         let config: IpfsConfigFile = toml::from_str(&contents)
             .with_context(|| format!("Failed to parse IPFS config file '{path}'"))?;
-        config.ipfs_pinning_providers
+        config.ipfs_pinning_provider
     };
 
     let output_path = args.output_path.clone();

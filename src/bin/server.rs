@@ -99,7 +99,7 @@ struct PrivyFile {
 
 #[derive(serde::Deserialize)]
 struct IpfsConfigFile {
-    ipfs_pinning_providers: Vec<nftbk::ipfs::IpfsPinningConfig>,
+    ipfs_pinning_provider: Vec<nftbk::ipfs::IpfsPinningConfig>,
 }
 
 #[tokio::main]
@@ -143,7 +143,7 @@ async fn main() {
     }
 
     // Load IPFS provider configuration from file if provided
-    let ipfs_pinning_providers = if args.ipfs_config.is_none() {
+    let ipfs_pinning_configs = if args.ipfs_config.is_none() {
         // No config file, use empty list (AppState will fall back to env vars)
         Vec::new()
     } else {
@@ -153,10 +153,10 @@ async fn main() {
                 Ok(file) => {
                     info!(
                         "Loaded {} IPFS pinning provider(s) from config file '{}'",
-                        file.ipfs_pinning_providers.len(),
+                        file.ipfs_pinning_provider.len(),
                         path
                     );
-                    file.ipfs_pinning_providers
+                    file.ipfs_pinning_provider
                 }
                 Err(e) => {
                     error!("Failed to parse IPFS config file '{}': {}", path, e);
@@ -186,7 +186,7 @@ async fn main() {
         &db_url,
         (args.backup_queue_size + 1) as u32,
         shutdown_flag.clone(),
-        ipfs_pinning_providers,
+        ipfs_pinning_configs,
     )
     .await;
 
