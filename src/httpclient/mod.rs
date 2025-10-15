@@ -16,23 +16,32 @@ pub mod stream;
 #[derive(Clone, Debug)]
 pub struct HttpClient {
     pub(crate) ipfs_gateways: Vec<IpfsGatewayConfig>,
+    pub(crate) max_retries: u32,
 }
 
 impl HttpClient {
     pub fn new() -> Self {
         let ipfs_gateways = IPFS_GATEWAYS.to_vec();
-        Self { ipfs_gateways }
+        Self {
+            ipfs_gateways,
+            max_retries: 5,
+        }
     }
 
-    pub fn new_with_gateways(gateways: Vec<(String, IpfsGatewayType)>) -> Self {
-        let ipfs_gateways = gateways
+    pub fn with_gateways(mut self, gateways: Vec<(String, IpfsGatewayType)>) -> Self {
+        self.ipfs_gateways = gateways
             .into_iter()
             .map(|(url, gateway_type)| IpfsGatewayConfig {
                 url: Box::leak(url.into_boxed_str()),
                 gateway_type,
             })
             .collect();
-        Self { ipfs_gateways }
+        self
+    }
+
+    pub fn with_max_retries(mut self, max_retries: u32) -> Self {
+        self.max_retries = max_retries;
+        self
     }
 
     pub async fn fetch(&self, url: &str) -> anyhow::Result<Vec<u8>> {
@@ -44,7 +53,6 @@ impl HttpClient {
         let resolved_url = resolve_url_with_gateways(url, &self.ipfs_gateways);
         let gateways = self.ipfs_gateways.clone();
 
-        const MAX_RETRIES: u32 = 5;
         retry_operation(
             || {
                 let url = resolved_url.clone();
@@ -59,7 +67,7 @@ impl HttpClient {
                     }
                 })
             },
-            MAX_RETRIES,
+            self.max_retries,
             should_retry,
             &resolved_url,
         )
@@ -119,7 +127,7 @@ impl HttpClient {
             );
         }
         let file_path = self
-            .fetch_and_stream_to_file(&resolved_url, &file_path, 5)
+            .fetch_and_stream_to_file(&resolved_url, &file_path, self.max_retries)
             .await?;
 
         write_and_postprocess_file(&file_path, &[], url).await?;

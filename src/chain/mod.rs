@@ -165,12 +165,14 @@ where
 
 /// Protect a URL by pinning it to IPFS (if applicable) and downloading content locally
 /// Returns (pin_responses, downloaded_file_path) where either can be empty/None
+#[allow(clippy::too_many_arguments)]
 async fn protect_url<C>(
     url: &str,
     opts: &Options,
     token: &C::ContractTokenId,
     processor: &C,
     exit_on_error: bool,
+    archive_errors: &mut Vec<String>,
     ipfs_errors: &mut Vec<String>,
     task_id: Option<&str>,
 ) -> anyhow::Result<(Vec<crate::ipfs::PinResponse>, Option<std::path::PathBuf>)>
@@ -211,7 +213,7 @@ where
                 .await,
             format!("Failed to fetch {name_for_log} for {token}"),
             exit_on_error,
-            ipfs_errors,
+            archive_errors,
         )? {
             downloaded_path = Some(path);
         }
@@ -222,12 +224,14 @@ where
 
 /// Protect metadata by pinning the token URI to IPFS (if applicable) and saving metadata locally
 /// Returns (pin_responses, saved_metadata_path) where either can be empty/None
+#[allow(clippy::too_many_arguments)]
 async fn protect_metadata<C>(
     token_uri: &str,
     token: &C::ContractTokenId,
     metadata: &C::Metadata,
     processor: &C,
     exit_on_error: bool,
+    archive_errors: &mut Vec<String>,
     ipfs_errors: &mut Vec<String>,
     task_id: Option<&str>,
 ) -> anyhow::Result<(Vec<crate::ipfs::PinResponse>, Option<std::path::PathBuf>)>
@@ -260,7 +264,7 @@ where
             write_metadata(token_uri, token, output_path, metadata).await,
             format!("Failed to write metadata for {token}"),
             exit_on_error,
-            ipfs_errors,
+            archive_errors,
         )? {
             saved_path = Some(path);
         }
@@ -328,7 +332,15 @@ where
             &mut archive_errors,
         )? {
             Some(pair) => pair,
-            None => continue,
+            None => {
+                // Metadata fetch failure affects both archive and IPFS operations
+                // The error was already added to archive_errors by the process function
+                // Add the same error to ipfs_errors as well
+                if let Some(last_error) = archive_errors.last() {
+                    ipfs_errors.push(last_error.clone());
+                }
+                continue;
+            }
         };
 
         // Get output path once and reuse it
@@ -344,6 +356,7 @@ where
             &metadata,
             &*processor,
             config.exit_on_error,
+            &mut archive_errors,
             &mut ipfs_errors,
             task_id.as_deref(),
         )
@@ -376,6 +389,7 @@ where
                 &token,
                 &*processor,
                 config.exit_on_error,
+                &mut archive_errors,
                 &mut ipfs_errors,
                 task_id.as_deref(),
             )
@@ -794,6 +808,10 @@ mod process_nfts_tests {
         assert!(archive_out.errors[0].contains("Failed to fetch metadata"));
         assert!(archive_out.errors[0].contains("Metadata fetch failed"));
         assert!(ipfs_out.pin_requests.is_empty());
+        // Metadata fetch failure affects both archive and IPFS operations
+        assert_eq!(ipfs_out.errors.len(), 1);
+        assert!(ipfs_out.errors[0].contains("Failed to fetch metadata"));
+        assert!(ipfs_out.errors[0].contains("Metadata fetch failed"));
     }
 
     #[tokio::test]
@@ -955,10 +973,12 @@ mod process_nfts_tests {
                 "ipfs://QmTestMetadataHash".to_string(),
             )),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
-            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
-                mock_server.uri(),
-                crate::ipfs::config::IpfsGatewayType::Path,
-            )]),
+            http_client: crate::httpclient::HttpClient::new()
+                .with_gateways(vec![(
+                    mock_server.uri(),
+                    crate::ipfs::config::IpfsGatewayType::Path,
+                )])
+                .with_max_retries(0),
         });
 
         let tokens = vec![create_test_token()];
@@ -1027,10 +1047,12 @@ mod process_nfts_tests {
                 "ipfs://QmTestMetadataHash".to_string(),
             )),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
-            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
-                mock_server.uri(),
-                crate::ipfs::config::IpfsGatewayType::Path,
-            )]),
+            http_client: crate::httpclient::HttpClient::new()
+                .with_gateways(vec![(
+                    mock_server.uri(),
+                    crate::ipfs::config::IpfsGatewayType::Path,
+                )])
+                .with_max_retries(0),
         });
 
         let tokens = vec![create_test_token()];
@@ -1050,6 +1072,320 @@ mod process_nfts_tests {
         let output_path = temp_dir.path();
         let token_dir = output_path.join("ethereum/0x1234567890123456789012345678901234567890/1");
         assert!(token_dir.join("metadata.json").exists());
+    }
+
+    #[tokio::test]
+    async fn test_process_nfts_error_categorization_archive_errors() {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a processor that fails on metadata writing (archive operation)
+        let processor = Arc::new(MockProcessor {
+            output_path: Some(temp_dir.path().to_path_buf()),
+            ipfs_providers: vec![], // No IPFS providers
+            fetch_metadata_result: Ok((
+                MockMetadata {
+                    name: "Test NFT".to_string(),
+                    image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==".to_string(),
+                    animation_url: None,
+                },
+                "data:application/json;base64,eyJuYW1lIjoiVGVzdCJ9".to_string(),
+            )),
+            get_uri_result: Ok("data:application/json;base64,eyJuYW1lIjoiVGVzdCJ9".to_string()),
+            http_client: crate::httpclient::HttpClient::new()
+                .with_gateways(vec![])
+                .with_max_retries(0),
+        });
+
+        let tokens = vec![create_test_token()];
+        let config = create_test_config(false); // Don't exit on error
+        let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
+
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
+
+        assert!(result.is_ok());
+        let (archive_out, ipfs_out) = result.unwrap();
+
+        // Verify that archive operations succeeded (no archive errors)
+        assert!(!archive_out.files.is_empty()); // Should have metadata and content files
+        assert!(archive_out.errors.is_empty()); // No archive errors
+
+        // Verify that IPFS operations are not attempted (no IPFS errors)
+        assert!(ipfs_out.pin_requests.is_empty());
+        assert!(ipfs_out.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_process_nfts_error_categorization_ipfs_errors() {
+        // Start wiremock server
+        let mock_server = MockServer::start().await;
+
+        // Create temp directory
+        let temp_dir = TempDir::new().unwrap();
+
+        // Set up IPFS pinning mock endpoints - FAILURE case
+        Mock::given(method("POST"))
+            .and(path("/pins"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string(r#"{"error":"Internal server error"}"#),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // Create real IPFS client pointing to mock server
+        let ipfs_client = IpfsPinningClient::new(mock_server.uri(), None);
+
+        // Create processor with IPFS URLs for testing IPFS pinning
+        let processor = Arc::new(MockProcessor {
+            output_path: Some(temp_dir.path().to_path_buf()),
+            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
+            fetch_metadata_result: Ok((
+                MockMetadata {
+                    name: "Test NFT".to_string(),
+                    image: "ipfs://QmTestImageHash".to_string(),
+                    animation_url: None,
+                },
+                "ipfs://QmTestMetadataHash".to_string(),
+            )),
+            get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
+            http_client: crate::httpclient::HttpClient::new()
+                .with_gateways(vec![(
+                    mock_server.uri(),
+                    crate::ipfs::config::IpfsGatewayType::Path,
+                )])
+                .with_max_retries(0),
+        });
+
+        let tokens = vec![create_test_token()];
+        let config = create_test_config(false);
+
+        let (archive_out, ipfs_out) =
+            process_nfts(processor, tokens, config, get_no_extra_content_uri, None)
+                .await
+                .unwrap();
+
+        // Verify that archive operations succeeded (metadata writing works)
+        assert_eq!(archive_out.files.len(), 1); // Should have metadata.json
+                                                // Note: IPFS URLs can't be downloaded via HTTP, so content download errors go to archive_errors
+                                                // This is expected behavior - only metadata.json gets written, content download fails
+
+        // Verify that IPFS operations failed and errors went to ipfs_errors
+        assert_eq!(ipfs_out.pin_requests.len(), 0); // No successful pins
+        assert!(ipfs_out.errors.len() >= 2); // IPFS errors for both metadata and image pinning failures
+
+        // Verify specific error categorization
+        for error in &ipfs_out.errors {
+            assert!(error.contains("IPFS") || error.contains("pin") || error.contains("500"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_nfts_error_categorization_pure_ipfs_errors() {
+        // Start wiremock server
+        let mock_server = MockServer::start().await;
+
+        // Create temp directory (not used but needed for MockProcessor)
+        let _temp_dir = TempDir::new().unwrap();
+
+        // Set up IPFS pinning mock endpoints - FAILURE case
+        Mock::given(method("POST"))
+            .and(path("/pins"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string(r#"{"error":"Internal server error"}"#),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // Create real IPFS client pointing to mock server
+        let ipfs_client = IpfsPinningClient::new(mock_server.uri(), None);
+
+        // Create processor with IPFS URLs but no output path (no archive operations)
+        let processor = Arc::new(MockProcessor {
+            output_path: None, // No local storage - only IPFS operations
+            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
+            fetch_metadata_result: Ok((
+                MockMetadata {
+                    name: "Test NFT".to_string(),
+                    image: "ipfs://QmTestImageHash".to_string(),
+                    animation_url: None,
+                },
+                "ipfs://QmTestMetadataHash".to_string(),
+            )),
+            get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
+            http_client: crate::httpclient::HttpClient::new()
+                .with_gateways(vec![])
+                .with_max_retries(0),
+        });
+
+        let tokens = vec![create_test_token()];
+        let config = create_test_config(false);
+
+        let (archive_out, ipfs_out) =
+            process_nfts(processor, tokens, config, get_no_extra_content_uri, None)
+                .await
+                .unwrap();
+
+        // Verify that no archive operations were attempted
+        assert!(archive_out.files.is_empty()); // No files created (no output path)
+        assert!(archive_out.errors.is_empty()); // No archive errors
+
+        // Verify that IPFS operations failed and errors went to ipfs_errors
+        assert_eq!(ipfs_out.pin_requests.len(), 0); // No successful pins
+        assert!(ipfs_out.errors.len() >= 2); // IPFS errors for both metadata and image pinning failures
+
+        // Verify specific error categorization
+        for error in &ipfs_out.errors {
+            assert!(error.contains("IPFS") || error.contains("pin") || error.contains("500"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_process_nfts_error_categorization_mixed_errors() {
+        // Start wiremock server
+        let mock_server = MockServer::start().await;
+
+        // Create temp directory
+        let temp_dir = TempDir::new().unwrap();
+
+        // Set up IPFS pinning mock endpoints - FAILURE case
+        Mock::given(method("POST"))
+            .and(path("/pins"))
+            .respond_with(
+                ResponseTemplate::new(500).set_body_string(r#"{"error":"Internal server error"}"#),
+            )
+            .mount(&mock_server)
+            .await;
+
+        // Create real IPFS client pointing to mock server
+        let ipfs_client = IpfsPinningClient::new(mock_server.uri(), None);
+
+        // Create processor that fails on metadata fetch (archive error) but has IPFS providers
+        let processor = Arc::new(MockProcessor {
+            output_path: Some(temp_dir.path().to_path_buf()),
+            ipfs_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
+            fetch_metadata_result: Err(anyhow!("Network timeout")), // This should go to archive_errors
+            get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
+            http_client: crate::httpclient::HttpClient::new(),
+        });
+
+        let tokens = vec![create_test_token()];
+        let config = create_test_config(false);
+
+        let (archive_out, ipfs_out) =
+            process_nfts(processor, tokens, config, get_no_extra_content_uri, None)
+                .await
+                .unwrap();
+
+        // Verify that metadata fetch error went to both archive_errors and ipfs_errors
+        assert!(archive_out.files.is_empty()); // No files created due to metadata fetch failure
+        assert_eq!(archive_out.errors.len(), 1);
+        assert!(archive_out.errors[0].contains("Failed to fetch metadata"));
+        assert!(archive_out.errors[0].contains("Network timeout"));
+
+        // Verify that the same error also went to ipfs_errors (metadata fetch affects both operations)
+        assert!(ipfs_out.pin_requests.is_empty());
+        assert_eq!(ipfs_out.errors.len(), 1);
+        assert!(ipfs_out.errors[0].contains("Failed to fetch metadata"));
+        assert!(ipfs_out.errors[0].contains("Network timeout"));
+    }
+
+    #[tokio::test]
+    async fn test_process_nfts_error_categorization_metadata_fetch_affects_both() {
+        // Test that metadata fetch failure affects both archive and IPFS operations
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create a processor that fails on metadata fetch
+        let processor = Arc::new(MockProcessor {
+            output_path: Some(temp_dir.path().to_path_buf()),
+            ipfs_providers: vec![], // No IPFS providers, but error should still go to both collections
+            fetch_metadata_result: Err(anyhow!("Network timeout")),
+            get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
+            http_client: crate::httpclient::HttpClient::new(),
+        });
+
+        let tokens = vec![create_test_token()];
+        let config = create_test_config(false); // Don't exit on error
+        let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
+
+        let result = process_nfts(processor, tokens, config, get_extra_content_uri, None).await;
+
+        assert!(result.is_ok());
+        let (archive_out, ipfs_out) = result.unwrap();
+
+        // Verify that metadata fetch error went to both archive_errors and ipfs_errors
+        assert!(archive_out.files.is_empty()); // No files created due to metadata fetch failure
+        assert_eq!(archive_out.errors.len(), 1);
+        assert!(archive_out.errors[0].contains("Failed to fetch metadata"));
+        assert!(archive_out.errors[0].contains("Network timeout"));
+
+        // Verify that the same error also went to ipfs_errors
+        assert!(ipfs_out.pin_requests.is_empty());
+        assert_eq!(ipfs_out.errors.len(), 1);
+        assert!(ipfs_out.errors[0].contains("Failed to fetch metadata"));
+        assert!(ipfs_out.errors[0].contains("Network timeout"));
+
+        // Verify that both error messages are identical
+        assert_eq!(archive_out.errors[0], ipfs_out.errors[0]);
+    }
+
+    #[tokio::test]
+    async fn test_process_nfts_error_categorization_content_download_errors() {
+        // Start wiremock server
+        let mock_server = MockServer::start().await;
+
+        // Create temp directory
+        let temp_dir = TempDir::new().unwrap();
+
+        // Set up HTTP mock to fail on content download (archive operation)
+        Mock::given(method("GET"))
+            .and(path("/image.png"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("Server error"))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/metadata.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"name":"Test NFT"}"#))
+            .mount(&mock_server)
+            .await;
+
+        // Create processor with HTTP URLs (not IPFS) to test content download errors
+        let processor = Arc::new(MockProcessor {
+            output_path: Some(temp_dir.path().to_path_buf()),
+            ipfs_providers: vec![], // No IPFS providers
+            fetch_metadata_result: Ok((
+                MockMetadata {
+                    name: "Test NFT".to_string(),
+                    image: format!("{}/image.png", mock_server.uri()),
+                    animation_url: None,
+                },
+                format!("{}/metadata.json", mock_server.uri()),
+            )),
+            get_uri_result: Ok(format!("{}/metadata.json", mock_server.uri())),
+            http_client: crate::httpclient::HttpClient::new()
+                .with_gateways(vec![(
+                    mock_server.uri(),
+                    crate::ipfs::config::IpfsGatewayType::Path,
+                )])
+                .with_max_retries(0),
+        });
+
+        let tokens = vec![create_test_token()];
+        let config = create_test_config(false);
+
+        let (archive_out, ipfs_out) =
+            process_nfts(processor, tokens, config, get_no_extra_content_uri, None)
+                .await
+                .unwrap();
+
+        // Verify that metadata writing succeeded but content download failed
+        assert_eq!(archive_out.files.len(), 1); // Should have metadata.json
+        assert_eq!(archive_out.errors.len(), 1); // Content download error should go to archive_errors
+        assert!(archive_out.errors[0].contains("Failed to fetch"));
+        assert!(archive_out.errors[0].contains("image"));
+
+        // Verify that IPFS operations were not attempted
+        assert!(ipfs_out.pin_requests.is_empty());
+        assert!(ipfs_out.errors.is_empty());
     }
 
     #[tokio::test]
@@ -1100,10 +1436,12 @@ mod process_nfts_tests {
                 "ipfs://QmTestMetadataHash".to_string(),
             )),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
-            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
-                mock_server.uri(),
-                crate::ipfs::config::IpfsGatewayType::Path,
-            )]),
+            http_client: crate::httpclient::HttpClient::new()
+                .with_gateways(vec![(
+                    mock_server.uri(),
+                    crate::ipfs::config::IpfsGatewayType::Path,
+                )])
+                .with_max_retries(0),
         });
 
         let tokens = vec![create_test_token()];
@@ -1339,10 +1677,12 @@ mod pin_cid_tests {
         let mock_server = MockServer::start().await;
         let processor = TestProcessor {
             providers: vec![Box::new(MockProvider("p1"))],
-            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
-                mock_server.uri(),
-                crate::ipfs::config::IpfsGatewayType::Path,
-            )]),
+            http_client: crate::httpclient::HttpClient::new()
+                .with_gateways(vec![(
+                    mock_server.uri(),
+                    crate::ipfs::config::IpfsGatewayType::Path,
+                )])
+                .with_max_retries(0),
         };
         let token = ContractTokenId {
             address: "0xabc".into(),
@@ -1371,7 +1711,7 @@ mod pin_cid_tests {
         let mock_server = MockServer::start().await;
         let processor = TestProcessor {
             providers: vec![Box::new(MockProvider("p1"))],
-            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
+            http_client: crate::httpclient::HttpClient::new().with_gateways(vec![(
                 mock_server.uri(),
                 crate::ipfs::config::IpfsGatewayType::Path,
             )]),
@@ -1403,7 +1743,7 @@ mod pin_cid_tests {
         let mock_server = MockServer::start().await;
         let processor = TestProcessor {
             providers: vec![Box::new(MockProvider("p1")), Box::new(MockProvider("p2"))],
-            http_client: crate::httpclient::HttpClient::new_with_gateways(vec![(
+            http_client: crate::httpclient::HttpClient::new().with_gateways(vec![(
                 mock_server.uri(),
                 crate::ipfs::config::IpfsGatewayType::Path,
             )]),
