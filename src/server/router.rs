@@ -15,7 +15,7 @@ use crate::envvar::is_defined;
 use crate::server::api::{
     ApiProblem, BackupRequest, BackupResponse, ProblemJson, StatusResponse, Tokens,
 };
-use crate::server::db::{BackupTask, PinInfo, TokenWithPins};
+use crate::server::database::{BackupTask, PinInfo, TokenWithPins};
 use crate::server::handlers::handle_backup::{__path_handle_backup, handle_backup};
 use crate::server::handlers::handle_backup_delete_archive::{
     __path_handle_backup_delete_archive, handle_backup_delete_archive,

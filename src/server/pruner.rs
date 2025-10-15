@@ -5,7 +5,7 @@ use tokio::time::{sleep, Duration as TokioDuration};
 use tracing::{info, warn};
 
 use crate::server::archive::get_zipped_backup_paths;
-use crate::server::db::{Db, ExpiredBackup};
+use crate::server::database::{Db, ExpiredBackup};
 
 async fn prune_backups(db: &Db, base_dir: &str, expired: &[ExpiredBackup]) {
     let mut pruned_task_ids = Vec::new();

@@ -14,7 +14,7 @@ use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 
 use crate::server::api::{ApiProblem, ProblemJson};
-use crate::server::database_trait::Database;
+use crate::server::database::r#trait::Database;
 use crate::server::{check_backup_on_disk, AppState};
 
 #[derive(serde::Deserialize, utoipa::ToSchema)]
@@ -251,7 +251,7 @@ mod handle_download_tests {
     use std::sync::Arc;
     use tokio::sync::{mpsc, Mutex};
 
-    use crate::server::db::Db;
+    use crate::server::database::Db;
     use crate::server::AppState;
 
     fn make_state() -> AppState {

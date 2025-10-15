@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
-use crate::server::database_trait::Database;
+use crate::server::database::r#trait::Database;
+
+pub mod r#trait;
 
 /// Combined view of backup_tasks + archive_requests
 #[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]

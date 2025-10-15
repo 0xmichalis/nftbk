@@ -9,7 +9,7 @@ use crate::backup::backup_from_config;
 use crate::server::archive::{
     get_zipped_backup_paths, sync_files, zip_backup, ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
 };
-use crate::server::database_trait::Database;
+use crate::server::database::r#trait::Database;
 use crate::server::{AppState, BackupTask, StorageMode};
 use crate::{BackupConfig, IpfsOutcome, ProcessManagementConfig, StorageConfig, TokenConfig};
 
@@ -318,7 +318,7 @@ pub async fn run_backup_task(state: AppState, task: BackupTask) {
 #[cfg(test)]
 mod persist_error_logs_tests {
     use super::persist_non_fatal_error_logs;
-    use crate::server::database_trait::MockDatabase;
+    use crate::server::database::r#trait::MockDatabase;
 
     #[tokio::test]
     async fn no_errors_makes_no_call() {

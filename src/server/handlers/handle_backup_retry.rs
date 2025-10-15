@@ -8,7 +8,7 @@ use axum::{
 use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, BackupRequest, BackupResponse, ProblemJson};
-use crate::server::database_trait::Database;
+use crate::server::database::r#trait::Database;
 use crate::server::{AppState, BackupTask, BackupTaskOrShutdown, TaskType, Tokens};
 
 /// Retry a backup task for the authenticated user. This task will be processed asynchronously and the result will be available in the /v1/backups/{task_id} endpoint.
@@ -166,14 +166,14 @@ async fn handle_backup_retry_core<DB: Database + ?Sized>(
 #[cfg(test)]
 mod handle_backup_retry_core_tests {
     use super::handle_backup_retry_core;
-    use crate::server::database_trait::MockDatabase;
+    use crate::server::database::r#trait::MockDatabase;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use tokio::sync::mpsc;
 
-    fn sample_meta(owner: &str, status: &str) -> crate::server::db::BackupTask {
+    fn sample_meta(owner: &str, status: &str) -> crate::server::database::BackupTask {
         use chrono::{TimeZone, Utc};
-        crate::server::db::BackupTask {
+        crate::server::database::BackupTask {
             task_id: "t1".to_string(),
             created_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
             updated_at: Utc.timestamp_opt(1_700_000_100, 0).unwrap(),

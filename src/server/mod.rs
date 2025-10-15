@@ -11,13 +11,12 @@ use tracing::{debug, error, info, warn};
 use crate::backup::ChainConfig;
 use crate::ipfs::{IpfsPinningProvider, IpfsProviderConfig};
 use crate::server::api::{BackupRequest, Tokens};
-use crate::server::db::Db;
+use crate::server::database::Db;
 use crate::server::hashing::compute_file_sha256;
 
 pub mod api;
 pub mod archive;
-pub mod database_trait;
-pub mod db;
+pub mod database;
 pub mod handlers;
 pub mod hashing;
 pub mod pin_monitor;

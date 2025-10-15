@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::server::api::{ApiProblem, ProblemJson, StatusResponse, SubresourceStatus};
-use crate::server::database_trait::Database;
+use crate::server::database::r#trait::Database;
 use crate::server::AppState;
 
 /// Get the status of a backup task
@@ -64,8 +64,8 @@ async fn handle_status_core<DB: Database + ?Sized>(
 mod handle_status_core_tests {
     use super::handle_status_core;
     use crate::server::api::StatusResponse;
-    use crate::server::database_trait::MockDatabase;
-    use crate::server::db::BackupTask;
+    use crate::server::database::r#trait::MockDatabase;
+    use crate::server::database::BackupTask;
     use axum::http::StatusCode as AxumStatusCode;
     use chrono::{TimeZone, Utc};
 

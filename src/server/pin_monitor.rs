@@ -4,7 +4,7 @@ use tokio::time::{sleep, Duration as TokioDuration};
 use tracing::{error, info, warn};
 
 use crate::ipfs::{IpfsPinningProvider, PinResponseStatus};
-use crate::server::db::{Db, PinRow};
+use crate::server::database::{Db, PinRow};
 
 /// Trait for database operations used by the pin monitor
 #[async_trait::async_trait]

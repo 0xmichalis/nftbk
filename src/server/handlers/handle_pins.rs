@@ -7,8 +7,8 @@ use axum::{
 use tracing::{debug, error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
-use crate::server::database_trait::Database;
-use crate::server::db::TokenWithPins;
+use crate::server::database::r#trait::Database;
+use crate::server::database::TokenWithPins;
 use crate::server::AppState;
 
 pub type PinsResponse = Vec<TokenWithPins>;
@@ -206,7 +206,7 @@ async fn handle_pins_core<DB: Database + ?Sized>(
 #[cfg(test)]
 mod filter_tokens_for_query_tests {
     use super::*;
-    use crate::server::db::PinInfo;
+    use crate::server::database::PinInfo;
     use chrono::{DateTime, Utc};
 
     fn create_test_tokens() -> Vec<TokenWithPins> {
@@ -298,8 +298,8 @@ mod filter_tokens_for_query_tests {
 #[cfg(test)]
 mod handle_pins_core_mockdb_tests {
     use super::{handle_pins_core, PinsQuery};
-    use crate::server::database_trait::MockDatabase;
-    use crate::server::db::{PinInfo, TokenWithPins};
+    use crate::server::database::r#trait::MockDatabase;
+    use crate::server::database::{PinInfo, TokenWithPins};
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use chrono::{DateTime, Utc};

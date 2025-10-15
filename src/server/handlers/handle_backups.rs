@@ -7,8 +7,8 @@ use axum::{
 use serde::Deserialize;
 
 use crate::server::api::{ApiProblem, ProblemJson};
-use crate::server::database_trait::Database;
-use crate::server::db::BackupTask;
+use crate::server::database::r#trait::Database;
+use crate::server::database::BackupTask;
 use crate::server::AppState;
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -140,7 +140,7 @@ async fn handle_backups_core<DB: Database + ?Sized>(
 #[cfg(test)]
 mod handle_backups_core_mockdb_tests {
     use super::handle_backups_core;
-    use crate::server::database_trait::MockDatabase;
+    use crate::server::database::r#trait::MockDatabase;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
@@ -164,7 +164,7 @@ mod handle_backups_core_mockdb_tests {
         // Build 5 fake records with distinct task_ids
         let mut recs = Vec::new();
         for i in 0..5 {
-            recs.push(crate::server::db::BackupTask {
+            recs.push(crate::server::database::BackupTask {
                 task_id: format!("t{}", i + 1),
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),

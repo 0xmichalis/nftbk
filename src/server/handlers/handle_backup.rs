@@ -9,12 +9,12 @@ use tracing::{debug, error, info};
 
 use crate::server::api::{ApiProblem, BackupRequest, BackupResponse, ProblemJson};
 use crate::server::archive::negotiate_archive_format;
-use crate::server::database_trait::Database;
+use crate::server::database::r#trait::Database;
 use crate::server::hashing::compute_task_id;
 use crate::server::{AppState, BackupTask, BackupTaskOrShutdown, StorageMode, TaskType};
 
 // TODO: Revisit this logic.
-fn derive_status(meta: &crate::server::db::BackupTask) -> String {
+fn derive_status(meta: &crate::server::database::BackupTask) -> String {
     if meta.archive_fatal_error.is_some() || meta.ipfs_fatal_error.is_some() {
         return "error".to_string();
     }
@@ -384,7 +384,7 @@ mod handle_backup_endpoint_tests {
     use tower::Service;
 
     use crate::ipfs::IpfsProviderConfig;
-    use crate::server::db::Db;
+    use crate::server::database::Db;
     use crate::server::AppState;
 
     fn make_state(ipfs_providers: Vec<IpfsProviderConfig>) -> AppState {
@@ -469,7 +469,7 @@ mod handle_backup_endpoint_tests {
 #[cfg(test)]
 mod handle_backup_core_tests {
     use crate::server::api::{BackupRequest, Tokens};
-    use crate::server::database_trait::MockDatabase;
+    use crate::server::database::r#trait::MockDatabase;
     use axum::body::to_bytes;
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
@@ -532,7 +532,7 @@ mod handle_backup_core_tests {
     #[tokio::test]
     async fn returns_409_when_being_deleted() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(crate::server::db::BackupTask {
+        db.set_get_backup_task_result(Some(crate::server::database::BackupTask {
             task_id: "test".to_string(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
@@ -572,7 +572,7 @@ mod handle_backup_core_tests {
     #[tokio::test]
     async fn returns_200_when_in_progress() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(crate::server::db::BackupTask {
+        db.set_get_backup_task_result(Some(crate::server::database::BackupTask {
             task_id: "test".to_string(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),

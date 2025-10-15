@@ -2,7 +2,7 @@ use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 use crate::server::api::Tokens;
-use crate::server::db::Db;
+use crate::server::database::Db;
 use crate::server::{BackupTask, BackupTaskOrShutdown, StorageMode, TaskType};
 
 // Recovery task struct that matches the database schema

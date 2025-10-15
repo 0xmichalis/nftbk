@@ -6,7 +6,7 @@ use axum::{
 use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
-use crate::server::database_trait::Database;
+use crate::server::database::r#trait::Database;
 use crate::server::AppState;
 
 /// Delete only the IPFS pins for a backup task.
@@ -136,13 +136,17 @@ async fn handle_backup_delete_pins_core<DB: Database + ?Sized>(
 #[cfg(test)]
 mod handle_backup_delete_pins_core_tests {
     use super::handle_backup_delete_pins_core;
-    use crate::server::database_trait::MockDatabase;
+    use crate::server::database::r#trait::MockDatabase;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
-    fn sample_meta(owner: &str, status: &str, storage_mode: &str) -> crate::server::db::BackupTask {
+    fn sample_meta(
+        owner: &str,
+        status: &str,
+        storage_mode: &str,
+    ) -> crate::server::database::BackupTask {
         use chrono::{TimeZone, Utc};
-        crate::server::db::BackupTask {
+        crate::server::database::BackupTask {
             task_id: "t1".to_string(),
             created_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
             updated_at: Utc.timestamp_opt(1_700_000_100, 0).unwrap(),

@@ -2,7 +2,7 @@ use futures_util::FutureExt;
 use std::panic::AssertUnwindSafe;
 use tracing::{debug, error, info};
 
-use crate::server::database_trait::Database;
+use crate::server::database::r#trait::Database;
 use crate::server::{AppState, DeletionTask, StorageMode};
 
 pub fn validate_status_for_scope(
@@ -143,7 +143,7 @@ async fn delete_dir_and_archive_for_task(
 async fn delete_ipfs_pins(
     provider_instances: &[std::sync::Arc<dyn crate::ipfs::IpfsPinningProvider>],
     task_id: &str,
-    pin_requests: &[crate::server::db::PinRow],
+    pin_requests: &[crate::server::database::PinRow],
 ) -> Result<bool, String> {
     let mut deleted_anything = false;
     for pin_request in pin_requests {
@@ -482,7 +482,7 @@ mod tests {
         let providers: Vec<std::sync::Arc<dyn crate::ipfs::IpfsPinningProvider>> = vec![provider];
 
         let rows = vec![
-            crate::server::db::PinRow {
+            crate::server::database::PinRow {
                 id: 1,
                 task_id: "t".into(),
                 provider_type: "mock".into(),
@@ -492,7 +492,7 @@ mod tests {
                 pin_status: "pinned".into(),
                 created_at: chrono::Utc::now(),
             },
-            crate::server::db::PinRow {
+            crate::server::database::PinRow {
                 id: 2,
                 task_id: "t".into(),
                 provider_type: "mock".into(),
@@ -513,7 +513,7 @@ mod tests {
     #[tokio::test]
     async fn delete_ipfs_pins_errors_when_provider_missing() {
         let providers: Vec<std::sync::Arc<dyn crate::ipfs::IpfsPinningProvider>> = vec![];
-        let rows = vec![crate::server::db::PinRow {
+        let rows = vec![crate::server::database::PinRow {
             id: 1,
             task_id: "t".into(),
             provider_type: "unknown".into(),
@@ -527,7 +527,7 @@ mod tests {
         assert!(err.contains("No provider instance"));
     }
 
-    use crate::server::database_trait::MockDatabase;
+    use crate::server::database::r#trait::MockDatabase;
 
     #[tokio::test]
     async fn test_start_deletion_for_scope_full() {
