@@ -292,7 +292,7 @@ impl Db {
     }
 
     /// Update IPFS non-fatal error log for the task-level pin_requests record
-    pub async fn update_ipfs_task_error_log(
+    pub async fn update_pin_request_error_log(
         &self,
         task_id: &str,
         error_log: &str,
@@ -1048,26 +1048,6 @@ impl Db {
             .collect())
     }
 
-    /// Update IPFS task-level status for the pin_requests record
-    pub async fn update_ipfs_task_status(
-        &self,
-        task_id: &str,
-        status: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            UPDATE pin_requests
-            SET status = $2
-            WHERE task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(status)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
     /// Set backup fatal error for relevant subresources in a single SQL statement.
     /// The update is based on the `storage_mode` value from the `backup_tasks` table for the given `task_id`:
     /// - If storage_mode is 'archive' or 'full': updates archive_requests.status and archive_requests.fatal_error
@@ -1151,7 +1131,7 @@ impl Db {
     }
 
     /// Set IPFS task-level fatal error and mark status as error
-    pub async fn set_ipfs_task_error(
+    pub async fn set_pin_request_error(
         &self,
         task_id: &str,
         fatal_error: &str,
@@ -1311,12 +1291,12 @@ impl Database for Db {
         Db::update_archive_error_log(self, task_id, error_log).await
     }
 
-    async fn update_ipfs_task_error_log(
+    async fn update_pin_request_error_log(
         &self,
         task_id: &str,
         error_log: &str,
     ) -> Result<(), sqlx::Error> {
-        Db::update_ipfs_task_error_log(self, task_id, error_log).await
+        Db::update_pin_request_error_log(self, task_id, error_log).await
     }
 
     async fn set_archive_request_error(
@@ -1327,12 +1307,12 @@ impl Database for Db {
         Db::set_archive_request_error(self, task_id, fatal_error).await
     }
 
-    async fn set_ipfs_task_error(
+    async fn set_pin_request_error(
         &self,
         task_id: &str,
         fatal_error: &str,
     ) -> Result<(), sqlx::Error> {
-        Db::set_ipfs_task_error(self, task_id, fatal_error).await
+        Db::set_pin_request_error(self, task_id, fatal_error).await
     }
 
     // Status update operations
@@ -1360,14 +1340,6 @@ impl Database for Db {
         ipfs_status: &str,
     ) -> Result<(), sqlx::Error> {
         Db::update_backup_statuses(self, task_id, scope, archive_status, ipfs_status).await
-    }
-
-    async fn update_ipfs_task_status(
-        &self,
-        task_id: &str,
-        status: &str,
-    ) -> Result<(), sqlx::Error> {
-        Db::update_ipfs_task_status(self, task_id, status).await
     }
 
     async fn batch_update_backup_status(

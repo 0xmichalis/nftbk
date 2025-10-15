@@ -48,7 +48,7 @@ async fn persist_non_fatal_error_logs<DB: Database + ?Sized>(
         }
         crate::server::StorageMode::Ipfs => {
             if let Some(i) = ipfs_log.as_deref() {
-                let _ = db.update_ipfs_task_error_log(task_id, i).await;
+                let _ = db.update_pin_request_error_log(task_id, i).await;
             }
         }
     }

@@ -55,7 +55,7 @@ pub trait Database {
         error_log: &str,
     ) -> Result<(), sqlx::Error>;
 
-    async fn update_ipfs_task_error_log(
+    async fn update_pin_request_error_log(
         &self,
         task_id: &str,
         error_log: &str,
@@ -67,7 +67,7 @@ pub trait Database {
         fatal_error: &str,
     ) -> Result<(), sqlx::Error>;
 
-    async fn set_ipfs_task_error(
+    async fn set_pin_request_error(
         &self,
         task_id: &str,
         fatal_error: &str,
@@ -93,9 +93,6 @@ pub trait Database {
         archive_status: &str,
         ipfs_status: &str,
     ) -> Result<(), sqlx::Error>;
-
-    async fn update_ipfs_task_status(&self, task_id: &str, status: &str)
-        -> Result<(), sqlx::Error>;
 
     async fn batch_update_backup_status(
         &self,
@@ -169,15 +166,14 @@ pub struct MockDatabase {
     pub set_backup_error_error: Option<String>,
     pub set_error_logs_error: Option<String>,
     pub update_archive_error_log_error: Option<String>,
-    pub update_ipfs_task_error_log_error: Option<String>,
+    pub update_pin_request_error_log_error: Option<String>,
     pub set_archive_request_error_error: Option<String>,
-    pub set_ipfs_task_error_error: Option<String>,
+    pub set_pin_request_error_error: Option<String>,
 
     // Status update operations
     pub update_archive_request_status_error: Option<String>,
     pub update_pin_request_status_error: Option<String>,
     pub update_backup_statuses_error: Option<String>,
-    pub update_ipfs_task_status_error: Option<String>,
     pub batch_update_backup_status_error: Option<String>,
 
     // Deletion operations
@@ -267,16 +263,16 @@ impl MockDatabase {
         self.update_archive_error_log_error = error;
     }
 
-    pub fn set_update_ipfs_task_error_log_error(&mut self, error: Option<String>) {
-        self.update_ipfs_task_error_log_error = error;
+    pub fn set_update_pin_request_error_log_error(&mut self, error: Option<String>) {
+        self.update_pin_request_error_log_error = error;
     }
 
     pub fn set_set_archive_request_error_error(&mut self, error: Option<String>) {
         self.set_archive_request_error_error = error;
     }
 
-    pub fn set_set_ipfs_task_error_error(&mut self, error: Option<String>) {
-        self.set_ipfs_task_error_error = error;
+    pub fn set_set_pin_request_error_error(&mut self, error: Option<String>) {
+        self.set_pin_request_error_error = error;
     }
 
     // Configuration methods for status update operations
@@ -290,10 +286,6 @@ impl MockDatabase {
 
     pub fn set_update_backup_statuses_error(&mut self, error: Option<String>) {
         self.update_backup_statuses_error = error;
-    }
-
-    pub fn set_update_ipfs_task_status_error(&mut self, error: Option<String>) {
-        self.update_ipfs_task_status_error = error;
     }
 
     pub fn set_batch_update_backup_status_error(&mut self, error: Option<String>) {
@@ -485,12 +477,12 @@ impl Database for MockDatabase {
         }
     }
 
-    async fn update_ipfs_task_error_log(
+    async fn update_pin_request_error_log(
         &self,
         _task_id: &str,
         _error_log: &str,
     ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.update_ipfs_task_error_log_error {
+        if let Some(error) = &self.update_pin_request_error_log_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
             Ok(())
@@ -509,12 +501,12 @@ impl Database for MockDatabase {
         }
     }
 
-    async fn set_ipfs_task_error(
+    async fn set_pin_request_error(
         &self,
         _task_id: &str,
         _fatal_error: &str,
     ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.set_ipfs_task_error_error {
+        if let Some(error) = &self.set_pin_request_error_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
             Ok(())
@@ -554,18 +546,6 @@ impl Database for MockDatabase {
         _ipfs_status: &str,
     ) -> Result<(), sqlx::Error> {
         if let Some(error) = &self.update_backup_statuses_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn update_ipfs_task_status(
-        &self,
-        _task_id: &str,
-        _status: &str,
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.update_ipfs_task_status_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
             Ok(())

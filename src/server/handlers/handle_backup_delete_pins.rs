@@ -234,7 +234,7 @@ mod handle_backup_delete_pins_core_tests {
     }
 
     #[tokio::test]
-    async fn deletes_ipfs_task_on_success() {
+    async fn deletes_pin_request_on_success() {
         let mut db = MockDatabase::default();
         db.set_get_backup_task_result(Some(sample_meta("did:me", "done", "ipfs")));
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
