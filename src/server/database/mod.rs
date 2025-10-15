@@ -239,7 +239,6 @@ impl Db {
         Ok(())
     }
 
-    /// Atomically set both archive and IPFS error logs for a task
     pub async fn set_error_logs(
         &self,
         task_id: &str,
@@ -255,12 +254,11 @@ impl Db {
                 .await?;
         }
         if let Some(i) = ipfs_error_log {
-            // Set the same message on all pin_requests for this task that currently have NULL error_log
             sqlx::query(
                 r#"
                     UPDATE pin_requests
                     SET error_log = $2
-                    WHERE task_id = $1 AND error_log IS NULL
+                    WHERE task_id = $1
                     "#,
             )
             .bind(task_id)
@@ -291,7 +289,6 @@ impl Db {
         Ok(())
     }
 
-    /// Update IPFS non-fatal error log for the task-level pin_requests record
     pub async fn update_pin_request_error_log(
         &self,
         task_id: &str,
@@ -311,7 +308,6 @@ impl Db {
         Ok(())
     }
 
-    /// Update IPFS task-level status for the pin_requests record
     pub async fn update_pin_request_status(
         &self,
         task_id: &str,
@@ -350,6 +346,7 @@ impl Db {
         Ok(())
     }
 
+    // TODO: Should support pin request retries
     pub async fn retry_backup(
         &self,
         task_id: &str,
