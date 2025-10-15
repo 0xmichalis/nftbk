@@ -14,8 +14,8 @@ pub trait PinMonitorDb {
         &self,
     ) -> Result<Vec<PinRow>, Box<dyn std::error::Error + Send + Sync>>;
 
-    /// Batch update pin statuses
-    async fn batch_update_pin_statuses(
+    /// Update pin statuses
+    async fn update_pin_statuses(
         &self,
         updates: &[(i64, String)],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
@@ -29,11 +29,11 @@ impl PinMonitorDb for Db {
         self.get_active_pins().await.map_err(|e| e.into())
     }
 
-    async fn batch_update_pin_statuses(
+    async fn update_pin_statuses(
         &self,
         updates: &[(i64, String)],
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        self.batch_update_pin_statuses(updates)
+        self.update_pin_statuses(updates)
             .await
             .map_err(|e| e.into())
     }
@@ -99,7 +99,7 @@ pub async fn monitor_pin_requests<DB: PinMonitorDb + ?Sized>(
 
     // Batch update all status changes
     if !status_updates.is_empty() {
-        match db.batch_update_pin_statuses(&status_updates).await {
+        match db.update_pin_statuses(&status_updates).await {
             Ok(()) => {
                 info!("Successfully updated {} pin statuses", status_updates.len());
             }
@@ -274,7 +274,7 @@ mod tests {
             Ok(self.active_pins.lock().unwrap().clone())
         }
 
-        async fn batch_update_pin_statuses(
+        async fn update_pin_statuses(
             &self,
             updates: &[(i64, String)],
         ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -680,7 +680,7 @@ mod tests {
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0], "req-1");
 
-        // Verify: The monitor called batch_update_pin_statuses with the new status
+        // Verify: The monitor called update_pin_statuses with the new status
         let updates = mock_db.get_batch_updates();
         assert_eq!(updates.len(), 1);
         assert_eq!(updates[0], (1, "pinned".to_string()));

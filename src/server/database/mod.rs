@@ -1148,12 +1148,7 @@ impl Db {
         Ok(())
     }
 
-    /// Batch update pin statuses
-    /// Updates multiple pins in a single transaction
-    pub async fn batch_update_pin_statuses(
-        &self,
-        updates: &[(i64, String)],
-    ) -> Result<(), sqlx::Error> {
+    pub async fn update_pin_statuses(&self, updates: &[(i64, String)]) -> Result<(), sqlx::Error> {
         if updates.is_empty() {
             return Ok(());
         }
@@ -1179,7 +1174,10 @@ impl Db {
     }
 
     /// Complete archive deletion by updating storage mode to ipfs
-    pub async fn complete_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+    pub async fn complete_archive_request_deletion(
+        &self,
+        task_id: &str,
+    ) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
             UPDATE backup_tasks
@@ -1194,7 +1192,7 @@ impl Db {
     }
 
     /// Complete IPFS pins deletion by updating storage mode to archive
-    pub async fn complete_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+    pub async fn complete_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
         sqlx::query!(
             r#"
             UPDATE backup_tasks
@@ -1361,12 +1359,12 @@ impl Database for Db {
         Db::start_pin_request_deletions(self, task_id).await
     }
 
-    async fn complete_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::complete_archive_deletion(self, task_id).await
+    async fn complete_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::complete_archive_request_deletion(self, task_id).await
     }
 
-    async fn complete_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::complete_ipfs_pins_deletion(self, task_id).await
+    async fn complete_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::complete_pin_request_deletion(self, task_id).await
     }
 
     // Retry operations
@@ -1391,11 +1389,8 @@ impl Database for Db {
         Db::get_active_pins(self).await
     }
 
-    async fn batch_update_pin_statuses(
-        &self,
-        updates: &[(i64, String)],
-    ) -> Result<(), sqlx::Error> {
-        Db::batch_update_pin_statuses(self, updates).await
+    async fn update_pin_statuses(&self, updates: &[(i64, String)]) -> Result<(), sqlx::Error> {
+        Db::update_pin_statuses(self, updates).await
     }
 
     // Pinned tokens operations

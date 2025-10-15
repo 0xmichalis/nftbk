@@ -107,9 +107,9 @@ pub trait Database {
 
     async fn start_pin_request_deletions(&self, task_id: &str) -> Result<(), sqlx::Error>;
 
-    async fn complete_archive_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn complete_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
 
-    async fn complete_ipfs_pins_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn complete_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
 
     // Retry operations
     async fn retry_backup(&self, task_id: &str, retention_days: u64) -> Result<(), sqlx::Error>;
@@ -125,8 +125,7 @@ pub trait Database {
 
     async fn get_active_pins(&self) -> Result<Vec<PinRow>, sqlx::Error>;
 
-    async fn batch_update_pin_statuses(&self, updates: &[(i64, String)])
-        -> Result<(), sqlx::Error>;
+    async fn update_pin_statuses(&self, updates: &[(i64, String)]) -> Result<(), sqlx::Error>;
 
     // Pinned tokens operations
     async fn get_pinned_tokens_by_requestor(
@@ -180,8 +179,8 @@ pub struct MockDatabase {
     pub start_deletion_error: Option<String>,
     pub start_archive_request_deletion_error: Option<String>,
     pub start_pin_request_deletions_error: Option<String>,
-    pub complete_archive_deletion_error: Option<String>,
-    pub complete_ipfs_pins_deletion_error: Option<String>,
+    pub complete_archive_request_deletion_error: Option<String>,
+    pub complete_pin_request_deletion_error: Option<String>,
 
     // Retry operations
     pub retry_backup_error: Option<String>,
@@ -192,7 +191,7 @@ pub struct MockDatabase {
     pub get_pins_by_task_id_error: Option<String>,
     pub get_active_pins_result: Vec<PinRow>,
     pub get_active_pins_error: Option<String>,
-    pub batch_update_pin_statuses_error: Option<String>,
+    pub update_pin_statuses_error: Option<String>,
 
     // Pinned tokens operations
     pub get_pinned_tokens_by_requestor_result: (Vec<TokenWithPins>, u32),
@@ -305,12 +304,12 @@ impl MockDatabase {
         self.start_pin_request_deletions_error = error;
     }
 
-    pub fn set_complete_archive_deletion_error(&mut self, error: Option<String>) {
-        self.complete_archive_deletion_error = error;
+    pub fn set_complete_archive_request_deletion_error(&mut self, error: Option<String>) {
+        self.complete_archive_request_deletion_error = error;
     }
 
-    pub fn set_complete_ipfs_pins_deletion_error(&mut self, error: Option<String>) {
-        self.complete_ipfs_pins_deletion_error = error;
+    pub fn set_complete_pin_request_deletion_error(&mut self, error: Option<String>) {
+        self.complete_pin_request_deletion_error = error;
     }
 
     // Configuration methods for retry operations
@@ -339,8 +338,8 @@ impl MockDatabase {
         self.get_active_pins_error = error;
     }
 
-    pub fn set_batch_update_pin_statuses_error(&mut self, error: Option<String>) {
-        self.batch_update_pin_statuses_error = error;
+    pub fn set_update_pin_statuses_error(&mut self, error: Option<String>) {
+        self.update_pin_statuses_error = error;
     }
 
     // Configuration methods for pinned tokens operations
@@ -589,16 +588,16 @@ impl Database for MockDatabase {
         }
     }
 
-    async fn complete_archive_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.complete_archive_deletion_error {
+    async fn complete_archive_request_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+        if let Some(error) = &self.complete_archive_request_deletion_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
             Ok(())
         }
     }
 
-    async fn complete_ipfs_pins_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.complete_ipfs_pins_deletion_error {
+    async fn complete_pin_request_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+        if let Some(error) = &self.complete_pin_request_deletion_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
             Ok(())
@@ -643,11 +642,8 @@ impl Database for MockDatabase {
         }
     }
 
-    async fn batch_update_pin_statuses(
-        &self,
-        _updates: &[(i64, String)],
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.batch_update_pin_statuses_error {
+    async fn update_pin_statuses(&self, _updates: &[(i64, String)]) -> Result<(), sqlx::Error> {
+        if let Some(error) = &self.update_pin_statuses_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
             Ok(())
