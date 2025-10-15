@@ -151,28 +151,28 @@ async fn delete_ipfs_pins(
             .iter()
             .find(|provider| pin_request.provider_url.as_deref() == Some(provider.provider_url()));
 
-        let provider = provider.ok_or_else(|| {
-            format!(
+        if provider.is_none() {
+            error!(
                 "No provider instance found for provider URL {} when unpinning {}",
                 pin_request.provider_url.as_deref().unwrap_or(""),
                 pin_request.cid
-            )
-        })?;
+            );
+            continue;
+        }
+        let provider = provider.unwrap();
 
-        provider
-            .delete_pin(&pin_request.request_id)
-            .await
-            .map_err(|e| {
-                format!(
-                    "Failed to unpin {} from provider {} for task {}: {}",
-                    pin_request.cid,
-                    pin_request.provider_url.as_deref().unwrap_or(""),
-                    task_id,
-                    e
-                )
-            })?;
+        if let Err(e) = provider.delete_pin(&pin_request.request_id).await {
+            error!(
+                "Failed to unpin {} from provider {} for task {}: {}",
+                pin_request.cid,
+                pin_request.provider_url.as_deref().unwrap_or(""),
+                task_id,
+                e
+            );
+            continue;
+        }
 
-        tracing::info!(
+        info!(
             "Successfully unpinned {} from provider {} for task {}",
             pin_request.cid,
             pin_request.provider_url.as_deref().unwrap_or(""),
@@ -511,7 +511,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn delete_ipfs_pins_errors_when_provider_missing() {
+    async fn delete_ipfs_pins_skips_when_provider_missing_and_continues() {
         let providers: Vec<std::sync::Arc<dyn crate::ipfs::IpfsPinningProvider>> = vec![];
         let rows = vec![crate::server::database::PinRow {
             id: 1,
@@ -523,8 +523,9 @@ mod tests {
             pin_status: "pinned".into(),
             created_at: chrono::Utc::now(),
         }];
-        let err = delete_ipfs_pins(&providers, "t", &rows).await.unwrap_err();
-        assert!(err.contains("No provider instance"));
+        let result = delete_ipfs_pins(&providers, "t", &rows).await.unwrap();
+        // No providers present, so nothing deleted; function should not error and should return false
+        assert!(!result);
     }
 
     use crate::server::database::r#trait::MockDatabase;
