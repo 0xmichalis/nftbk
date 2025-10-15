@@ -163,7 +163,6 @@ mod handle_backup_delete_archive_core_tests {
             storage_mode: storage_mode.to_string(),
             archive_format: Some("zip".to_string()),
             expires_at: None,
-            deleted_at: None,
             archive_deleted_at: None,
             pins_deleted_at: None,
         }
