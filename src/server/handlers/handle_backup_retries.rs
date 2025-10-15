@@ -9,7 +9,6 @@ use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, BackupRequest, BackupResponse, ProblemJson};
 use crate::server::database::r#trait::Database;
-use crate::server::handlers::handle_backup::validate_deletion_with_scope;
 use crate::server::{
     parse_scope, AppState, BackupTask, BackupTaskOrShutdown, StorageMode, TaskType, Tokens,
 };
@@ -36,6 +35,21 @@ fn validate_scope_for_retry(
     };
     (archive_needed && archive_status == "in_progress")
         || (ipfs_needed && ipfs_status == "in_progress")
+}
+
+/// Validate if a task is in the process of deletion for the given scope/storage mode.
+/// For Archive scope, treat deletion as active when `archive_deleted_at` is set.
+/// For Ipfs scope, treat deletion as active when `pins_deleted_at` is set.
+/// For Full scope, treat deletion as active when either subresource has deletion started.
+fn validate_deletion_with_scope(
+    storage_mode: &StorageMode,
+    meta: &crate::server::database::BackupTask,
+) -> bool {
+    match storage_mode {
+        StorageMode::Archive => meta.archive_deleted_at.is_some(),
+        StorageMode::Ipfs => meta.pins_deleted_at.is_some(),
+        StorageMode::Full => meta.archive_deleted_at.is_some() || meta.pins_deleted_at.is_some(),
+    }
 }
 
 fn prepare_retry_task(
@@ -361,5 +375,74 @@ mod validate_scope_for_retry_tests {
         let meta = sample_meta("did:me", "in_progress", "full");
         let conflict = validate_scope_for_retry(&meta, StorageMode::Full);
         assert!(conflict);
+    }
+}
+
+#[cfg(test)]
+mod validate_deletion_with_scope_tests {
+    use super::validate_deletion_with_scope;
+    use crate::server::database::BackupTask;
+    use crate::server::StorageMode;
+
+    fn make_meta(archive_deleted: bool, pins_deleted: bool) -> BackupTask {
+        BackupTask {
+            task_id: "t".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            requestor: "did:test".to_string(),
+            nft_count: 0,
+            tokens: serde_json::Value::Null,
+            archive_status: None,
+            ipfs_status: None,
+            archive_error_log: None,
+            ipfs_error_log: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
+            storage_mode: "full".to_string(),
+            archive_format: None,
+            expires_at: None,
+            archive_deleted_at: if archive_deleted {
+                Some(chrono::Utc::now())
+            } else {
+                None
+            },
+            pins_deleted_at: if pins_deleted {
+                Some(chrono::Utc::now())
+            } else {
+                None
+            },
+        }
+    }
+
+    #[test]
+    fn archive_scope_true_only_when_archive_deleted() {
+        let meta = make_meta(true, false);
+        assert!(validate_deletion_with_scope(&StorageMode::Archive, &meta));
+        let meta = make_meta(false, true);
+        assert!(!validate_deletion_with_scope(&StorageMode::Archive, &meta));
+        let meta = make_meta(false, false);
+        assert!(!validate_deletion_with_scope(&StorageMode::Archive, &meta));
+    }
+
+    #[test]
+    fn ipfs_scope_true_only_when_pins_deleted() {
+        let meta = make_meta(false, true);
+        assert!(validate_deletion_with_scope(&StorageMode::Ipfs, &meta));
+        let meta = make_meta(true, false);
+        assert!(!validate_deletion_with_scope(&StorageMode::Ipfs, &meta));
+        let meta = make_meta(false, false);
+        assert!(!validate_deletion_with_scope(&StorageMode::Ipfs, &meta));
+    }
+
+    #[test]
+    fn full_scope_true_when_either_deleted() {
+        let meta = make_meta(true, false);
+        assert!(validate_deletion_with_scope(&StorageMode::Full, &meta));
+        let meta = make_meta(false, true);
+        assert!(validate_deletion_with_scope(&StorageMode::Full, &meta));
+        let meta = make_meta(true, true);
+        assert!(validate_deletion_with_scope(&StorageMode::Full, &meta));
+        let meta = make_meta(false, false);
+        assert!(!validate_deletion_with_scope(&StorageMode::Full, &meta));
     }
 }

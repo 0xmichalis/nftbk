@@ -13,43 +13,30 @@ use crate::server::database::r#trait::Database;
 use crate::server::hashing::compute_task_id;
 use crate::server::{AppState, BackupTask, BackupTaskOrShutdown, StorageMode, TaskType};
 
-// TODO: Revisit this logic.
-fn derive_status(meta: &crate::server::database::BackupTask) -> String {
-    if meta.archive_fatal_error.is_some() || meta.ipfs_fatal_error.is_some() {
-        return "error".to_string();
+fn get_status(meta: &crate::server::database::BackupTask, scope: &StorageMode) -> Option<String> {
+    match scope {
+        StorageMode::Archive => meta.archive_status.clone(),
+        StorageMode::Ipfs => meta.ipfs_status.clone(),
+        StorageMode::Full => {
+            unreachable!("get_status reached with Full scope in POST /backups path")
+        }
     }
-    let archive_needed = meta.storage_mode != "ipfs";
-    let ipfs_needed = meta.storage_mode != "archive";
-    let archive_status = meta.archive_status.as_deref().unwrap_or("in_progress");
-    let ipfs_status = if ipfs_needed {
-        meta.ipfs_status.as_deref().unwrap_or("in_progress")
-    } else {
-        "done"
-    };
-    if archive_status == "expired" {
-        return "expired".to_string();
-    }
-    if archive_status == "error" || ipfs_status == "error" {
-        return "error".to_string();
-    }
-    if (!archive_needed || archive_status == "done") && (!ipfs_needed || ipfs_status == "done") {
-        return "done".to_string();
-    }
-    "in_progress".to_string()
 }
 
-/// Validate if a task is in the process of deletion for the given scope/storage mode.
-/// For Archive scope, treat deletion as active when `archive_deleted_at` is set.
-/// For Ipfs scope, treat deletion as active when `pins_deleted_at` is set.
-/// For Full scope, treat deletion as active when either subresource has deletion started.
-pub(crate) fn validate_deletion_with_scope(
-    storage_mode: &StorageMode,
+/// Validate the scope against an existing task.
+/// Invalidate Archive scope when the subresource is being deleted.
+/// Invalidate Ipfs scope when the subresource is being deleted.
+/// Full scope is invalid for existing tasks and clients should ensure to
+/// specify the right scope explicitly.
+/// Returns true if the requested scope is invalid for an existing task
+pub(crate) fn validate_scope(
+    scope: &StorageMode,
     meta: &crate::server::database::BackupTask,
 ) -> bool {
-    match storage_mode {
+    match scope {
         StorageMode::Archive => meta.archive_deleted_at.is_some(),
         StorageMode::Ipfs => meta.pins_deleted_at.is_some(),
-        StorageMode::Full => meta.archive_deleted_at.is_some() || meta.pins_deleted_at.is_some(),
+        StorageMode::Full => true,
     }
 }
 
@@ -85,6 +72,45 @@ fn validate_backup_request_impl(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn ensure_backup_exists<DB: Database + ?Sized>(
+    db: &DB,
+    existing: Option<&crate::server::database::BackupTask>,
+    task_id: &str,
+    requestor: &str,
+    tokens: &Vec<crate::server::api::Tokens>,
+    storage_mode: &StorageMode,
+    archive_format_opt: &Option<String>,
+    pruner_retention_days: u64,
+) -> Result<(), sqlx::Error> {
+    // If backup exists, upgrade it to full and ensure missing subresource exists
+    if let Some(_existing) = existing {
+        db.upgrade_backup_to_full(
+            task_id,
+            *storage_mode == StorageMode::Archive,
+            archive_format_opt.as_deref(),
+            Some(pruner_retention_days),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    // Otherwise, create a new backup
+    let nft_count = tokens.iter().map(|t| t.tokens.len()).sum::<usize>() as i32;
+    let tokens_json = serde_json::to_value(tokens).unwrap();
+    db.insert_backup_task(
+        task_id,
+        requestor,
+        nft_count,
+        &tokens_json,
+        storage_mode.as_str(),
+        archive_format_opt.as_deref(),
+        Some(pruner_retention_days),
+    )
+    .await?;
+    Ok(())
+}
+
 /// Create a backup task for the authenticated user. This task will be processed asynchronously and the result will be available in the /v1/backups/{task_id} endpoint.
 /// By default, this endpoint creates an archive file with metadata and content from all tokens to be downloaded by the user. The archive format depends on the user-agent (zip or tar.gz).
 /// The user can optionally request to pin content that is stored on IPFS.
@@ -100,7 +126,7 @@ fn validate_backup_request_impl(
         (status = 202, description = "Backup task accepted and queued", body = BackupResponse),
         (status = 200, description = "Backup already exists or in progress", body = BackupResponse),
         (status = 400, description = "Invalid request", body = ApiProblem, content_type = "application/problem+json"),
-        (status = 409, description = "Backup exists in error/expired state", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 409, description = "Invalid scope for existing task", body = ApiProblem, content_type = "application/problem+json"),
         (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
     tag = "backups",
@@ -173,45 +199,49 @@ async fn handle_backup_core<DB: Database + ?Sized>(
     let task_id = compute_task_id(&req.tokens, Some(&requestor_str));
 
     // Validate against existing tasks
-    if let Ok(Some(task_meta)) = db.get_backup_task(&task_id).await {
-        // Check if task is being deleted for this scope
-        if validate_deletion_with_scope(&storage_mode, &task_meta) {
+    let existing_meta: Option<crate::server::database::BackupTask> =
+        db.get_backup_task(&task_id).await.unwrap_or_default();
+    if let Some(task_meta) = existing_meta.clone() {
+        if validate_scope(&storage_mode, &task_meta) {
             let problem = ProblemJson::from_status(
                 StatusCode::CONFLICT,
-                Some("Task is being deleted".to_string()),
+                Some("Invalid scope for existing task".to_string()),
                 Some(format!("/v1/backups/{task_id}")),
             );
             return problem.into_response();
         }
 
-        match derive_status(&task_meta).as_str() {
-            "in_progress" => {
-                debug!("Duplicate backup request, returning existing task_id {task_id}");
-                return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
-            }
-            "done" => {
-                debug!("Backup already completed, returning existing task_id {task_id}");
-                return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
-            }
-            "error" | "expired" => {
-                let problem = ProblemJson::from_status(
-                    StatusCode::CONFLICT,
-                    Some(format!(
-                        "Backup in status {} cannot be started. Use retry.",
-                        derive_status(&task_meta)
-                    )),
-                    Some(format!("/v1/backups/{task_id}")),
-                );
-                return problem.into_response();
-            }
-            other => {
-                error!("Unknown backup status '{other}' for task {task_id} when handling /backup");
-                let problem = ProblemJson::from_status(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Some("Unknown backup status".to_string()),
-                    Some("/v1/backups".to_string()),
-                );
-                return problem.into_response();
+        if let Some(status) = get_status(&task_meta, &storage_mode) {
+            match status.as_str() {
+                "in_progress" => {
+                    debug!("Duplicate backup request, returning existing task_id {task_id}");
+                    return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
+                }
+                "done" => {
+                    debug!("Backup already completed, returning existing task_id {task_id}");
+                    return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
+                }
+                "error" | "expired" => {
+                    let problem = ProblemJson::from_status(
+                        StatusCode::CONFLICT,
+                        Some(format!(
+                            "Backup in status {status} cannot be started. Use retry.",
+                        )),
+                        Some(format!("/v1/backups/{task_id}")),
+                    );
+                    return problem.into_response();
+                }
+                other => {
+                    error!(
+                        "Unknown backup status '{other}' for task {task_id} when handling /backup"
+                    );
+                    let problem = ProblemJson::from_status(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Some("Unknown backup status".to_string()),
+                        Some("/v1/backups".to_string()),
+                    );
+                    return problem.into_response();
+                }
             }
         }
     }
@@ -226,20 +256,18 @@ async fn handle_backup_core<DB: Database + ?Sized>(
         ))
     };
 
-    // Write metadata to DB
-    let nft_count = req.tokens.iter().map(|t| t.tokens.len()).sum::<usize>() as i32;
-    let tokens_json = serde_json::to_value(&req.tokens).unwrap();
-    if let Err(e) = db
-        .insert_backup_task(
-            &task_id,
-            &requestor_str,
-            nft_count,
-            &tokens_json,
-            storage_mode.as_str(),
-            archive_format_opt.as_deref(),
-            Some(pruner_retention_days),
-        )
-        .await
+    // Ensure backup exists in the database
+    if let Err(e) = ensure_backup_exists(
+        db,
+        existing_meta.as_ref(),
+        &task_id,
+        &requestor_str,
+        &req.tokens,
+        &storage_mode,
+        &archive_format_opt,
+        pruner_retention_days,
+    )
+    .await
     {
         let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -274,7 +302,7 @@ async fn handle_backup_core<DB: Database + ?Sized>(
         "Created backup task {} (requestor: {}, count: {}, storage_mode: {})",
         task_id,
         requestor.unwrap_or_default(),
-        nft_count,
+        req.tokens.iter().map(|t| t.tokens.len()).sum::<usize>(),
         storage_mode.as_str()
     );
     let mut headers = axum::http::HeaderMap::new();
@@ -288,6 +316,125 @@ async fn handle_backup_core<DB: Database + ?Sized>(
         Json(BackupResponse { task_id }),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod ensure_backup_exists_unit_tests {
+    use super::ensure_backup_exists;
+    use crate::server::api::Tokens;
+    use crate::server::database::r#trait::MockDatabase;
+    use crate::server::database::BackupTask;
+    use crate::server::StorageMode;
+
+    fn sample_meta() -> BackupTask {
+        BackupTask {
+            task_id: "t".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            requestor: "did:test".to_string(),
+            nft_count: 1,
+            tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
+            archive_status: Some("done".to_string()),
+            ipfs_status: None,
+            archive_error_log: None,
+            ipfs_error_log: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
+            storage_mode: "archive".to_string(),
+            archive_format: Some("zip".to_string()),
+            expires_at: None,
+            archive_deleted_at: None,
+            pins_deleted_at: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn existing_meta_upgrades_ok() {
+        let db = MockDatabase::default();
+        let meta = sample_meta();
+        let tokens = vec![Tokens {
+            chain: "ethereum".to_string(),
+            tokens: vec!["0xabc:1".to_string()],
+        }];
+        let res = ensure_backup_exists(
+            &db,
+            Some(&meta),
+            "t",
+            "did:test",
+            &tokens,
+            &StorageMode::Archive,
+            &None,
+            7,
+        )
+        .await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn new_insert_ok() {
+        let db = MockDatabase::default();
+        let tokens = vec![Tokens {
+            chain: "ethereum".to_string(),
+            tokens: vec!["0xabc:1".to_string()],
+        }];
+        let res = ensure_backup_exists(
+            &db,
+            None,
+            "t",
+            "did:test",
+            &tokens,
+            &StorageMode::Archive,
+            &Some("zip".to_string()),
+            7,
+        )
+        .await;
+        assert!(res.is_ok());
+    }
+
+    #[tokio::test]
+    async fn insert_error_propagates() {
+        let mut db = MockDatabase::default();
+        db.set_insert_backup_task_error(Some("boom".to_string()));
+        let tokens = vec![Tokens {
+            chain: "ethereum".to_string(),
+            tokens: vec!["0xabc:1".to_string()],
+        }];
+        let res = ensure_backup_exists(
+            &db,
+            None,
+            "t",
+            "did:test",
+            &tokens,
+            &StorageMode::Archive,
+            &Some("zip".to_string()),
+            7,
+        )
+        .await;
+        assert!(res.is_err());
+    }
+
+    #[tokio::test]
+    async fn upgrade_error_propagates() {
+        let mut db = MockDatabase::default();
+        db.set_upgrade_backup_to_full_error(Some("boom".to_string()));
+        let meta = sample_meta();
+        let tokens = vec![Tokens {
+            chain: "ethereum".to_string(),
+            tokens: vec!["0xabc:1".to_string()],
+        }];
+        let res = ensure_backup_exists(
+            &db,
+            Some(&meta),
+            "t",
+            "did:test",
+            &tokens,
+            &StorageMode::Archive,
+            &Some("zip".to_string()),
+            7,
+        )
+        .await;
+        assert!(res.is_err());
+    }
 }
 
 #[cfg(test)]
@@ -805,11 +952,114 @@ mod handle_backup_core_tests {
             _ => panic!("Expected Creation task"),
         }
     }
+
+    #[tokio::test]
+    async fn upgrades_to_full_and_enqueues_ipfs_when_archive_exists() {
+        let mut db = MockDatabase::default();
+        // Existing archive-only task: no ipfs_status present
+        db.set_get_backup_task_result(Some(crate::server::database::BackupTask {
+            task_id: "t1".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            requestor: "did:test".to_string(),
+            nft_count: 1,
+            tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
+            archive_status: Some("done".to_string()),
+            ipfs_status: None,
+            archive_error_log: None,
+            ipfs_error_log: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
+            storage_mode: "archive".to_string(),
+            archive_format: Some("zip".to_string()),
+            expires_at: None,
+            archive_deleted_at: None,
+            pins_deleted_at: None,
+        }));
+        let (tx, mut rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: true,
+            create_archive: false,
+        };
+        let headers = HeaderMap::new();
+        let resp =
+            super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
+                .await
+                .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        // Ensure the missing IPFS subresource task enqueued
+        let task = rx.try_recv().unwrap();
+        match task {
+            crate::server::BackupTaskOrShutdown::Task(crate::server::TaskType::Creation(
+                backup_task,
+            )) => {
+                assert_eq!(backup_task.scope.as_str(), "ipfs");
+                assert_eq!(backup_task.archive_format, None);
+            }
+            _ => panic!("Expected Creation task"),
+        }
+    }
+
+    #[tokio::test]
+    async fn upgrades_to_full_and_enqueues_archive_when_ipfs_exists() {
+        let mut db = MockDatabase::default();
+        // Existing ipfs-only task: no archive_status present
+        db.set_get_backup_task_result(Some(crate::server::database::BackupTask {
+            task_id: "t2".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            requestor: "did:test".to_string(),
+            nft_count: 1,
+            tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
+            archive_status: None,
+            ipfs_status: Some("done".to_string()),
+            archive_error_log: None,
+            ipfs_error_log: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
+            storage_mode: "ipfs".to_string(),
+            archive_format: None,
+            expires_at: None,
+            archive_deleted_at: None,
+            pins_deleted_at: None,
+        }));
+        let (tx, mut rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+            create_archive: true,
+        };
+        // No accept header -> default zip
+        let headers = HeaderMap::new();
+        let resp =
+            super::handle_backup_core(&db, &tx, Some("did:test".to_string()), &headers, req, 7)
+                .await
+                .into_response();
+        assert_eq!(resp.status(), StatusCode::ACCEPTED);
+        // Ensure the missing Archive subresource task enqueued with archive format
+        let task = rx.try_recv().unwrap();
+        match task {
+            crate::server::BackupTaskOrShutdown::Task(crate::server::TaskType::Creation(
+                backup_task,
+            )) => {
+                assert_eq!(backup_task.scope.as_str(), "archive");
+                assert_eq!(backup_task.archive_format, Some("zip".to_string()));
+            }
+            _ => panic!("Expected Creation task"),
+        }
+    }
 }
 
 #[cfg(test)]
-mod validate_deletion_with_scope_tests {
-    use super::validate_deletion_with_scope;
+mod validate_scope_unit_tests {
+    use super::validate_scope;
     use crate::server::database::BackupTask;
     use crate::server::StorageMode;
 
@@ -844,34 +1094,82 @@ mod validate_deletion_with_scope_tests {
     }
 
     #[test]
-    fn archive_scope_true_only_when_archive_deleted() {
+    fn archive_invalid_only_when_archive_deletion_active() {
         let meta = make_meta(true, false);
-        assert!(validate_deletion_with_scope(&StorageMode::Archive, &meta));
+        assert!(validate_scope(&StorageMode::Archive, &meta));
         let meta = make_meta(false, true);
-        assert!(!validate_deletion_with_scope(&StorageMode::Archive, &meta));
+        assert!(!validate_scope(&StorageMode::Archive, &meta));
         let meta = make_meta(false, false);
-        assert!(!validate_deletion_with_scope(&StorageMode::Archive, &meta));
+        assert!(!validate_scope(&StorageMode::Archive, &meta));
     }
 
     #[test]
-    fn ipfs_scope_true_only_when_pins_deleted() {
+    fn ipfs_invalid_only_when_pins_deletion_active() {
         let meta = make_meta(false, true);
-        assert!(validate_deletion_with_scope(&StorageMode::Ipfs, &meta));
+        assert!(validate_scope(&StorageMode::Ipfs, &meta));
         let meta = make_meta(true, false);
-        assert!(!validate_deletion_with_scope(&StorageMode::Ipfs, &meta));
+        assert!(!validate_scope(&StorageMode::Ipfs, &meta));
         let meta = make_meta(false, false);
-        assert!(!validate_deletion_with_scope(&StorageMode::Ipfs, &meta));
+        assert!(!validate_scope(&StorageMode::Ipfs, &meta));
     }
 
     #[test]
-    fn full_scope_true_when_either_deleted() {
-        let meta = make_meta(true, false);
-        assert!(validate_deletion_with_scope(&StorageMode::Full, &meta));
-        let meta = make_meta(false, true);
-        assert!(validate_deletion_with_scope(&StorageMode::Full, &meta));
+    fn full_always_invalid_for_existing_tasks() {
+        let meta = make_meta(false, false);
+        assert!(validate_scope(&StorageMode::Full, &meta));
         let meta = make_meta(true, true);
-        assert!(validate_deletion_with_scope(&StorageMode::Full, &meta));
-        let meta = make_meta(false, false);
-        assert!(!validate_deletion_with_scope(&StorageMode::Full, &meta));
+        assert!(validate_scope(&StorageMode::Full, &meta));
+    }
+}
+
+#[cfg(test)]
+mod get_status_unit_tests {
+    use super::get_status;
+    use crate::server::database::BackupTask;
+    use crate::server::StorageMode;
+
+    fn base_meta() -> BackupTask {
+        BackupTask {
+            task_id: "t".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            requestor: "did:test".to_string(),
+            nft_count: 0,
+            tokens: serde_json::Value::Null,
+            archive_status: None,
+            ipfs_status: None,
+            archive_error_log: None,
+            ipfs_error_log: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
+            storage_mode: "archive".to_string(),
+            archive_format: None,
+            expires_at: None,
+            archive_deleted_at: None,
+            pins_deleted_at: None,
+        }
+    }
+
+    #[test]
+    fn archive_returns_substatus_or_none() {
+        let mut meta = base_meta();
+        assert_eq!(get_status(&meta, &StorageMode::Archive), None);
+        meta.archive_status = Some("done".to_string());
+        assert_eq!(
+            get_status(&meta, &StorageMode::Archive),
+            Some("done".to_string())
+        );
+    }
+
+    #[test]
+    fn ipfs_returns_substatus_or_none() {
+        let mut meta = base_meta();
+        meta.storage_mode = "ipfs".to_string();
+        assert_eq!(get_status(&meta, &StorageMode::Ipfs), None);
+        meta.ipfs_status = Some("in_progress".to_string());
+        assert_eq!(
+            get_status(&meta, &StorageMode::Ipfs),
+            Some("in_progress".to_string())
+        );
     }
 }

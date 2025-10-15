@@ -179,7 +179,7 @@ impl Db {
                 sqlx::query(
                     r#"
                     INSERT INTO archive_requests (task_id, archive_format, expires_at, status)
-                    VALUES ($1, $2, NOW() + ($3 || ' days')::interval, 'in_progress')
+                    VALUES ($1, $2, NOW() + make_interval(days => $3::int), 'in_progress')
                     ON CONFLICT (task_id) DO UPDATE SET
                         archive_format = EXCLUDED.archive_format,
                         expires_at = EXCLUDED.expires_at
@@ -389,7 +389,7 @@ impl Db {
             sqlx::query(
                 r#"
                 UPDATE archive_requests
-                SET expires_at = NOW() + ($2 || ' days')::interval
+                SET expires_at = NOW() + make_interval(days => $2::int)
                 WHERE task_id = $1
                 "#,
             )
@@ -1206,6 +1206,75 @@ impl Db {
         Ok(())
     }
 
+    /// Ensure the missing subresource exists and upgrade the backup to full storage mode.
+    /// If `add_archive` is true, create/ensure archive_requests row with provided format/retention.
+    /// Otherwise, ensure pin_requests row exists. Always flips backup_tasks.storage_mode to 'full'.
+    pub async fn upgrade_backup_to_full(
+        &self,
+        task_id: &str,
+        add_archive: bool,
+        archive_format: Option<&str>,
+        retention_days: Option<u64>,
+    ) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        // Upgrade storage mode to full
+        sqlx::query(
+            r#"
+            UPDATE backup_tasks
+            SET storage_mode = 'full', updated_at = NOW()
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
+
+        if add_archive {
+            let fmt = archive_format.unwrap_or("zip");
+            if let Some(days) = retention_days {
+                sqlx::query(
+                    r#"
+                    INSERT INTO archive_requests (task_id, archive_format, expires_at, status)
+                    VALUES ($1, $2, NOW() + make_interval(days => $3::int), 'in_progress')
+                    ON CONFLICT (task_id) DO NOTHING
+                    "#,
+                )
+                .bind(task_id)
+                .bind(fmt)
+                .bind(days as i64)
+                .execute(&mut *tx)
+                .await?;
+            } else {
+                sqlx::query(
+                    r#"
+                    INSERT INTO archive_requests (task_id, archive_format, expires_at, status)
+                    VALUES ($1, $2, NULL, 'in_progress')
+                    ON CONFLICT (task_id) DO NOTHING
+                    "#,
+                )
+                .bind(task_id)
+                .bind(fmt)
+                .execute(&mut *tx)
+                .await?;
+            }
+        } else {
+            sqlx::query(
+                r#"
+                INSERT INTO pin_requests (task_id, status)
+                VALUES ($1, 'in_progress')
+                ON CONFLICT (task_id) DO NOTHING
+                "#,
+            )
+            .bind(task_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Complete archive deletion:
     /// - If current storage_mode is 'archive', delete the whole backup (finalize deletion)
     /// - Else if current storage_mode is 'full', flip to 'ipfs' to reflect archive removed
@@ -1260,6 +1329,7 @@ impl Db {
 #[async_trait::async_trait]
 impl Database for Db {
     // Backup task operations
+
     async fn insert_backup_task(
         &self,
         task_id: &str,
@@ -1393,6 +1463,16 @@ impl Database for Db {
         status: &str,
     ) -> Result<(), sqlx::Error> {
         Db::update_archive_request_statuses(self, task_ids, status).await
+    }
+
+    async fn upgrade_backup_to_full(
+        &self,
+        task_id: &str,
+        add_archive: bool,
+        archive_format: Option<&str>,
+        retention_days: Option<u64>,
+    ) -> Result<(), sqlx::Error> {
+        Db::upgrade_backup_to_full(self, task_id, add_archive, archive_format, retention_days).await
     }
 
     // Deletion operations
