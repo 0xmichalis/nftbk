@@ -100,6 +100,15 @@ pub trait Database {
         status: &str,
     ) -> Result<(), sqlx::Error>;
 
+    // Upgrade operations
+    async fn upgrade_backup_to_full(
+        &self,
+        task_id: &str,
+        add_archive: bool,
+        archive_format: Option<&str>,
+        retention_days: Option<u64>,
+    ) -> Result<(), sqlx::Error>;
+
     // Deletion operations
     async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
 
@@ -179,6 +188,9 @@ pub struct MockDatabase {
     pub update_pin_request_status_error: Option<String>,
     pub update_backup_statuses_error: Option<String>,
     pub update_archive_request_statuses_error: Option<String>,
+
+    // Upgrade operations
+    pub upgrade_backup_to_full_error: Option<String>,
 
     // Deletion operations
     pub start_deletion_error: Option<String>,
@@ -300,6 +312,11 @@ impl MockDatabase {
 
     pub fn set_update_archive_request_statuses_error(&mut self, error: Option<String>) {
         self.update_archive_request_statuses_error = error;
+    }
+
+    // Configuration methods for upgrade operations
+    pub fn set_upgrade_backup_to_full_error(&mut self, error: Option<String>) {
+        self.upgrade_backup_to_full_error = error;
     }
 
     // Configuration methods for deletion operations
@@ -587,6 +604,20 @@ impl Database for MockDatabase {
         _status: &str,
     ) -> Result<(), sqlx::Error> {
         if let Some(error) = &self.update_archive_request_statuses_error {
+            Err(sqlx::Error::Configuration(error.clone().into()))
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn upgrade_backup_to_full(
+        &self,
+        _task_id: &str,
+        _add_archive: bool,
+        _archive_format: Option<&str>,
+        _retention_days: Option<u64>,
+    ) -> Result<(), sqlx::Error> {
+        if let Some(error) = &self.upgrade_backup_to_full_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
             Ok(())
