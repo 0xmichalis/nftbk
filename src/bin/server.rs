@@ -75,10 +75,9 @@ struct Args {
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     no_color: bool,
 
-    /// Path to a TOML file with one or more Privy credential sets
-    /// When provided, these are used in addition to any PRIVY_* env vars
+    /// Path to a TOML file with one or more JWT credential sets
     #[arg(long)]
-    privy_config: Option<String>,
+    jwt_config: Option<String>,
 
     /// Path to a TOML file with IPFS provider configuration
     /// When provided, this is used instead of IPFS_* env vars
@@ -87,14 +86,15 @@ struct Args {
 }
 
 #[derive(serde::Deserialize, Clone, Debug)]
-struct PrivyCredential {
-    app_id: String,
+struct JwtCredential {
+    issuer: String,
+    audience: String,
     verification_key: String,
 }
 
 #[derive(serde::Deserialize)]
-struct PrivyFile {
-    privy: Vec<PrivyCredential>,
+struct AuthFile {
+    jwt: Vec<JwtCredential>,
 }
 
 #[derive(serde::Deserialize)]
@@ -116,28 +116,30 @@ async fn main() {
     );
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
 
-    // Load Privy credentials from file if provided
-    let mut privy_credentials: Vec<PrivyCredential> = Vec::new();
-    if let Some(path) = &args.privy_config {
+    // Load JWT credentials from file if provided
+    let mut jwt_credentials: Vec<JwtCredential> = Vec::new();
+    if let Some(path) = &args.jwt_config {
         match std::fs::read_to_string(path) {
-            Ok(contents) => match toml::from_str::<PrivyFile>(&contents) {
-                Ok(file) => {
-                    privy_credentials = file
-                        .privy
-                        .into_iter()
-                        .map(|mut c| {
-                            // Allow \n escaping in inline keys if users choose to
-                            c.verification_key = c.verification_key.replace("\\n", "\n");
-                            c
-                        })
-                        .collect();
+            Ok(contents) => match toml::from_str::<AuthFile>(&contents) {
+                Ok(mut file) => {
+                    for cred in file.jwt.drain(..) {
+                        let mut normalized = cred.clone();
+                        normalized.verification_key =
+                            normalized.verification_key.replace("\\n", "\n");
+                        jwt_credentials.push(normalized);
+                    }
+                    info!(
+                        "Loaded {} JWT credential set(s) from config file '{}'",
+                        jwt_credentials.len(),
+                        path
+                    );
                 }
                 Err(e) => {
-                    tracing::error!("Failed to parse Privy config file '{}': {}", path, e);
+                    error!("Failed to parse JWT config file '{path}': {e}");
                 }
             },
             Err(e) => {
-                tracing::error!("Failed to read Privy config file '{}': {}", path, e);
+                error!("Failed to read JWT config file '{path}': {e}");
             }
         }
     }
@@ -196,9 +198,9 @@ async fn main() {
         is_defined(&auth_token)
     );
     info!(
-        "Privy JWT authentication enabled: {} ({} credential set(s))",
-        !privy_credentials.is_empty(),
-        privy_credentials.len()
+        "JWT authentication enabled: {} ({} credential set(s))",
+        !jwt_credentials.is_empty(),
+        jwt_credentials.len()
     );
 
     // Spawn worker pool for backup tasks
@@ -270,9 +272,9 @@ async fn main() {
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     let app = build_router(
         state.clone(),
-        privy_credentials
+        jwt_credentials
             .into_iter()
-            .map(|c| (c.app_id, c.verification_key))
+            .map(|c| (c.issuer, c.audience, c.verification_key))
             .collect(),
     );
     info!("Listening on {}", addr);

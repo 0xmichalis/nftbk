@@ -20,7 +20,7 @@ services:
       - "8080"
     volumes:
       - ./data:/app/data
-      - ./config_privy.toml:/app/privy/config.toml:ro
+      - ./config_jwt.toml:/app/jwt/config.toml:ro
       - ./config_ipfs.toml:/app/config_ipfs.toml:ro
     user: "65532:65532"
     command: [
@@ -28,7 +28,7 @@ services:
       "--listen-address", "0.0.0.0:8080",
       "--unsafe-skip-checksum-check", "true",
       "--base-dir", "/app/data",
-      "--privy-config", "/app/privy/config.toml",
+      "--jwt-config", "/app/jwt/config.toml",
       "--ipfs-config", "/app/config_ipfs.toml"
     ]
     restart: unless-stopped

@@ -8,6 +8,7 @@ use axum::{
     Router,
 };
 use subtle::ConstantTimeEq;
+use tracing::{debug, warn};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -15,6 +16,7 @@ use crate::envvar::is_defined;
 use crate::server::api::{
     ApiProblem, BackupRequest, BackupResponse, ProblemJson, StatusResponse, Tokens,
 };
+use crate::server::auth::jwt::verify_jwt;
 use crate::server::database::{BackupTask, PinInfo, TokenWithPins};
 use crate::server::handlers::handle_backup::{__path_handle_backup, handle_backup};
 use crate::server::handlers::handle_backup_delete_archive::{
@@ -34,7 +36,6 @@ use crate::server::handlers::handle_download::{
 };
 use crate::server::handlers::handle_pins::{__path_handle_pins, handle_pins, PinsResponse};
 use crate::server::handlers::handle_status::{__path_handle_status, handle_status};
-use crate::server::privy::verify_privy_jwt;
 use crate::server::AppState;
 
 #[derive(OpenApi)]
@@ -109,7 +110,7 @@ impl utoipa::Modify for SecurityAddon {
 #[derive(Clone)]
 pub struct AuthState {
     pub app_state: AppState,
-    pub privy_credentials: Vec<(String, String)>, // (app_id, verification_key)
+    pub jwt_credentials: Vec<(String, String, String)>, // (issuer, audience, verification_key)
 }
 
 async fn auth_middleware(
@@ -118,7 +119,7 @@ async fn auth_middleware(
     next: Next,
 ) -> impl IntoResponse {
     let state = &auth_state.app_state;
-    let privy_credentials = &auth_state.privy_credentials;
+    let jwt_credentials = &auth_state.jwt_credentials;
 
     // 1. Try symmetric token auth
     if let Some(ref token) = state.auth_token {
@@ -140,30 +141,26 @@ async fn auth_middleware(
         }
     }
 
-    // 2. Try Privy JWT auth (multiple credential sets)
-    if !privy_credentials.is_empty() {
+    // 2. Try JWT auth (multiple credential sets)
+    if !jwt_credentials.is_empty() {
         let auth_header = req
             .headers()
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok());
         if let Some(header_value) = auth_header {
             if let Some(jwt) = header_value.strip_prefix("Bearer ") {
-                for (app_id, verification_key) in privy_credentials.iter() {
-                    match verify_privy_jwt(jwt, verification_key, app_id).await {
+                for (issuer, audience, verification_key) in jwt_credentials.iter() {
+                    match verify_jwt(jwt, verification_key, issuer, audience).await {
                         Ok(claims) => {
                             req.extensions_mut().insert(Some(claims.sub.clone()));
                             return next.run(req).await;
                         }
                         Err(e) => {
-                            tracing::debug!(
-                                "Privy JWT verification failed for app_id {}: {}",
-                                app_id,
-                                e
-                            );
+                            debug!("JWT verification failed for issuer {issuer}: {e}");
                         }
                     }
                 }
-                tracing::warn!("Privy JWT verification failed for all configured credentials");
+                warn!("JWT verification failed for all configured credentials");
             }
         }
     }
@@ -180,7 +177,7 @@ async fn auth_middleware(
         .into_response()
 }
 
-pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -> Router {
+pub fn build_router(state: AppState, jwt_credentials: Vec<(String, String, String)>) -> Router {
     // Public router (no auth middleware)
     let public_router = Router::new()
         .route("/v1/backups/:task_id/download", get(handle_download))
@@ -209,9 +206,9 @@ pub fn build_router(state: AppState, privy_credentials: Vec<(String, String)>) -
 
     let auth_state = AuthState {
         app_state: state.clone(),
-        privy_credentials,
+        jwt_credentials,
     };
-    if is_defined(&state.auth_token) || !auth_state.privy_credentials.is_empty() {
+    if is_defined(&state.auth_token) || !auth_state.jwt_credentials.is_empty() {
         authed_router =
             authed_router.layer(middleware::from_fn_with_state(auth_state, auth_middleware));
     }

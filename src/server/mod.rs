@@ -14,11 +14,11 @@ use crate::server::database::Db;
 
 pub mod api;
 pub mod archive;
+pub mod auth;
 pub mod database;
 pub mod handlers;
 pub mod hashing;
 pub mod pin_monitor;
-pub mod privy;
 pub mod pruner;
 pub mod recovery;
 pub mod router;

@@ -1,0 +1,6 @@
+[[jwt]]
+issuer = "privy.io"
+# Expected audience (aud)
+audience = "youraudience"
+# Use \n to encode newlines if storing on one line (e.g. in env files)
+verification_key = "-----BEGIN PUBLIC KEY-----\nPK/AAAAAAAAAAAAAA==\n-----END PUBLIC KEY-----"

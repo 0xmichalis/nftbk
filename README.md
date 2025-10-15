@@ -33,19 +33,19 @@ USERNAME=michalis \
     python3 scripts/extract_gallery_tokens.py > config_tokens.toml
 ```
 
-### Privy support
+### JWT authentication support
 
-The server supports authenticating Privy JWT tokens using a TOML configuration file containing one or more credential sets, passed via the `--privy-config` flag.
+The server supports authenticating JWT tokens using a TOML configuration file containing one or more credential sets, passed via the `--jwt-config` flag.
 
-Example `config_privy.toml` (multiple `[[privy]]` tables):
+Example `config_jwt.toml` (multiple `[[jwt]]` tables):
 
 ```toml
-[[privy]]
-app_id = "app_xxxxx"
-verification_key = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
-
-[[privy]]
-app_id = "app_yyyyy"
+[[jwt]]
+# Expected issuer (iss)
+issuer = "https://issuer.example.com"
+# Expected audience (aud)
+audience = "my-audience"
+# ES256 public key in PEM format (you may escape newlines as \n)
 verification_key = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
 ```
 
