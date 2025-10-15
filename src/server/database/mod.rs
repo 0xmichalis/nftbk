@@ -427,7 +427,7 @@ impl Db {
         sqlx::query(
             r#"
             UPDATE pin_requests
-            SET error_log = NULL
+            SET error_log = NULL, fatal_error = NULL
             WHERE task_id = $1 AND ($2 IN ('ipfs', 'full'))
             "#,
         )
