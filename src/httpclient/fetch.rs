@@ -1,14 +1,22 @@
 use tracing::{info, warn};
 
 use crate::ipfs::config::IpfsGatewayConfig;
-use crate::ipfs::url::all_ipfs_gateway_urls_with_gateways;
+use crate::ipfs::url::{all_ipfs_gateway_urls_with_gateways, GatewayUrl};
 
-pub(crate) async fn fetch_url(url: &str) -> anyhow::Result<reqwest::Response> {
+pub(crate) async fn fetch_url(
+    url: &str,
+    bearer_token: Option<String>,
+) -> anyhow::Result<reqwest::Response> {
     let client = reqwest::Client::builder()
         .user_agent(crate::USER_AGENT)
         .build()?;
 
-    Ok(client.get(url).send().await?)
+    let mut req = client.get(url);
+    if let Some(token) = bearer_token {
+        req = req.bearer_auth(token);
+    }
+
+    Ok(req.send().await?)
 }
 
 pub(crate) fn create_http_error(status: reqwest::StatusCode, url: &str) -> anyhow::Error {
@@ -22,7 +30,7 @@ pub(crate) async fn try_fetch_response(
     anyhow::Result<reqwest::Response>,
     Option<reqwest::StatusCode>,
 ) {
-    match fetch_url(url).await {
+    match fetch_url(url, None).await {
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
@@ -78,11 +86,15 @@ pub(crate) async fn retry_with_gateways(
     let mut last_err = original_error;
     let alternative_gateways: Vec<_> = gateway_urls
         .into_iter()
-        .filter(|gateway_url| gateway_url != url)
+        .filter(|gateway_url| gateway_url.url != url)
         .collect();
 
-    for new_url in alternative_gateways {
-        match fetch_url(&new_url).await {
+    for GatewayUrl {
+        url: new_url,
+        bearer_token,
+    } in alternative_gateways
+    {
+        match fetch_url(&new_url, bearer_token).await {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() {
@@ -123,6 +135,7 @@ mod try_fetch_response_tests {
         IpfsGatewayConfig {
             url: leak_str(base.to_string()),
             gateway_type: IpfsGatewayType::Path,
+            bearer_token_env: None,
         }
     }
 
@@ -234,6 +247,7 @@ mod retry_with_gateways_tests {
         IpfsGatewayConfig {
             url: leak_str(base.to_string()),
             gateway_type: IpfsGatewayType::Path,
+            bearer_token_env: None,
         }
     }
 

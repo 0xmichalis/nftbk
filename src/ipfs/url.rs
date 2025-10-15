@@ -1,5 +1,11 @@
 use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType, IPFS_GATEWAYS};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GatewayUrl {
+    pub url: String,
+    pub bearer_token: Option<String>,
+}
+
 pub(crate) fn construct_gateway_url(ipfs_content: &str, gateway: &IpfsGatewayConfig) -> String {
     match gateway.gateway_type {
         IpfsGatewayType::Path => {
@@ -25,11 +31,14 @@ pub(crate) fn construct_gateway_url(ipfs_content: &str, gateway: &IpfsGatewayCon
 pub fn all_ipfs_gateway_urls_with_gateways(
     url: &str,
     gateways: &[IpfsGatewayConfig],
-) -> Option<Vec<String>> {
+) -> Option<Vec<GatewayUrl>> {
     extract_ipfs_content_from_gateway_url(url).map(|ipfs_content| {
         gateways
             .iter()
-            .map(|gw| construct_gateway_url(&ipfs_content, gw))
+            .map(|gw| GatewayUrl {
+                url: construct_gateway_url(&ipfs_content, gw),
+                bearer_token: gw.resolve_bearer_token(),
+            })
             .collect()
     })
 }
@@ -296,7 +305,7 @@ mod tests {
             ];
             for expected_url in &expected_urls {
                 assert!(
-                    urls.contains(expected_url),
+                    urls.iter().any(|g| &g.url == expected_url),
                     "Missing expected URL: {expected_url}"
                 );
             }
@@ -320,7 +329,7 @@ mod tests {
             ];
             for expected_url in &expected_urls {
                 assert!(
-                    urls.contains(expected_url),
+                    urls.iter().any(|g| &g.url == expected_url),
                     "Missing expected URL: {expected_url}"
                 );
             }
@@ -331,7 +340,7 @@ mod tests {
             assert_eq!(urls_no_path.len(), IPFS_GATEWAYS.len());
             let expected_subdomain =
                 "https://bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya.ipfs.4everland.io";
-            assert!(urls_no_path.contains(&expected_subdomain.to_string()));
+            assert!(urls_no_path.iter().any(|g| g.url == expected_subdomain));
         }
     }
 
@@ -392,7 +401,8 @@ mod tests {
             if let Some(gateway_urls) = all_ipfs_gateway_urls_with_gateways(ipfs_url, IPFS_GATEWAYS)
             {
                 assert!(!gateway_urls.is_empty());
-                let gateway_strings: Vec<&str> = gateway_urls.iter().map(|s| s.as_str()).collect();
+                let gateway_strings: Vec<&str> =
+                    gateway_urls.iter().map(|g| g.url.as_str()).collect();
                 assert!(gateway_strings.iter().any(|url| url.contains("ipfs.io")));
                 assert!(gateway_strings
                     .iter()

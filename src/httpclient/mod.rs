@@ -34,6 +34,7 @@ impl HttpClient {
             .map(|(url, gateway_type)| IpfsGatewayConfig {
                 url: Box::leak(url.into_boxed_str()),
                 gateway_type,
+                bearer_token_env: None,
             })
             .collect();
         self

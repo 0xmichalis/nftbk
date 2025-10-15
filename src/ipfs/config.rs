@@ -14,6 +14,15 @@ pub enum IpfsGatewayType {
 pub struct IpfsGatewayConfig {
     pub url: &'static str,
     pub gateway_type: IpfsGatewayType,
+    /// Name of environment variable containing the bearer token
+    pub bearer_token_env: Option<&'static str>,
+}
+
+impl IpfsGatewayConfig {
+    pub fn resolve_bearer_token(&self) -> Option<String> {
+        let env_name = self.bearer_token_env?;
+        std::env::var(env_name).ok()
+    }
 }
 
 // A list of public IPFS gateways can be found here:
@@ -22,14 +31,17 @@ pub const IPFS_GATEWAYS: &[IpfsGatewayConfig] = &[
     IpfsGatewayConfig {
         url: "https://ipfs.io",
         gateway_type: IpfsGatewayType::Path,
+        bearer_token_env: None,
     },
     IpfsGatewayConfig {
         url: "https://4everland.io",
         gateway_type: IpfsGatewayType::Subdomain,
+        bearer_token_env: None,
     },
     IpfsGatewayConfig {
         url: "https://gateway.pinata.cloud",
         gateway_type: IpfsGatewayType::Path,
+        bearer_token_env: Some("PINATA_GATEWAY_TOKEN"),
     },
 ];
 
@@ -40,13 +52,13 @@ pub enum IpfsPinningConfig {
     #[serde(rename = "pinning-service")]
     IpfsPinningService {
         base_url: String,
-        /// Name of environment variable containing the bearer token (takes precedence over bearer_token)
+        /// Name of environment variable containing the bearer token
         #[serde(default)]
         bearer_token_env: Option<String>,
     },
     Pinata {
         base_url: String,
-        /// Name of environment variable containing the bearer token (takes precedence over bearer_token)
+        /// Name of environment variable containing the bearer token
         #[serde(default)]
         bearer_token_env: Option<String>,
     },
