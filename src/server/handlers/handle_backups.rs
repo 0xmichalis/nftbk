@@ -44,7 +44,7 @@ fn default_limit() -> u32 {
              ("X-Total-Count" = u32, description = "Total number of items before pagination")
          )
         ),
-        (status = 401, description = "Missing user DID", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 401, description = "Missing requestor", body = ApiProblem, content_type = "application/problem+json"),
         (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
     tag = "backups",

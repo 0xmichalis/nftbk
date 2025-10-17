@@ -43,7 +43,17 @@ pub async fn verify_requestor_owns_task<DB: Database + ?Sized>(
             return (None, Some(problem.into_response()));
         }
     };
-    let req_requestor = requestor.unwrap_or_default();
+    let req_requestor = match requestor {
+        Some(req) => req,
+        None => {
+            let problem = ProblemJson::from_status(
+                StatusCode::UNAUTHORIZED,
+                Some("Missing requestor".to_string()),
+                Some(endpoint_path.to_string()),
+            );
+            return (None, Some(problem.into_response()));
+        }
+    };
     if !meta.requestor.is_empty() && req_requestor != meta.requestor {
         let problem = ProblemJson::from_status(
             StatusCode::FORBIDDEN,
@@ -128,6 +138,15 @@ mod verify_owns_task_tests {
         .await;
         let resp = problem.unwrap();
         assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn returns_401_when_missing_requestor() {
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta_with_requestor("did:privy:alice")));
+        let (_meta, problem) = verify_requestor_owns_task(&db, "t1", None, "/v1/backups/t1").await;
+        let resp = problem.unwrap();
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]

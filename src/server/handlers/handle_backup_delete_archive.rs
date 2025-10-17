@@ -139,13 +139,14 @@ mod handle_backup_delete_archive_core_tests {
     }
 
     #[tokio::test]
-    async fn returns_404_when_missing_requestor() {
-        let db = MockDatabase::default();
+    async fn returns_401_when_missing_requestor() {
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(sample_meta("did:me", "done", "archive")));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_archive_core(&db, &tx, "t1", None)
             .await
             .into_response();
-        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[tokio::test]
