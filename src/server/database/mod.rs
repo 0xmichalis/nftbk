@@ -868,33 +868,85 @@ impl Db {
         .fetch_all(&self.pool)
         .await?;
 
+        // If no incomplete tasks, return early
+        if rows.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Collect task_ids to fetch tokens in bulk
+        let task_ids: Vec<String> = rows.iter().map(|r| r.get::<String, _>("task_id")).collect();
+
+        // Fetch all tokens for these tasks and aggregate by task_id and chain
+        use std::collections::BTreeMap;
+        let mut tokens_by_task: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
+
+        let token_rows = sqlx::query(
+            r#"
+            SELECT task_id, chain, contract_address, token_id
+            FROM tokens
+            WHERE task_id = ANY($1)
+            ORDER BY chain, contract_address, token_id
+            "#,
+        )
+        .bind(&task_ids)
+        .fetch_all(&self.pool)
+        .await?;
+
+        for r in token_rows {
+            let task_id: String = r.get("task_id");
+            let chain: String = r.get("chain");
+            let contract_address: String = r.get("contract_address");
+            let token_id: String = r.get("token_id");
+            tokens_by_task
+                .entry(task_id)
+                .or_default()
+                .entry(chain)
+                .or_default()
+                .push(format!("{}:{}", contract_address, token_id));
+        }
+
         let recs = rows
             .into_iter()
-            .map(|row| BackupTask {
-                task_id: row.get("task_id"),
-                created_at: row.get("created_at"),
-                updated_at: row.get("updated_at"),
-                requestor: row.get("requestor"),
-                nft_count: row.get("nft_count"),
-                // No need for tokens here, the pruner does not care
-                tokens: serde_json::Value::Null,
-                archive_status: row
-                    .try_get::<Option<String>, _>("archive_status")
-                    .ok()
-                    .flatten(),
-                ipfs_status: row
-                    .try_get::<Option<String>, _>("ipfs_status")
-                    .ok()
-                    .flatten(),
-                archive_error_log: row.get("archive_error_log"),
-                ipfs_error_log: row.get("ipfs_error_log"),
-                archive_fatal_error: row.get("fatal_error"),
-                ipfs_fatal_error: None,
-                storage_mode: row.get("storage_mode"),
-                archive_format: row.get("archive_format"),
-                expires_at: row.get("expires_at"),
-                archive_deleted_at: row.get("archive_deleted_at"),
-                pins_deleted_at: row.get("pins_deleted_at"),
+            .map(|row| {
+                let task_id: String = row.get("task_id");
+                let tokens_json = if let Some(by_chain) = tokens_by_task.get(&task_id) {
+                    serde_json::json!(by_chain
+                        .iter()
+                        .map(|(chain, toks)| serde_json::json!({
+                            "chain": chain,
+                            "tokens": toks,
+                        }))
+                        .collect::<Vec<_>>())
+                } else {
+                    // No tokens recorded for this task
+                    serde_json::json!([])
+                };
+
+                BackupTask {
+                    task_id,
+                    created_at: row.get("created_at"),
+                    updated_at: row.get("updated_at"),
+                    requestor: row.get("requestor"),
+                    nft_count: row.get("nft_count"),
+                    tokens: tokens_json,
+                    archive_status: row
+                        .try_get::<Option<String>, _>("archive_status")
+                        .ok()
+                        .flatten(),
+                    ipfs_status: row
+                        .try_get::<Option<String>, _>("ipfs_status")
+                        .ok()
+                        .flatten(),
+                    archive_error_log: row.get("archive_error_log"),
+                    ipfs_error_log: row.get("ipfs_error_log"),
+                    archive_fatal_error: row.get("fatal_error"),
+                    ipfs_fatal_error: None,
+                    storage_mode: row.get("storage_mode"),
+                    archive_format: row.get("archive_format"),
+                    expires_at: row.get("expires_at"),
+                    archive_deleted_at: row.get("archive_deleted_at"),
+                    pins_deleted_at: row.get("pins_deleted_at"),
+                }
             })
             .collect();
 
