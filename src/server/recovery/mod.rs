@@ -1,5 +1,5 @@
 use tokio::sync::mpsc;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::server::api::Tokens;
 use crate::server::database::r#trait::Database;
@@ -21,7 +21,7 @@ pub async fn recover_incomplete_tasks<DB: Database + ?Sized>(
         return Ok(0);
     }
 
-    debug!("Found {task_count} incomplete backup tasks, re-queueing...");
+    info!("Found {task_count} incomplete backup tasks, re-queueing...");
 
     for task_meta in incomplete_tasks {
         let task_id = task_meta.task_id.clone();
