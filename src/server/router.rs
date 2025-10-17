@@ -18,7 +18,17 @@ use crate::server::api::{
 };
 use crate::server::auth::jwt::verify_jwt;
 use crate::server::database::{BackupTask, PinInfo, TokenWithPins};
+use crate::server::handlers::handle_archive_download::{DownloadQuery, DownloadTokenResponse};
+use crate::server::handlers::handle_archive_download::{
+    __path_handle_archive_download as __path_handle_download,
+    __path_handle_archive_download_token as __path_handle_download_token,
+    handle_archive_download as handle_download,
+    handle_archive_download_token as handle_download_token,
+};
 use crate::server::handlers::handle_backup::{__path_handle_backup, handle_backup};
+use crate::server::handlers::handle_backup_create::{
+    __path_handle_backup_create, handle_backup_create,
+};
 use crate::server::handlers::handle_backup_delete_archive::{
     __path_handle_backup_delete_archive, handle_backup_delete_archive,
 };
@@ -30,19 +40,14 @@ use crate::server::handlers::handle_backup_retries::{
 };
 use crate::server::handlers::handle_backups::BackupsQuery;
 use crate::server::handlers::handle_backups::{__path_handle_backups, handle_backups};
-use crate::server::handlers::handle_download::{DownloadQuery, DownloadTokenResponse};
-use crate::server::handlers::handle_download::{
-    __path_handle_download, __path_handle_download_token, handle_download, handle_download_token,
-};
 use crate::server::handlers::handle_pins::{__path_handle_pins, handle_pins, PinsResponse};
-use crate::server::handlers::handle_status::{__path_handle_status, handle_status};
 use crate::server::AppState;
 
 #[derive(OpenApi)]
 #[openapi(
     paths(
+        handle_backup_create,
         handle_backup,
-        handle_status,
         handle_download_token,
         handle_download,
         handle_backup_retries,
@@ -186,8 +191,11 @@ pub fn build_router(state: AppState, jwt_credentials: Vec<(String, String, Strin
 
     // Authenticated router
     let mut authed_router = Router::new()
-        .route("/v1/backups", get(handle_backups).post(handle_backup))
-        .route("/v1/backups/:task_id", get(handle_status))
+        .route(
+            "/v1/backups",
+            get(handle_backups).post(handle_backup_create),
+        )
+        .route("/v1/backups/:task_id", get(handle_backup))
         .route(
             "/v1/backups/:task_id/download-tokens",
             post(handle_download_token),

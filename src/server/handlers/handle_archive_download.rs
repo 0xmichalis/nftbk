@@ -48,7 +48,7 @@ pub struct DownloadTokenResponse {
     tag = "backups",
     security(("bearer_auth" = []))
 )]
-pub async fn handle_download_token(
+pub async fn handle_archive_download_token(
     State(state): axum::extract::State<AppState>,
     axum::extract::Path(task_id): axum::extract::Path<String>,
 ) -> impl axum::response::IntoResponse {
@@ -96,7 +96,7 @@ pub async fn handle_download_token(
     ),
     tag = "backups"
 )]
-pub async fn handle_download(
+pub async fn handle_archive_download(
     State(state): State<AppState>,
     AxumPath(task_id): AxumPath<String>,
     Query(query): Query<DownloadQuery>,
@@ -243,7 +243,11 @@ async fn serve_zip_file(zip_path: &PathBuf, task_id: &str, archive_format: &str)
 
 #[cfg(test)]
 mod handle_download_tests {
-    use super::{handle_download, handle_download_token, DownloadQuery, DownloadTokenResponse};
+    use super::{
+        handle_archive_download as handle_download,
+        handle_archive_download_token as handle_download_token, DownloadQuery,
+        DownloadTokenResponse,
+    };
     use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
