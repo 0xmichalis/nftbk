@@ -9,7 +9,6 @@ CREATE TABLE IF NOT EXISTS backup_tasks (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     requestor VARCHAR(255) NOT NULL,
     nft_count INTEGER NOT NULL,
-    tokens JSONB NOT NULL,
     storage_mode VARCHAR(20) NOT NULL DEFAULT 'full' CHECK (storage_mode IN ('archive', 'ipfs', 'full'))
 );
 
@@ -33,30 +32,31 @@ CREATE TABLE IF NOT EXISTS pin_requests (
     deleted_at TIMESTAMPTZ
 );
 
--- Individual pins table
+-- Pins related to pin requests
 CREATE TABLE IF NOT EXISTS pins (
     id BIGSERIAL PRIMARY KEY,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    token_id BIGINT REFERENCES tokens(id) ON DELETE CASCADE,
     task_id VARCHAR(255) NOT NULL REFERENCES pin_requests(task_id) ON DELETE CASCADE,
     provider_type VARCHAR(64) NOT NULL,
     provider_url TEXT,
     cid VARCHAR(255) NOT NULL,
     request_id VARCHAR(255) NOT NULL,
-    pin_status VARCHAR(12) NOT NULL CHECK (pin_status IN ('queued', 'pinning', 'pinned', 'failed')),
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    pin_status VARCHAR(12) NOT NULL CHECK (pin_status IN ('queued', 'pinning', 'pinned', 'failed'))
 );
 
--- Pinned tokens table (links tokens to pins)
-CREATE TABLE IF NOT EXISTS pinned_tokens (
-    pin_id BIGINT PRIMARY KEY REFERENCES pins(id) ON DELETE CASCADE,
+-- Tokens related to backup tasks
+CREATE TABLE IF NOT EXISTS tokens (
+    id BIGSERIAL PRIMARY KEY,
+    task_id VARCHAR(255) NOT NULL REFERENCES backup_tasks(task_id) ON DELETE CASCADE,
     chain TEXT NOT NULL,
     contract_address TEXT NOT NULL,
     token_id TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    UNIQUE (task_id, chain, contract_address, token_id)
 );
 
 -- Indexes for backup_tasks
 CREATE INDEX IF NOT EXISTS idx_backup_tasks_requestor ON backup_tasks (requestor);
-CREATE INDEX IF NOT EXISTS idx_backup_tasks_tokens_gin ON backup_tasks USING GIN (tokens);
 
 -- Indexes for archive_requests
 CREATE INDEX IF NOT EXISTS idx_archive_requests_expires_at ON archive_requests (expires_at);
@@ -72,5 +72,6 @@ CREATE INDEX IF NOT EXISTS idx_pins_cid ON pins (cid);
 CREATE INDEX IF NOT EXISTS idx_pins_pin_status ON pins (pin_status);
 CREATE INDEX IF NOT EXISTS idx_pins_request_id ON pins (request_id);
 
--- Indexes for pinned_tokens
-CREATE INDEX IF NOT EXISTS pinned_tokens_token_idx ON pinned_tokens(chain, contract_address, token_id);
+-- Indexes for tokens
+CREATE INDEX IF NOT EXISTS idx_tokens_task_id ON tokens(task_id);
+CREATE INDEX IF NOT EXISTS idx_tokens_tuple ON tokens(chain, contract_address, token_id);
