@@ -550,7 +550,7 @@ impl Db {
     }
 
     /// Mark IPFS pins as being deleted (similar to start_deletion but for IPFS pins subresource)
-    pub async fn start_pin_request_deletions(&self, task_id: &str) -> Result<(), sqlx::Error> {
+    pub async fn start_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
         let row = sqlx::query(
             r#"
             WITH pr_inprog AS (
@@ -1723,8 +1723,8 @@ impl Database for Db {
         Db::start_archive_request_deletion(self, task_id).await
     }
 
-    async fn start_pin_request_deletions(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::start_pin_request_deletions(self, task_id).await
+    async fn start_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::start_pin_request_deletion(self, task_id).await
     }
 
     async fn complete_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {

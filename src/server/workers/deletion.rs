@@ -60,7 +60,7 @@ pub async fn start_deletion_for_scope<DB: Database + ?Sized>(
         }
         StorageMode::Ipfs => {
             if storage_mode == "full" {
-                db.start_pin_request_deletions(task_id).await
+                db.start_pin_request_deletion(task_id).await
             } else if storage_mode == "ipfs" {
                 db.start_deletion(task_id).await
             } else {
@@ -637,7 +637,7 @@ mod tests {
     #[tokio::test]
     async fn start_deletion_for_scope_rejects_when_in_progress_ipfs() {
         let mut mock_db = MockDatabase::default();
-        mock_db.set_start_pin_request_deletions_error(Some(
+        mock_db.set_start_pin_request_deletion_error(Some(
             "in_progress task cannot be deleted".to_string(),
         ));
         let task_id = "test_task";
