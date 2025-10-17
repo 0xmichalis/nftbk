@@ -6,6 +6,25 @@ pub struct GatewayUrl {
     pub bearer_token: Option<String>,
 }
 
+fn is_valid_cid(cid: &str) -> bool {
+    // CIDv0: 46 chars, starts with Qm, base58btc charset (no 0, O, I, l)
+    if cid.len() == 46 && cid.starts_with("Qm") {
+        const BASE58BTC: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+        if cid.chars().all(|c| BASE58BTC.contains(c)) {
+            return true;
+        }
+    }
+    // CIDv1 (most common): base32lower, typically starts with bafy
+    if cid.starts_with("bafy")
+        && cid
+            .chars()
+            .all(|c: char| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
+    {
+        return true;
+    }
+    false
+}
+
 fn construct_gateway_url(ipfs_path: &str, gateway: &IpfsGatewayConfig) -> String {
     match gateway.gateway_type {
         IpfsGatewayType::Path => {
@@ -22,21 +41,6 @@ fn construct_gateway_url(ipfs_path: &str, gateway: &IpfsGatewayConfig) -> String
             format!("https://{hash}.ipfs.{base_domain}{path_part}")
         }
     }
-}
-
-pub fn generate_url_for_gateways(
-    url: &str,
-    gateways: &[IpfsGatewayConfig],
-) -> Option<Vec<GatewayUrl>> {
-    extract_ipfs_path_from_gateway_url(url).map(|ipfs_path| {
-        gateways
-            .iter()
-            .map(|gw| GatewayUrl {
-                url: construct_gateway_url(&ipfs_path, gw),
-                bearer_token: gw.resolve_bearer_token(),
-            })
-            .collect()
-    })
 }
 
 fn extract_ipfs_path_from_gateway_url(url: &str) -> Option<String> {
@@ -87,8 +91,19 @@ fn extract_ipfs_path_from_gateway_url(url: &str) -> Option<String> {
     }
 }
 
-pub fn extract_ipfs_cid(url: &str) -> Option<String> {
-    extract_ipfs_path(url).map(|s| s.split('/').next().unwrap_or("").to_string())
+pub fn generate_url_for_gateways(
+    url: &str,
+    gateways: &[IpfsGatewayConfig],
+) -> Option<Vec<GatewayUrl>> {
+    extract_ipfs_path_from_gateway_url(url).map(|ipfs_path| {
+        gateways
+            .iter()
+            .map(|gw| GatewayUrl {
+                url: construct_gateway_url(&ipfs_path, gw),
+                bearer_token: gw.resolve_bearer_token(),
+            })
+            .collect()
+    })
 }
 
 fn extract_ipfs_path(url: &str) -> Option<String> {
@@ -111,23 +126,8 @@ fn extract_ipfs_path(url: &str) -> Option<String> {
     None
 }
 
-fn is_valid_cid(cid: &str) -> bool {
-    // CIDv0: 46 chars, starts with Qm, base58btc charset (no 0, O, I, l)
-    if cid.len() == 46 && cid.starts_with("Qm") {
-        const BASE58BTC: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-        if cid.chars().all(|c| BASE58BTC.contains(c)) {
-            return true;
-        }
-    }
-    // CIDv1 (most common): base32lower, typically starts with bafy
-    if cid.starts_with("bafy")
-        && cid
-            .chars()
-            .all(|c: char| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
-    {
-        return true;
-    }
-    false
+pub fn extract_ipfs_cid(url: &str) -> Option<String> {
+    extract_ipfs_path(url).map(|s| s.split('/').next().unwrap_or("").to_string())
 }
 
 pub fn get_ipfs_gateway_urls_with_gateways(
