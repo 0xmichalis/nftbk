@@ -44,34 +44,34 @@ fn default_limit() -> u32 {
              ("X-Total-Count" = u32, description = "Total number of items before pagination")
          )
         ),
-        (status = 401, description = "Missing user DID", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 401, description = "Missing requestor", body = ApiProblem, content_type = "application/problem+json"),
         (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
     tag = "backups",
     security(("bearer_auth" = []))
 )]
 pub async fn handle_backups(
-    Extension(user_did): Extension<Option<String>>,
+    Extension(requestor): Extension<Option<String>>,
     State(state): State<AppState>,
     Query(query): Query<BackupsQuery>,
 ) -> impl IntoResponse {
-    let user_did = match user_did {
-        Some(did) if !did.is_empty() => did,
+    let requestor = match requestor {
+        Some(r) if !r.is_empty() => r,
         _ => {
             let problem = ProblemJson::from_status(
                 StatusCode::UNAUTHORIZED,
-                Some("Missing user DID".to_string()),
+                Some("Missing requestor".to_string()),
                 Some("/v1/backups".to_string()),
             );
             return problem.into_response();
         }
     };
-    handle_backups_core(&*state.db, &user_did, query.page, query.limit).await
+    handle_backups_core(&*state.db, &requestor, query.page, query.limit).await
 }
 
 async fn handle_backups_core<DB: Database + ?Sized>(
     db: &DB,
-    user_did: &str,
+    requestor: &str,
     page: u32,
     limit: u32,
 ) -> axum::response::Response {
@@ -79,7 +79,7 @@ async fn handle_backups_core<DB: Database + ?Sized>(
     let page = page.max(1);
     let offset = ((page - 1) * limit) as i64;
     match db
-        .list_requestor_backup_tasks_paginated(user_did, limit as i64, offset)
+        .list_requestor_backup_tasks_paginated(requestor, limit as i64, offset)
         .await
     {
         Ok((items, total)) => {

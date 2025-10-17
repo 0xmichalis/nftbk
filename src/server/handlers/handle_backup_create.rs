@@ -126,6 +126,7 @@ async fn ensure_backup_exists<DB: Database + ?Sized>(
         (status = 202, description = "Backup task accepted and queued", body = BackupCreateResponse),
         (status = 200, description = "Backup already exists or in progress", body = BackupCreateResponse),
         (status = 400, description = "Invalid request", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 403, description = "Requestor does not match task owner", body = ApiProblem, content_type = "application/problem+json"),
         (status = 409, description = "Invalid scope for existing task", body = ApiProblem, content_type = "application/problem+json"),
         (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
@@ -202,6 +203,16 @@ async fn handle_backup_create_core<DB: Database + ?Sized>(
     let existing_meta: Option<crate::server::database::BackupTask> =
         db.get_backup_task(&task_id).await.unwrap_or_default();
     if let Some(task_meta) = existing_meta.clone() {
+        // Ensure the requestor matches the existing task owner
+        if !task_meta.requestor.is_empty() && task_meta.requestor != requestor_str {
+            let problem = ProblemJson::from_status(
+                StatusCode::FORBIDDEN,
+                Some("Requestor does not match task owner".to_string()),
+                Some(format!("/v1/backups/{task_id}")),
+            );
+            return problem.into_response();
+        }
+
         if validate_scope(&storage_mode, &task_meta) {
             let problem = ProblemJson::from_status(
                 StatusCode::CONFLICT,
@@ -708,7 +719,7 @@ mod handle_backup_core_tests {
             task_id: "test".to_string(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
-            requestor: "test".to_string(),
+            requestor: "did:test".to_string(),
             nft_count: 0,
             tokens: serde_json::Value::Null,
             archive_status: Some("done".to_string()),
@@ -747,13 +758,58 @@ mod handle_backup_core_tests {
     }
 
     #[tokio::test]
+    async fn returns_403_when_existing_task_owner_mismatch() {
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(Some(crate::server::database::BackupTask {
+            task_id: "towner".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            requestor: "did:privy:bob".to_string(),
+            nft_count: 1,
+            tokens: serde_json::json!([]),
+            archive_status: Some("done".to_string()),
+            ipfs_status: None,
+            archive_error_log: None,
+            ipfs_error_log: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
+            storage_mode: "archive".to_string(),
+            archive_format: Some("zip".to_string()),
+            expires_at: None,
+            archive_deleted_at: None,
+            pins_deleted_at: None,
+        }));
+        let (tx, _rx) = mpsc::channel(1);
+        let req = BackupRequest {
+            tokens: vec![Tokens {
+                chain: "ethereum".to_string(),
+                tokens: vec!["0xabc:1".to_string()],
+            }],
+            pin_on_ipfs: false,
+            create_archive: true,
+        };
+        let headers = HeaderMap::new();
+        let resp = super::handle_backup_create_core(
+            &db,
+            &tx,
+            Some("did:privy:alice".to_string()),
+            &headers,
+            req,
+            7,
+        )
+        .await
+        .into_response();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
     async fn returns_200_when_in_progress() {
         let mut db = MockDatabase::default();
         db.set_get_backup_task_result(Some(crate::server::database::BackupTask {
             task_id: "test".to_string(),
             created_at: chrono::Utc::now(),
             updated_at: chrono::Utc::now(),
-            requestor: "did:privy:alice".to_string(),
+            requestor: "did:test".to_string(),
             nft_count: 1,
             tokens: serde_json::json!([]),
             archive_status: Some("in_progress".to_string()),

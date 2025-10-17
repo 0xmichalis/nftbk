@@ -9,6 +9,7 @@ use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, BackupCreateResponse, BackupRequest, ProblemJson};
 use crate::server::database::r#trait::Database;
+use crate::server::handlers::verify_requestor_owns_task;
 use crate::server::{
     parse_scope, AppState, BackupTask, BackupTaskOrShutdown, StorageMode, TaskType, Tokens,
 };
@@ -118,38 +119,18 @@ async fn handle_backup_retries_core<DB: Database + ?Sized>(
     requestor: Option<String>,
     retention_days: u64,
 ) -> axum::response::Response {
-    // Fetch metadata from DB once
-    let meta = match db.get_backup_task(task_id).await {
-        Ok(Some(m)) => m,
-        Ok(None) => {
-            let problem = ProblemJson::from_status(
-                StatusCode::NOT_FOUND,
-                Some("Metadata not found".to_string()),
-                Some(format!("/v1/backups/{task_id}/retries")),
-            );
-            return problem.into_response();
-        }
-        Err(_) => {
-            let problem = ProblemJson::from_status(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Some("Failed to read metadata from DB".to_string()),
-                Some(format!("/v1/backups/{task_id}/retries")),
-            );
-            return problem.into_response();
-        }
-    };
-
-    // Ensure the requestor matches the one in the metadata
-    let req_requestor = requestor.clone().unwrap_or_default();
-    let meta_requestor = meta.requestor.clone();
-    if !meta_requestor.is_empty() && req_requestor != meta_requestor {
-        let problem = ProblemJson::from_status(
-            StatusCode::FORBIDDEN,
-            Some("Requestor does not match task owner".to_string()),
-            Some(format!("/v1/backups/{task_id}/retries")),
-        );
-        return problem.into_response();
+    // Verify ownership and get metadata
+    let (meta, problem) = verify_requestor_owns_task(
+        db,
+        task_id,
+        requestor.clone(),
+        &format!("/v1/backups/{task_id}/retries"),
+    )
+    .await;
+    if let Some(resp) = problem {
+        return resp;
     }
+    let meta = meta.unwrap();
 
     let scope = scope
         .clone()

@@ -1,10 +1,11 @@
 use axum::http::{HeaderMap, StatusCode as AxumStatusCode, StatusCode};
 use axum::response::IntoResponse;
 use axum::{
-    extract::{Path as AxumPath, Query as AxumQuery, State},
+    extract::{Extension, Path as AxumPath, Query as AxumQuery, State},
     Json,
 };
 
+use super::verify_requestor_owns_task;
 use crate::server::api::{ApiProblem, BackupResponse, ProblemJson, Tokens};
 use crate::server::database::r#trait::Database;
 use crate::server::AppState;
@@ -42,6 +43,8 @@ fn default_limit() -> u32 {
                 ("X-Total-Tokens" = u32, description = "Total number of tokens for this task before pagination")
             )
         ),
+        (status = 401, description = "Requestor missing or unauthorized", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 403, description = "Requestor does not match task owner", body = ApiProblem, content_type = "application/problem+json"),
         (status = 404, description = "Backup not found", body = ApiProblem, content_type = "application/problem+json"),
         (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
     ),
@@ -52,7 +55,20 @@ pub async fn handle_backup(
     State(state): State<AppState>,
     AxumPath(task_id): AxumPath<String>,
     AxumQuery(TaskTokensQuery { page, limit }): AxumQuery<TaskTokensQuery>,
+    Extension(requestor): Extension<Option<String>>,
 ) -> axum::response::Response {
+    // Ownership check before returning backup details
+    let (_meta, problem) = verify_requestor_owns_task(
+        &*state.db,
+        &task_id,
+        requestor,
+        &format!("/v1/backups/{task_id}"),
+    )
+    .await;
+    if let Some(resp) = problem {
+        return resp;
+    }
+
     match handle_backup_core(&*state.db, &task_id, page, limit).await {
         Ok(json) => {
             // Build pagination headers
@@ -169,6 +185,7 @@ mod handle_status_core_tests {
     use crate::server::api::BackupResponse;
     use crate::server::database::r#trait::MockDatabase;
     use crate::server::database::BackupTask;
+    use crate::server::handlers::verify_requestor_owns_task;
     use axum::http::StatusCode as AxumStatusCode;
     use chrono::{TimeZone, Utc};
 
@@ -239,5 +256,51 @@ mod handle_status_core_tests {
         db.set_get_backup_task_error(Some("Database error".to_string()));
         let err = handle_status_core(&db, "t1", 1, 50).await.err().unwrap();
         assert_eq!(err, AxumStatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[tokio::test]
+    async fn verify_ownership_returns_404_when_missing() {
+        let db = MockDatabase::default();
+        let (_meta, problem) = verify_requestor_owns_task(
+            &db,
+            "missing",
+            Some("did:privy:alice".to_string()),
+            "/v1/backups/missing",
+        )
+        .await;
+        let resp = problem.unwrap();
+        assert_eq!(resp.status(), AxumStatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn verify_ownership_returns_403_on_mismatch() {
+        let mut db = MockDatabase::default();
+        let mut m = sample_meta();
+        m.requestor = "did:privy:bob".to_string();
+        db.set_get_backup_task_result(Some(m));
+        let (_meta, problem) = verify_requestor_owns_task(
+            &db,
+            "t1",
+            Some("did:privy:alice".to_string()),
+            "/v1/backups/t1",
+        )
+        .await;
+        let resp = problem.unwrap();
+        assert_eq!(resp.status(), AxumStatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn verify_ownership_returns_500_on_db_error() {
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_error(Some("db error".to_string()));
+        let (_meta, problem) = verify_requestor_owns_task(
+            &db,
+            "t1",
+            Some("did:privy:alice".to_string()),
+            "/v1/backups/t1",
+        )
+        .await;
+        let resp = problem.unwrap();
+        assert_eq!(resp.status(), AxumStatusCode::INTERNAL_SERVER_ERROR);
     }
 }
