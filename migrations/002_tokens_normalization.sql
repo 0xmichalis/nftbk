@@ -45,7 +45,7 @@ WHERE pt.pin_id = p.id
   AND t.chain = pt.chain
   AND t.contract_address = pt.contract_address
   AND t.token_id = pt.token_id
-  AND p.token_id IS DISTINCT FROM t.id;
+  AND p.token_id IS NULL;
 
 -- Enforce FK and NOT NULL after backfill
 ALTER TABLE pins

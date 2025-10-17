@@ -85,7 +85,13 @@ async fn handle_backups_core<DB: Database + ?Sized>(
     {
         Ok((items, total)) => {
             let mut headers = HeaderMap::new();
-            headers.insert("X-Total-Count", total.to_string().parse().unwrap());
+            headers.insert(
+                "X-Total-Count",
+                total
+                    .to_string()
+                    .parse()
+                    .expect("Failed to parse X-Total-Count header value from total count"),
+            );
             // Build Link header (relative URLs)
             let mut links: Vec<String> = Vec::new();
             let last_page = total.div_ceil(limit).max(1);
@@ -104,7 +110,19 @@ async fn handle_backups_core<DB: Database + ?Sized>(
                 ));
             }
             if !links.is_empty() {
-                headers.insert("Link", links.join(", ").parse().unwrap());
+                match links.join(", ").parse() {
+                    Ok(link_header) => {
+                        headers.insert("Link", link_header);
+                    }
+                    Err(_) => {
+                        let problem = ProblemJson::from_status(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Some("Failed to parse Link header value".to_string()),
+                            Some("/v1/backups".to_string()),
+                        );
+                        return problem.into_response();
+                    }
+                }
             }
             (StatusCode::OK, headers, Json(items)).into_response()
         }

@@ -58,7 +58,13 @@ pub async fn handle_status(
             // Build pagination headers
             let total = json.0.total_tokens;
             let mut headers = HeaderMap::new();
-            headers.insert("X-Total-Tokens", total.to_string().parse().unwrap());
+            headers.insert(
+                "X-Total-Tokens",
+                total
+                    .to_string()
+                    .parse()
+                    .expect("Failed to parse X-Total-Tokens header value from total token count"),
+            );
 
             let last_page = (if limit == 0 { 1 } else { total.div_ceil(limit) }).max(1);
             let mut links: Vec<String> = Vec::new();
@@ -79,7 +85,19 @@ pub async fn handle_status(
                 ));
             }
             if !links.is_empty() {
-                headers.insert("Link", links.join(", ").parse().unwrap());
+                match links.join(", ").parse() {
+                    Ok(link_header) => {
+                        headers.insert("Link", link_header);
+                    }
+                    Err(_) => {
+                        let problem = ProblemJson::from_status(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Some("Failed to parse Link header value".to_string()),
+                            Some(format!("/v1/backups/{task_id}")),
+                        );
+                        return problem.into_response();
+                    }
+                }
             }
 
             (StatusCode::OK, headers, json).into_response()

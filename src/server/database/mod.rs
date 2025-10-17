@@ -699,7 +699,7 @@ impl Db {
         )
         .fetch_one(&self.pool)
         .await?;
-        let total: u32 = (total_row.count.unwrap_or(0) as i64).max(0) as u32;
+        let total: u32 = total_row.count.unwrap_or(0) as u32;
 
         // Page of tokens
         let token_rows = sqlx::query(
@@ -778,7 +778,7 @@ impl Db {
         )
         .fetch_one(&self.pool)
         .await?;
-        let total: u32 = (total_row.count.unwrap_or(0) as i64).max(0) as u32;
+        let total: u32 = total_row.count.unwrap_or(0) as u32;
 
         let rows = sqlx::query(
             r#"
