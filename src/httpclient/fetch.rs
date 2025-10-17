@@ -1,7 +1,7 @@
 use tracing::{info, warn};
 
 use crate::ipfs::config::IpfsGatewayConfig;
-use crate::ipfs::url::{all_ipfs_gateway_urls_with_gateways, GatewayUrl};
+use crate::ipfs::url::{generate_url_for_gateways, GatewayUrl};
 
 pub(crate) async fn fetch_url(
     url: &str,
@@ -72,7 +72,7 @@ pub(crate) async fn retry_with_gateways(
     original_error: anyhow::Error,
     gateways: &[IpfsGatewayConfig],
 ) -> anyhow::Result<reqwest::Response> {
-    let gateway_urls = match all_ipfs_gateway_urls_with_gateways(url, gateways) {
+    let gateway_urls = match generate_url_for_gateways(url, gateways) {
         Some(urls) => {
             warn!(
                 "IPFS gateway error for {}, retrying with other gateways: {}",
@@ -204,7 +204,7 @@ mod try_fetch_response_tests {
         let server_b = MockServer::start().await;
         let dead_gateway_base = "http://127.0.0.1:9"; // simulate connect error
 
-        let content_path = "QmHashRetry/ok";
+        let content_path = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/ok";
         let original_url = format!("{}/ipfs/{}", dead_gateway_base, content_path);
 
         // B returns 200 for the same IPFS path
@@ -258,7 +258,7 @@ mod retry_with_gateways_tests {
         let server_b = MockServer::start().await;
         let server_c = MockServer::start().await;
 
-        let content_path = "QmHash123/ok";
+        let content_path = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/ok";
         let original_url = format!("{}/ipfs/{}", server_a.uri(), content_path);
 
         // B returns 200
@@ -291,7 +291,7 @@ mod retry_with_gateways_tests {
         let server_b = MockServer::start().await;
         let server_c = MockServer::start().await;
 
-        let content_path = "QmHash123/ok2";
+        let content_path = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/ok2";
         let original_url = format!("{}/ipfs/{}", server_a.uri(), content_path);
 
         // B returns 500
@@ -333,7 +333,7 @@ mod retry_with_gateways_tests {
         // Use an unroutable/closed port for B to simulate network error
         let dead_gateway_base = "http://127.0.0.1:9"; // port 9 (discard) likely closed
 
-        let content_path = "QmHash123/ok3";
+        let content_path = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/ok3";
         let original_url = format!("{}/ipfs/{}", server_a.uri(), content_path);
 
         // C returns 200
@@ -366,7 +366,7 @@ mod retry_with_gateways_tests {
         let server_b = MockServer::start().await;
         let server_c = MockServer::start().await;
 
-        let content_path = "QmHash123/fail";
+        let content_path = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/fail";
         let original_url = format!("{}/ipfs/{}", server_a.uri(), content_path);
 
         // B returns 500
