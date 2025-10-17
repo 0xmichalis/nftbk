@@ -13,19 +13,12 @@ use crate::server::AppState;
 
 #[derive(Deserialize, utoipa::ToSchema)]
 pub struct BackupsQuery {
-    /// Whether to include token details in the response
-    #[serde(default = "default_include_tokens")]
-    include_tokens: bool,
     /// Page number starting at 1
     #[serde(default = "default_page")]
     page: u32,
     /// Items per page (max 100)
     #[serde(default = "default_limit")]
     limit: u32,
-}
-
-fn default_include_tokens() -> bool {
-    false
 }
 
 fn default_page() -> u32 {
@@ -41,7 +34,6 @@ fn default_limit() -> u32 {
     get,
     path = "/v1/backups",
     params(
-        ("include_tokens" = Option<bool>, Query, description = "Whether to include token details in the response"),
         ("page" = Option<u32>, Query, description = "Page number starting at 1 (default 1)"),
         ("limit" = Option<u32>, Query, description = "Items per page, max 100 (default 50)")
     ),
@@ -75,20 +67,12 @@ pub async fn handle_backups(
             return problem.into_response();
         }
     };
-    handle_backups_core(
-        &*state.db,
-        &user_did,
-        query.include_tokens,
-        query.page,
-        query.limit,
-    )
-    .await
+    handle_backups_core(&*state.db, &user_did, query.page, query.limit).await
 }
 
 async fn handle_backups_core<DB: Database + ?Sized>(
     db: &DB,
     user_did: &str,
-    include_tokens: bool,
     page: u32,
     limit: u32,
 ) -> axum::response::Response {
@@ -96,33 +80,49 @@ async fn handle_backups_core<DB: Database + ?Sized>(
     let page = page.max(1);
     let offset = ((page - 1) * limit) as i64;
     match db
-        .list_requestor_backup_tasks_paginated(user_did, include_tokens, limit as i64, offset)
+        .list_requestor_backup_tasks_paginated(user_did, limit as i64, offset)
         .await
     {
         Ok((items, total)) => {
             let mut headers = HeaderMap::new();
-            headers.insert("X-Total-Count", total.to_string().parse().unwrap());
+            headers.insert(
+                "X-Total-Count",
+                total
+                    .to_string()
+                    .parse()
+                    .expect("Failed to parse X-Total-Count header value from total count"),
+            );
             // Build Link header (relative URLs)
             let mut links: Vec<String> = Vec::new();
             let last_page = total.div_ceil(limit).max(1);
             if page > 1 {
                 links.push(format!(
-                    "</v1/backups?page={}&limit={}&include_tokens={}>; rel=\"prev\"",
+                    "</v1/backups?page={}&limit={}>; rel=\"prev\"",
                     page - 1,
-                    limit,
-                    include_tokens
+                    limit
                 ));
             }
             if page < last_page {
                 links.push(format!(
-                    "</v1/backups?page={}&limit={}&include_tokens={}>; rel=\"next\"",
+                    "</v1/backups?page={}&limit={}>; rel=\"next\"",
                     page + 1,
-                    limit,
-                    include_tokens
+                    limit
                 ));
             }
             if !links.is_empty() {
-                headers.insert("Link", links.join(", ").parse().unwrap());
+                match links.join(", ").parse() {
+                    Ok(link_header) => {
+                        headers.insert("Link", link_header);
+                    }
+                    Err(_) => {
+                        let problem = ProblemJson::from_status(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Some("Failed to parse Link header value".to_string()),
+                            Some("/v1/backups".to_string()),
+                        );
+                        return problem.into_response();
+                    }
+                }
             }
             (StatusCode::OK, headers, Json(items)).into_response()
         }
@@ -148,7 +148,7 @@ mod handle_backups_core_mockdb_tests {
     async fn returns_500_problem_on_db_error() {
         let mut db = MockDatabase::default();
         db.set_list_requestor_backup_tasks_paginated_error(Some("Database error".to_string()));
-        let resp = handle_backups_core(&db, "did:privy:me", false, 1, 50)
+        let resp = handle_backups_core(&db, "did:privy:me", 1, 50)
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -186,7 +186,7 @@ mod handle_backups_core_mockdb_tests {
         }
         let mut db = MockDatabase::default();
         db.set_list_requestor_backup_tasks_paginated_result((recs, 5));
-        let resp = handle_backups_core(&db, "did:privy:me", false, 2, 2)
+        let resp = handle_backups_core(&db, "did:privy:me", 2, 2)
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::OK);

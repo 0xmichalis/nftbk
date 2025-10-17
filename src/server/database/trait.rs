@@ -23,6 +23,14 @@ pub trait Database {
 
     async fn get_backup_task(&self, task_id: &str) -> Result<Option<BackupTask>, sqlx::Error>;
 
+    /// Fetch a backup task and a paginated slice of its tokens
+    async fn get_backup_task_with_tokens(
+        &self,
+        task_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Option<(BackupTask, u32)>, sqlx::Error>;
+
     async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error>;
 
     async fn get_incomplete_backup_tasks(&self) -> Result<Vec<BackupTask>, sqlx::Error>;
@@ -30,7 +38,6 @@ pub trait Database {
     async fn list_requestor_backup_tasks_paginated(
         &self,
         requestor: &str,
-        include_tokens: bool,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<BackupTask>, u32), sqlx::Error>;
@@ -433,6 +440,35 @@ impl Database for MockDatabase {
         }
     }
 
+    async fn get_backup_task_with_tokens(
+        &self,
+        task_id: &str,
+        _limit: i64,
+        _offset: i64,
+    ) -> Result<Option<(BackupTask, u32)>, sqlx::Error> {
+        // Reuse get_backup_task_result and synthesize a total count
+        match self.get_backup_task(task_id).await? {
+            Some(bt) => {
+                let total = bt
+                    .tokens
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .map(|v| {
+                                v.get("tokens")
+                                    .and_then(|t| t.as_array())
+                                    .map(|a| a.len())
+                                    .unwrap_or(0)
+                            })
+                            .sum::<usize>() as u32
+                    })
+                    .unwrap_or(0);
+                Ok(Some((bt, total)))
+            }
+            None => Ok(None),
+        }
+    }
+
     async fn delete_backup_task(&self, _task_id: &str) -> Result<(), sqlx::Error> {
         if let Some(error) = &self.delete_backup_task_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
@@ -453,7 +489,6 @@ impl Database for MockDatabase {
     async fn list_requestor_backup_tasks_paginated(
         &self,
         _requestor: &str,
-        _include_tokens: bool,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<BackupTask>, u32), sqlx::Error> {
