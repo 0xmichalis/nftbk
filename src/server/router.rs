@@ -14,10 +14,10 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::envvar::is_defined;
 use crate::server::api::{
-    ApiProblem, BackupRequest, BackupResponse, ProblemJson, StatusResponse, Tokens,
+    ApiProblem, BackupCreateResponse, BackupRequest, BackupResponse, ProblemJson, Tokens,
 };
 use crate::server::auth::jwt::verify_jwt;
-use crate::server::database::{BackupTask, PinInfo, TokenWithPins};
+use crate::server::database::{PinInfo, TokenWithPins};
 use crate::server::handlers::handle_archive_download::{DownloadQuery, DownloadTokenResponse};
 use crate::server::handlers::handle_archive_download::{
     __path_handle_archive_download as __path_handle_download,
@@ -57,7 +57,7 @@ use crate::server::AppState;
         handle_pins,
     ),
     components(
-        schemas(BackupRequest, BackupResponse, StatusResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinsResponse, BackupTask, TokenWithPins, PinInfo, ApiProblem)
+        schemas(BackupRequest, BackupCreateResponse, BackupResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinsResponse, TokenWithPins, PinInfo, ApiProblem)
     ),
     tags(
         (name = "backups", description = "General backup operations"),

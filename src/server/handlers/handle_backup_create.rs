@@ -7,7 +7,7 @@ use serde_json;
 use std::collections::HashSet;
 use tracing::{debug, error, info};
 
-use crate::server::api::{ApiProblem, BackupRequest, BackupResponse, ProblemJson};
+use crate::server::api::{ApiProblem, BackupCreateResponse, BackupRequest, ProblemJson};
 use crate::server::archive::negotiate_archive_format;
 use crate::server::database::r#trait::Database;
 use crate::server::hashing::compute_task_id;
@@ -123,8 +123,8 @@ async fn ensure_backup_exists<DB: Database + ?Sized>(
         ("user-agent" = Option<String>, Header, description = "Used as a heuristic fallback to select archive format when Accept is not provided.")
     ),
     responses(
-        (status = 202, description = "Backup task accepted and queued", body = BackupResponse),
-        (status = 200, description = "Backup already exists or in progress", body = BackupResponse),
+        (status = 202, description = "Backup task accepted and queued", body = BackupCreateResponse),
+        (status = 200, description = "Backup already exists or in progress", body = BackupCreateResponse),
         (status = 400, description = "Invalid request", body = ApiProblem, content_type = "application/problem+json"),
         (status = 409, description = "Invalid scope for existing task", body = ApiProblem, content_type = "application/problem+json"),
         (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),
@@ -215,11 +215,13 @@ async fn handle_backup_create_core<DB: Database + ?Sized>(
             match status.as_str() {
                 "in_progress" => {
                     debug!("Duplicate backup request, returning existing task_id {task_id}");
-                    return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
+                    return (StatusCode::OK, Json(BackupCreateResponse { task_id }))
+                        .into_response();
                 }
                 "done" => {
                     debug!("Backup already completed, returning existing task_id {task_id}");
-                    return (StatusCode::OK, Json(BackupResponse { task_id })).into_response();
+                    return (StatusCode::OK, Json(BackupCreateResponse { task_id }))
+                        .into_response();
                 }
                 "error" | "expired" => {
                     let problem = ProblemJson::from_status(
@@ -313,7 +315,7 @@ async fn handle_backup_create_core<DB: Database + ?Sized>(
     (
         StatusCode::ACCEPTED,
         headers,
-        Json(BackupResponse { task_id }),
+        Json(BackupCreateResponse { task_id }),
     )
         .into_response()
 }

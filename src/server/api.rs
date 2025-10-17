@@ -1,6 +1,7 @@
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::response::IntoResponse;
 use axum::Json;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
@@ -32,7 +33,7 @@ fn default_true() -> bool {
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct BackupResponse {
+pub struct BackupCreateResponse {
     /// Unique identifier for the backup task
     pub task_id: String,
 }
@@ -46,10 +47,33 @@ pub struct SubresourceStatus {
     pub fatal_error: Option<String>,
     /// Aggregated non-fatal error log for the subresource
     pub error_log: Option<String>,
+    /// When deletion for this subresource was initiated (ISO 8601)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted_at: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct Archive {
+    /// Archive format (zip, tar.gz)
+    pub format: Option<String>,
+    /// When the archive expires (ISO 8601)
+    pub expires_at: Option<String>,
+    /// Archive status/errors
+    pub status: SubresourceStatus,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
+pub struct Pins {
+    /// IPFS pins status/errors
+    pub status: SubresourceStatus,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
-pub struct StatusResponse {
+pub struct BackupResponse {
+    /// Unique identifier for the backup task
+    pub task_id: String,
+    /// When the backup task was created (ISO 8601)
+    pub created_at: String,
     /// Paginated tokens for this task (current page)
     pub tokens: Vec<Tokens>,
     /// Total number of tokens for this task (for pagination)
@@ -58,10 +82,161 @@ pub struct StatusResponse {
     pub page: u32,
     /// Page size
     pub limit: u32,
-    /// Archive subresource status/errors
-    pub archive: SubresourceStatus,
-    /// IPFS subresource status/errors
-    pub ipfs: SubresourceStatus,
+    /// Archive info
+    pub archive: Archive,
+    /// IPFS pins info
+    pub pins: Pins,
+}
+
+impl BackupResponse {
+    pub fn from_backup_task(
+        task: &crate::server::database::BackupTask,
+        tokens: Vec<Tokens>,
+        total_tokens: u32,
+        page: u32,
+        limit: u32,
+    ) -> Self {
+        let archive_status = SubresourceStatus {
+            status: task.archive_status.clone(),
+            fatal_error: task.archive_fatal_error.clone(),
+            error_log: task.archive_error_log.clone(),
+            deleted_at: task
+                .archive_deleted_at
+                .as_ref()
+                .map(|d: &DateTime<Utc>| d.to_rfc3339()),
+        };
+        let pins_status = SubresourceStatus {
+            status: task.ipfs_status.clone(),
+            fatal_error: task.ipfs_fatal_error.clone(),
+            error_log: task.ipfs_error_log.clone(),
+            deleted_at: task
+                .pins_deleted_at
+                .as_ref()
+                .map(|d: &DateTime<Utc>| d.to_rfc3339()),
+        };
+        let archive = Archive {
+            status: archive_status,
+            format: task.archive_format.clone(),
+            expires_at: task.expires_at.as_ref().map(|d| d.to_rfc3339()),
+        };
+        let pins = Pins {
+            status: pins_status,
+        };
+        BackupResponse {
+            task_id: task.task_id.clone(),
+            created_at: task.created_at.to_rfc3339(),
+            tokens,
+            total_tokens,
+            page,
+            limit,
+            archive,
+            pins,
+        }
+    }
+}
+
+#[cfg(test)]
+mod from_backup_task_tests {
+    use super::{BackupResponse, Tokens};
+    use crate::server::database::BackupTask;
+    use chrono::{TimeZone, Utc};
+
+    fn sample_task() -> BackupTask {
+        BackupTask {
+            task_id: "task123".to_string(),
+            created_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+            updated_at: Utc.timestamp_opt(1_700_000_500, 0).unwrap(),
+            requestor: "did:privy:alice".to_string(),
+            nft_count: 3,
+            tokens: serde_json::json!([]),
+            archive_status: Some("done".to_string()),
+            ipfs_status: Some("in_progress".to_string()),
+            archive_error_log: Some("arch warnings".to_string()),
+            ipfs_error_log: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: Some("provider error".to_string()),
+            storage_mode: "full".to_string(),
+            archive_format: Some("zip".to_string()),
+            expires_at: Some(Utc.timestamp_opt(1_700_086_400, 0).unwrap()), // +1 day
+            archive_deleted_at: Some(Utc.timestamp_opt(1_700_000_800, 0).unwrap()),
+            pins_deleted_at: Some(Utc.timestamp_opt(1_700_000_900, 0).unwrap()),
+        }
+    }
+
+    #[test]
+    fn maps_all_fields_with_some_values() {
+        let task = sample_task();
+        let tokens = vec![Tokens {
+            chain: "ethereum".to_string(),
+            tokens: vec!["0xabc:1".to_string(), "0xabc:2".to_string()],
+        }];
+        let resp = BackupResponse::from_backup_task(&task, tokens.clone(), 3, 2, 50);
+        assert_eq!(resp.task_id, task.task_id);
+        assert_eq!(resp.created_at, task.created_at.to_rfc3339());
+        assert_eq!(resp.total_tokens, 3);
+        assert_eq!(resp.page, 2);
+        assert_eq!(resp.limit, 50);
+        assert_eq!(resp.tokens.len(), 1);
+        assert_eq!(resp.tokens[0].chain, "ethereum");
+        assert_eq!(resp.archive.format.as_deref(), Some("zip"));
+        assert_eq!(
+            resp.archive.expires_at.as_deref(),
+            Some(task.expires_at.unwrap().to_rfc3339().as_str())
+        );
+        // Archive status
+        assert_eq!(resp.archive.status.status.as_deref(), Some("done"));
+        assert_eq!(
+            resp.archive.status.error_log.as_deref(),
+            Some("arch warnings")
+        );
+        assert_eq!(resp.archive.status.fatal_error, None);
+        assert_eq!(
+            resp.archive.status.deleted_at.as_deref(),
+            Some(task.archive_deleted_at.unwrap().to_rfc3339().as_str())
+        );
+        // Pins status
+        assert_eq!(resp.pins.status.status.as_deref(), Some("in_progress"));
+        assert_eq!(resp.pins.status.error_log, None);
+        assert_eq!(
+            resp.pins.status.fatal_error.as_deref(),
+            Some("provider error")
+        );
+        assert_eq!(
+            resp.pins.status.deleted_at.as_deref(),
+            Some(task.pins_deleted_at.unwrap().to_rfc3339().as_str())
+        );
+    }
+
+    #[test]
+    fn maps_none_values_as_none() {
+        let mut task = sample_task();
+        task.archive_status = None;
+        task.ipfs_status = None;
+        task.archive_error_log = None;
+        task.ipfs_error_log = None;
+        task.archive_fatal_error = None;
+        task.ipfs_fatal_error = None;
+        task.archive_format = None;
+        task.expires_at = None;
+        task.archive_deleted_at = None;
+        task.pins_deleted_at = None;
+
+        let resp = BackupResponse::from_backup_task(&task, Vec::new(), 0, 1, 10);
+        assert_eq!(resp.archive.format, None);
+        assert_eq!(resp.archive.expires_at, None);
+        assert_eq!(resp.archive.status.status, None);
+        assert_eq!(resp.archive.status.error_log, None);
+        assert_eq!(resp.archive.status.fatal_error, None);
+        assert_eq!(resp.archive.status.deleted_at, None);
+        assert_eq!(resp.pins.status.status, None);
+        assert_eq!(resp.pins.status.error_log, None);
+        assert_eq!(resp.pins.status.fatal_error, None);
+        assert_eq!(resp.pins.status.deleted_at, None);
+        assert!(resp.tokens.is_empty());
+        assert_eq!(resp.total_tokens, 0);
+        assert_eq!(resp.page, 1);
+        assert_eq!(resp.limit, 10);
+    }
 }
 
 // RFC 7807 problem+json error shape

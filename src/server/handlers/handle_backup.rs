@@ -5,7 +5,7 @@ use axum::{
     Json,
 };
 
-use crate::server::api::{ApiProblem, ProblemJson, StatusResponse, SubresourceStatus, Tokens};
+use crate::server::api::{ApiProblem, BackupResponse, ProblemJson, Tokens};
 use crate::server::database::r#trait::Database;
 use crate::server::AppState;
 
@@ -36,7 +36,7 @@ fn default_limit() -> u32 {
         ("limit" = Option<u32>, Query, description = "Items per page, max 100 (default 50)")
     ),
     responses(
-        (status = 200, description = "Backup retrieved successfully", body = StatusResponse,
+        (status = 200, description = "Backup retrieved successfully", body = BackupResponse,
             headers(
                 ("Link" = String, description = "Pagination links per RFC 5988: rel=prev,next"),
                 ("X-Total-Tokens" = u32, description = "Total number of tokens for this task before pagination")
@@ -115,7 +115,7 @@ async fn handle_backup_core<DB: Database + ?Sized>(
     task_id: &str,
     page: u32,
     limit: u32,
-) -> Result<Json<StatusResponse>, AxumStatusCode> {
+) -> Result<Json<BackupResponse>, AxumStatusCode> {
     let limit = limit.clamp(1, 100);
     let page = page.max(1);
     let offset = ((page - 1) * limit) as i64;
@@ -128,16 +128,6 @@ async fn handle_backup_core<DB: Database + ?Sized>(
         Ok(Some(mt)) => mt,
         Ok(None) => return Err(AxumStatusCode::NOT_FOUND),
         Err(_) => return Err(AxumStatusCode::INTERNAL_SERVER_ERROR),
-    };
-    let archive = SubresourceStatus {
-        status: meta.archive_status.clone(),
-        fatal_error: meta.archive_fatal_error.clone(),
-        error_log: meta.archive_error_log.clone(),
-    };
-    let ipfs = SubresourceStatus {
-        status: meta.ipfs_status.clone(),
-        fatal_error: meta.ipfs_fatal_error.clone(),
-        error_log: meta.ipfs_error_log.clone(),
     };
     // Convert meta.tokens (Vec<{chain, tokens}>) into Vec<Tokens>
     let mut tokens_resp: Vec<Tokens> = Vec::new();
@@ -164,20 +154,19 @@ async fn handle_backup_core<DB: Database + ?Sized>(
         }
     }
 
-    Ok(Json(StatusResponse {
-        tokens: tokens_resp,
+    Ok(Json(BackupResponse::from_backup_task(
+        &meta,
+        tokens_resp,
         total_tokens,
         page,
         limit,
-        archive,
-        ipfs,
-    }))
+    )))
 }
 
 #[cfg(test)]
 mod handle_status_core_tests {
     use super::handle_backup_core as handle_status_core;
-    use crate::server::api::StatusResponse;
+    use crate::server::api::BackupResponse;
     use crate::server::database::r#trait::MockDatabase;
     use crate::server::database::BackupTask;
     use axum::http::StatusCode as AxumStatusCode;
@@ -211,12 +200,12 @@ mod handle_status_core_tests {
         db.set_get_backup_task_result(Some(sample_meta()));
         // Call the core with pagination; DB mock ignores it
         let resp = handle_status_core(&db, "t1", 1, 50).await.unwrap();
-        let StatusResponse { archive, ipfs, .. } = resp.0;
-        assert_eq!(archive.status.as_deref(), Some("done"));
-        assert!(archive.fatal_error.is_none());
+        let BackupResponse { archive, pins, .. } = resp.0;
+        assert_eq!(archive.status.status.as_deref(), Some("done"));
+        assert!(archive.status.fatal_error.is_none());
         // ipfs status is null when None
-        assert_eq!(ipfs.status, None);
-        assert!(ipfs.fatal_error.is_none());
+        assert_eq!(pins.status.status, None);
+        assert!(pins.status.fatal_error.is_none());
         // non-fatal logs are optional and omitted when none
     }
 
@@ -228,9 +217,9 @@ mod handle_status_core_tests {
         let mut db = MockDatabase::default();
         db.set_get_backup_task_result(Some(m));
         let resp = handle_status_core(&db, "t1", 1, 50).await.unwrap();
-        let StatusResponse { archive, ipfs, .. } = resp.0;
-        assert_eq!(archive.status, None);
-        assert_eq!(ipfs.status, None);
+        let BackupResponse { archive, pins, .. } = resp.0;
+        assert_eq!(archive.status.status, None);
+        assert_eq!(pins.status.status, None);
     }
 
     #[tokio::test]

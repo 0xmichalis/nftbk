@@ -6,57 +6,24 @@ use crate::server::database::r#trait::Database;
 
 pub mod r#trait;
 
-/// Combined view of backup_tasks + archive_requests
-#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
-#[schema(description = "Backup task information including metadata and status")]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BackupTask {
-    /// Unique identifier for the backup task
-    #[schema(example = "abc123def456")]
     pub task_id: String,
-    /// When the backup task was created (ISO 8601 timestamp)
-    #[schema(example = "2024-01-01T12:00:00Z")]
     pub created_at: DateTime<Utc>,
-    /// When the backup task was last updated (ISO 8601 timestamp)
-    #[schema(example = "2024-01-01T12:05:00Z")]
     pub updated_at: DateTime<Utc>,
-    /// User who requested the backup
-    #[schema(example = "user123")]
     pub requestor: String,
-    /// Number of NFTs in this backup task
-    #[schema(example = 42)]
     pub nft_count: i32,
-    /// Token details (only included if include_tokens=true)
     pub tokens: serde_json::Value,
-    /// Archive subresource status (in_progress, done, error, expired)
     pub archive_status: Option<String>,
-    /// IPFS subresource status (in_progress, done, error)
     pub ipfs_status: Option<String>,
-    /// Detailed archive error log if archive completed with some failures
-    #[schema(example = "Failed to write archive checksum file")]
     pub archive_error_log: Option<String>,
-    /// Detailed IPFS error log aggregated from pin requests
-    #[schema(
-        example = "Provider pinata failed: 401 Unauthorized\nProvider web3.storage failed: 429 Too Many Requests"
-    )]
     pub ipfs_error_log: Option<String>,
-    /// Archive subresource fatal error if backup failed completely at archive stage
     pub archive_fatal_error: Option<String>,
-    /// IPFS subresource fatal error if backup failed completely at IPFS stage
     pub ipfs_fatal_error: Option<String>,
-    /// Storage mode used for the backup (archive, ipfs, full)
-    #[schema(example = "archive")]
     pub storage_mode: String,
-    /// Archive format used for the backup (zip, tar.gz)
-    #[schema(example = "zip")]
     pub archive_format: Option<String>,
-    /// When the backup expires (if applicable, typically 7 days from creation)
-    #[schema(example = "2024-01-08T12:00:00Z")]
     pub expires_at: Option<DateTime<Utc>>,
-    /// When archive deletion was started (if applicable)
-    #[schema(example = "2024-01-02T10:00:00Z")]
     pub archive_deleted_at: Option<DateTime<Utc>>,
-    /// When IPFS pins deletion was started (if applicable)
-    #[schema(example = "2024-01-02T10:00:00Z")]
     pub pins_deleted_at: Option<DateTime<Utc>>,
 }
 
