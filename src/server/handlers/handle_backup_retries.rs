@@ -7,7 +7,7 @@ use axum::{
 };
 use tracing::{error, info};
 
-use crate::server::api::{ApiProblem, BackupRequest, BackupResponse, ProblemJson};
+use crate::server::api::{ApiProblem, BackupCreateResponse, BackupRequest, ProblemJson};
 use crate::server::database::r#trait::Database;
 use crate::server::{
     parse_scope, AppState, BackupTask, BackupTaskOrShutdown, StorageMode, TaskType, Tokens,
@@ -83,7 +83,7 @@ fn prepare_retry_task(
         ("scope" = Option<String>, Query, description = "Retry scope: archive | ipfs | full. If omitted, defaults to task's storage mode")
     ),
     responses(
-        (status = 202, description = "Backup retry initiated successfully", body = BackupResponse),
+        (status = 202, description = "Backup retry initiated successfully", body = BackupCreateResponse),
         (status = 403, description = "Requestor does not match task owner", body = ApiProblem, content_type = "application/problem+json"),
         (status = 404, description = "Task not found", body = ApiProblem, content_type = "application/problem+json"),
         (status = 409, description = "Task is in progress or being deleted", body = ApiProblem, content_type = "application/problem+json"),
@@ -196,7 +196,7 @@ async fn handle_backup_retries_core<DB: Database + ?Sized>(
     info!("Retrying backup task {task_id} (scope: {scope})");
     (
         StatusCode::ACCEPTED,
-        Json(BackupResponse {
+        Json(BackupCreateResponse {
             task_id: task_id.to_string(),
         }),
     )

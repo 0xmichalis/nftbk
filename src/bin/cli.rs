@@ -18,7 +18,7 @@ use nftbk::envvar::is_defined;
 use nftbk::ipfs::IpfsPinningConfig;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
-use nftbk::server::api::{BackupRequest, BackupResponse, StatusResponse, Tokens};
+use nftbk::server::api::{BackupCreateResponse, BackupRequest, BackupResponse, Tokens};
 use nftbk::server::archive::archive_format_from_user_agent;
 use nftbk::{ProcessManagementConfig, StorageConfig};
 
@@ -90,8 +90,8 @@ struct Args {
 }
 
 enum BackupStart {
-    Created(BackupResponse),
-    Exists(BackupResponse),
+    Created(BackupCreateResponse),
+    Exists(BackupCreateResponse),
     Conflict {
         task_id: String,
         retry_url: String,
@@ -323,7 +323,8 @@ async fn request_backup(
         .context("Failed to send backup request to server")?;
     let status = resp.status();
     if status.is_success() {
-        let backup_resp: BackupResponse = resp.json().await.context("Invalid server response")?;
+        let backup_resp: BackupCreateResponse =
+            resp.json().await.context("Invalid server response")?;
         if status.as_u16() == 201 {
             return Ok(BackupStart::Created(backup_resp));
         } else {
@@ -382,34 +383,44 @@ async fn wait_for_done_backup(
         match resp {
             Ok(r) => {
                 if r.status().is_success() {
-                    let status: StatusResponse = r.json().await.unwrap_or({
+                    let status: BackupResponse = r.json().await.unwrap_or({
                         // Fallback shape with nulls
-                        StatusResponse {
+                        BackupResponse {
+                            task_id: task_id.to_string(),
+                            created_at: String::new(),
                             tokens: Vec::new(),
                             total_tokens: 0,
                             page: 1,
                             limit: 50,
-                            archive: nftbk::server::api::SubresourceStatus {
-                                status: None,
-                                fatal_error: None,
-                                error_log: None,
+                            archive: nftbk::server::api::Archive {
+                                status: nftbk::server::api::SubresourceStatus {
+                                    status: None,
+                                    fatal_error: None,
+                                    error_log: None,
+                                    deleted_at: None,
+                                },
+                                format: None,
+                                expires_at: None,
                             },
-                            ipfs: nftbk::server::api::SubresourceStatus {
-                                status: None,
-                                fatal_error: None,
-                                error_log: None,
+                            pins: nftbk::server::api::Pins {
+                                status: nftbk::server::api::SubresourceStatus {
+                                    status: None,
+                                    fatal_error: None,
+                                    error_log: None,
+                                    deleted_at: None,
+                                },
                             },
                         }
                     });
                     // Aggregate a coarse "overall" view for UX: in_progress if any subresource is in_progress
-                    let archive_status = status.archive.status.as_deref();
-                    let ipfs_status = status.ipfs.status.as_deref();
+                    let archive_status = status.archive.status.status.as_deref();
+                    let ipfs_status = status.pins.status.status.as_deref();
                     let any_in_progress = matches!(archive_status, Some("in_progress"))
                         || matches!(ipfs_status, Some("in_progress"));
                     let any_error = matches!(archive_status, Some("error"))
                         || matches!(ipfs_status, Some("error"))
-                        || status.archive.fatal_error.is_some()
-                        || status.ipfs.fatal_error.is_some();
+                        || status.archive.status.fatal_error.is_some()
+                        || status.pins.status.fatal_error.is_some();
                     let all_done = matches!(archive_status, Some("done"))
                         && (ipfs_status.is_none() || matches!(ipfs_status, Some("done")));
                     if any_in_progress {
@@ -419,12 +430,12 @@ async fn wait_for_done_backup(
                         }
                     } else if all_done {
                         println!("Backup complete.");
-                        if let Some(ref a) = status.archive.error_log {
+                        if let Some(ref a) = status.archive.status.error_log {
                             if !a.is_empty() {
                                 warn!("{}", a);
                             }
                         }
-                        if let Some(ref i) = status.ipfs.error_log {
+                        if let Some(ref i) = status.pins.status.error_log {
                             if !i.is_empty() {
                                 warn!("{}", i);
                             }
@@ -433,15 +444,16 @@ async fn wait_for_done_backup(
                     } else if any_error {
                         let msg = status
                             .archive
+                            .status
                             .fatal_error
                             .clone()
-                            .or(status.ipfs.fatal_error.clone())
+                            .or(status.pins.status.fatal_error.clone())
                             .unwrap_or_else(|| "Unknown error".to_string());
                         anyhow::bail!("Server error: {}", msg);
                     } else {
                         println!(
                             "Unknown status: archive={:?} ipfs={:?}",
-                            status.archive.status, status.ipfs.status
+                            status.archive.status.status, status.pins.status.status
                         );
                     }
                 } else {
@@ -572,31 +584,50 @@ async fn list_server_backups(server_address: &str) -> Result<()> {
         let text = resp.text().await.unwrap_or_default();
         anyhow::bail!("Server error: {}", text);
     }
-    let backups: serde_json::Value = resp.json().await.context("Invalid server response")?;
-    let arr = backups
-        .as_array()
-        .ok_or_else(|| anyhow::anyhow!("Expected array response"))?;
+    let arr: Vec<BackupResponse> = resp.json().await.context("Invalid server response")?;
     let mut table = Table::new();
     table.add_row(row!["Task ID", "Status", "Error", "Error Log", "NFT Count"]);
     for entry in arr {
-        let task_id = entry.get("task_id").and_then(|v| v.as_str()).unwrap_or("");
-        let status = entry.get("status").and_then(|v| v.as_str()).unwrap_or("");
-        let error = entry.get("error").and_then(|v| v.as_str()).unwrap_or("");
-        let archive_error_log = entry
-            .get("archive_error_log")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let ipfs_error_log = entry
-            .get("ipfs_error_log")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let combined = [archive_error_log, ipfs_error_log]
-            .iter()
-            .filter(|s| !s.is_empty())
-            .cloned()
-            .collect::<Vec<_>>()
-            .join(" | ");
-        let nft_count = entry.get("nft_count").and_then(|v| v.as_u64()).unwrap_or(0);
+        let task_id = entry.task_id.as_str();
+        let archive_status = entry.archive.status.status.as_deref();
+        let pins_status = entry.pins.status.status.as_deref();
+        let any_in_progress = matches!(archive_status, Some("in_progress"))
+            || matches!(pins_status, Some("in_progress"));
+        let any_error = matches!(archive_status, Some("error"))
+            || matches!(pins_status, Some("error"))
+            || entry.archive.status.fatal_error.is_some()
+            || entry.pins.status.fatal_error.is_some();
+        let all_done = matches!(archive_status, Some("done"))
+            && (pins_status.is_none() || matches!(pins_status, Some("done")));
+        let status = if any_in_progress {
+            "in_progress"
+        } else if any_error {
+            "error"
+        } else if all_done {
+            "done"
+        } else {
+            ""
+        };
+        let error = entry
+            .archive
+            .status
+            .fatal_error
+            .clone()
+            .or(entry.pins.status.fatal_error.clone())
+            .unwrap_or_default();
+        let mut logs = Vec::new();
+        if let Some(a) = entry.archive.status.error_log.as_ref() {
+            if !a.is_empty() {
+                logs.push(a.as_str());
+            }
+        }
+        if let Some(i) = entry.pins.status.error_log.as_ref() {
+            if !i.is_empty() {
+                logs.push(i.as_str());
+            }
+        }
+        let combined = logs.join(" | ");
+        let nft_count = entry.total_tokens as u64;
         table.add_row(row![task_id, status, error, combined, nft_count]);
     }
     table.printstd();

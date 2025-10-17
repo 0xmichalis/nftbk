@@ -6,9 +6,8 @@ use axum::{
 };
 use serde::Deserialize;
 
-use crate::server::api::{ApiProblem, ProblemJson};
+use crate::server::api::{ApiProblem, BackupResponse, ProblemJson};
 use crate::server::database::r#trait::Database;
-use crate::server::database::BackupTask;
 use crate::server::AppState;
 
 #[derive(Deserialize, utoipa::ToSchema)]
@@ -39,7 +38,7 @@ fn default_limit() -> u32 {
     ),
     responses(
         (status = 200, description = "List of backup tasks for the authenticated user. Returns task metadata including task_id, status, timestamps, and optionally token details.", 
-         body = Vec<BackupTask>,
+         body = Vec<BackupResponse>,
          headers(
              ("Link" = String, description = "Pagination links per RFC 5988: rel=prev,next"),
              ("X-Total-Count" = u32, description = "Total number of items before pagination")
@@ -124,7 +123,19 @@ async fn handle_backups_core<DB: Database + ?Sized>(
                     }
                 }
             }
-            (StatusCode::OK, headers, Json(items)).into_response()
+            let mapped: Vec<BackupResponse> = items
+                .iter()
+                .map(|it| {
+                    BackupResponse::from_backup_task(
+                        it,
+                        Vec::new(),
+                        it.nft_count as u32,
+                        page,
+                        limit,
+                    )
+                })
+                .collect();
+            (StatusCode::OK, headers, Json(mapped)).into_response()
         }
         Err(e) => {
             let problem = ProblemJson::from_status(
