@@ -22,6 +22,7 @@ use crate::server::AppState;
     ),
     responses(
         (status = 202, description = "Pins deletion request accepted and will be processed asynchronously"),
+        (status = 401, description = "Missing requestor", body = ApiProblem, content_type = "application/problem+json"),
         (status = 403, description = "Requestor does not match task owner", body = ApiProblem, content_type = "application/problem+json"),
         (status = 404, description = "Task not found", body = ApiProblem, content_type = "application/problem+json"),
         (status = 409, description = "Can only delete completed tasks", body = ApiProblem, content_type = "application/problem+json"),

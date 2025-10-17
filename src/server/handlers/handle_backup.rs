@@ -43,6 +43,7 @@ fn default_limit() -> u32 {
                 ("X-Total-Tokens" = u32, description = "Total number of tokens for this task before pagination")
             )
         ),
+        (status = 401, description = "Requestor missing or unauthorized", body = ApiProblem, content_type = "application/problem+json"),
         (status = 403, description = "Requestor does not match task owner", body = ApiProblem, content_type = "application/problem+json"),
         (status = 404, description = "Backup not found", body = ApiProblem, content_type = "application/problem+json"),
         (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),

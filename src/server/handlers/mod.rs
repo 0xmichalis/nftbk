@@ -24,6 +24,19 @@ pub async fn verify_requestor_owns_task<DB: Database + ?Sized>(
     Option<crate::server::database::BackupTask>,
     Option<axum::response::Response>,
 ) {
+    // Check requestor first to avoid task enumeration vulnerability
+    let req_requestor = match requestor {
+        Some(req) => req,
+        None => {
+            let problem = ProblemJson::from_status(
+                StatusCode::UNAUTHORIZED,
+                Some("Missing requestor".to_string()),
+                Some(endpoint_path.to_string()),
+            );
+            return (None, Some(problem.into_response()));
+        }
+    };
+
     let meta = match db.get_backup_task(task_id).await {
         Ok(Some(m)) => m,
         Ok(None) => {
@@ -43,17 +56,7 @@ pub async fn verify_requestor_owns_task<DB: Database + ?Sized>(
             return (None, Some(problem.into_response()));
         }
     };
-    let req_requestor = match requestor {
-        Some(req) => req,
-        None => {
-            let problem = ProblemJson::from_status(
-                StatusCode::UNAUTHORIZED,
-                Some("Missing requestor".to_string()),
-                Some(endpoint_path.to_string()),
-            );
-            return (None, Some(problem.into_response()));
-        }
-    };
+
     if !meta.requestor.is_empty() && req_requestor != meta.requestor {
         let problem = ProblemJson::from_status(
             StatusCode::FORBIDDEN,
