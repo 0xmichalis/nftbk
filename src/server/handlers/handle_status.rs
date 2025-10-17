@@ -66,7 +66,7 @@ pub async fn handle_status(
                     .expect("Failed to parse X-Total-Tokens header value from total token count"),
             );
 
-            let last_page = (if limit == 0 { 1 } else { total.div_ceil(limit) }).max(1);
+            let last_page = total.div_ceil(limit).max(1);
             let mut links: Vec<String> = Vec::new();
             if page > 1 {
                 links.push(format!(
