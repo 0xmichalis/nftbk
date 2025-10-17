@@ -201,11 +201,11 @@ mod handle_status_core_tests {
         // Call the core with pagination; DB mock ignores it
         let resp = handle_status_core(&db, "t1", 1, 50).await.unwrap();
         let BackupResponse { archive, pins, .. } = resp.0;
+        let archive = archive.expect("archive should be present for archive mode");
         assert_eq!(archive.status.status.as_deref(), Some("done"));
         assert!(archive.status.fatal_error.is_none());
-        // ipfs status is null when None
-        assert_eq!(pins.status.status, None);
-        assert!(pins.status.fatal_error.is_none());
+        // ipfs should be None in archive-only mode
+        assert!(pins.is_none());
         // non-fatal logs are optional and omitted when none
     }
 
@@ -218,8 +218,9 @@ mod handle_status_core_tests {
         db.set_get_backup_task_result(Some(m));
         let resp = handle_status_core(&db, "t1", 1, 50).await.unwrap();
         let BackupResponse { archive, pins, .. } = resp.0;
+        let archive = archive.expect("archive should be present for archive mode");
         assert_eq!(archive.status.status, None);
-        assert_eq!(pins.status.status, None);
+        assert!(pins.is_none());
     }
 
     #[tokio::test]

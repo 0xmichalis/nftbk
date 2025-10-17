@@ -393,7 +393,7 @@ async fn wait_for_done_backup(
                             total_tokens: 0,
                             page: 1,
                             limit: 50,
-                            archive: nftbk::server::api::Archive {
+                            archive: Some(nftbk::server::api::Archive {
                                 status: nftbk::server::api::SubresourceStatus {
                                     status: None,
                                     fatal_error: None,
@@ -402,26 +402,40 @@ async fn wait_for_done_backup(
                                 },
                                 format: None,
                                 expires_at: None,
-                            },
-                            pins: nftbk::server::api::Pins {
+                            }),
+                            pins: Some(nftbk::server::api::Pins {
                                 status: nftbk::server::api::SubresourceStatus {
                                     status: None,
                                     fatal_error: None,
                                     error_log: None,
                                     deleted_at: None,
                                 },
-                            },
+                            }),
                         }
                     });
                     // Aggregate a coarse "overall" view for UX: in_progress if any subresource is in_progress
-                    let archive_status = status.archive.status.status.as_deref();
-                    let ipfs_status = status.pins.status.status.as_deref();
+                    let archive_status = status
+                        .archive
+                        .as_ref()
+                        .and_then(|a| a.status.status.as_deref());
+                    let ipfs_status = status
+                        .pins
+                        .as_ref()
+                        .and_then(|p| p.status.status.as_deref());
                     let any_in_progress = matches!(archive_status, Some("in_progress"))
                         || matches!(ipfs_status, Some("in_progress"));
                     let any_error = matches!(archive_status, Some("error"))
                         || matches!(ipfs_status, Some("error"))
-                        || status.archive.status.fatal_error.is_some()
-                        || status.pins.status.fatal_error.is_some();
+                        || status
+                            .archive
+                            .as_ref()
+                            .and_then(|a| a.status.fatal_error.as_ref())
+                            .is_some()
+                        || status
+                            .pins
+                            .as_ref()
+                            .and_then(|p| p.status.fatal_error.as_ref())
+                            .is_some();
                     let all_done = matches!(archive_status, Some("done"))
                         && (ipfs_status.is_none() || matches!(ipfs_status, Some("done")));
                     if any_in_progress {
@@ -431,12 +445,20 @@ async fn wait_for_done_backup(
                         }
                     } else if all_done {
                         println!("Backup complete.");
-                        if let Some(ref a) = status.archive.status.error_log {
+                        if let Some(ref a) = status
+                            .archive
+                            .as_ref()
+                            .and_then(|a| a.status.error_log.as_ref())
+                        {
                             if !a.is_empty() {
                                 warn!("{}", a);
                             }
                         }
-                        if let Some(ref i) = status.pins.status.error_log {
+                        if let Some(ref i) = status
+                            .pins
+                            .as_ref()
+                            .and_then(|p| p.status.error_log.as_ref())
+                        {
                             if !i.is_empty() {
                                 warn!("{}", i);
                             }
@@ -445,16 +467,25 @@ async fn wait_for_done_backup(
                     } else if any_error {
                         let msg = status
                             .archive
-                            .status
-                            .fatal_error
-                            .clone()
-                            .or(status.pins.status.fatal_error.clone())
+                            .as_ref()
+                            .and_then(|a| a.status.fatal_error.clone())
+                            .or(status
+                                .pins
+                                .as_ref()
+                                .and_then(|p| p.status.fatal_error.clone()))
                             .unwrap_or_else(|| "Unknown error".to_string());
                         anyhow::bail!("Server error: {}", msg);
                     } else {
                         println!(
                             "Unknown status: archive={:?} ipfs={:?}",
-                            status.archive.status.status, status.pins.status.status
+                            status
+                                .archive
+                                .as_ref()
+                                .and_then(|a| a.status.status.as_deref()),
+                            status
+                                .pins
+                                .as_ref()
+                                .and_then(|p| p.status.status.as_deref())
                         );
                     }
                 } else {
@@ -590,14 +621,25 @@ async fn list_server_backups(server_address: &str) -> Result<()> {
     table.add_row(row!["Task ID", "Status", "Error", "Error Log", "NFT Count"]);
     for entry in arr {
         let task_id = entry.task_id.as_str();
-        let archive_status = entry.archive.status.status.as_deref();
-        let pins_status = entry.pins.status.status.as_deref();
+        let archive_status = entry
+            .archive
+            .as_ref()
+            .and_then(|a| a.status.status.as_deref());
+        let pins_status = entry.pins.as_ref().and_then(|p| p.status.status.as_deref());
         let any_in_progress = matches!(archive_status, Some("in_progress"))
             || matches!(pins_status, Some("in_progress"));
         let any_error = matches!(archive_status, Some("error"))
             || matches!(pins_status, Some("error"))
-            || entry.archive.status.fatal_error.is_some()
-            || entry.pins.status.fatal_error.is_some();
+            || entry
+                .archive
+                .as_ref()
+                .and_then(|a| a.status.fatal_error.as_ref())
+                .is_some()
+            || entry
+                .pins
+                .as_ref()
+                .and_then(|p| p.status.fatal_error.as_ref())
+                .is_some();
         let all_done = matches!(archive_status, Some("done"))
             && (pins_status.is_none() || matches!(pins_status, Some("done")));
         let status = if any_in_progress {
@@ -611,18 +653,28 @@ async fn list_server_backups(server_address: &str) -> Result<()> {
         };
         let error = entry
             .archive
-            .status
-            .fatal_error
-            .clone()
-            .or(entry.pins.status.fatal_error.clone())
+            .as_ref()
+            .and_then(|a| a.status.fatal_error.clone())
+            .or(entry
+                .pins
+                .as_ref()
+                .and_then(|p| p.status.fatal_error.clone()))
             .unwrap_or_default();
         let mut logs = Vec::new();
-        if let Some(a) = entry.archive.status.error_log.as_ref() {
+        if let Some(a) = entry
+            .archive
+            .as_ref()
+            .and_then(|a| a.status.error_log.as_ref())
+        {
             if !a.is_empty() {
                 logs.push(a.as_str());
             }
         }
-        if let Some(i) = entry.pins.status.error_log.as_ref() {
+        if let Some(i) = entry
+            .pins
+            .as_ref()
+            .and_then(|p| p.status.error_log.as_ref())
+        {
             if !i.is_empty() {
                 logs.push(i.as_str());
             }

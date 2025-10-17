@@ -84,10 +84,12 @@ pub struct BackupResponse {
     pub page: u32,
     /// Page size
     pub limit: u32,
-    /// Archive info
-    pub archive: Archive,
-    /// IPFS pins info
-    pub pins: Pins,
+    /// Archive info (null when storage_mode does not include archive)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub archive: Option<Archive>,
+    /// IPFS pins info (null when storage_mode does not include ipfs)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pins: Option<Pins>,
 }
 
 impl BackupResponse {
@@ -124,6 +126,12 @@ impl BackupResponse {
         let pins = Pins {
             status: pins_status,
         };
+        let (archive_opt, pins_opt) = match task.storage_mode.as_str() {
+            "archive" => (Some(archive), None),
+            "ipfs" => (None, Some(pins)),
+            "full" => (Some(archive), Some(pins)),
+            _ => (None, None),
+        };
         BackupResponse {
             task_id: task.task_id.clone(),
             created_at: task.created_at.to_rfc3339(),
@@ -132,8 +140,8 @@ impl BackupResponse {
             total_tokens,
             page,
             limit,
-            archive,
-            pins,
+            archive: archive_opt,
+            pins: pins_opt,
         }
     }
 }
@@ -182,31 +190,27 @@ mod from_backup_task_tests {
         assert_eq!(resp.limit, 50);
         assert_eq!(resp.tokens.len(), 1);
         assert_eq!(resp.tokens[0].chain, "ethereum");
-        assert_eq!(resp.archive.format.as_deref(), Some("zip"));
+        let archive = resp.archive.as_ref().unwrap();
+        assert_eq!(archive.format.as_deref(), Some("zip"));
         assert_eq!(
-            resp.archive.expires_at.as_deref(),
+            archive.expires_at.as_deref(),
             Some(task.expires_at.unwrap().to_rfc3339().as_str())
         );
         // Archive status
-        assert_eq!(resp.archive.status.status.as_deref(), Some("done"));
+        assert_eq!(archive.status.status.as_deref(), Some("done"));
+        assert_eq!(archive.status.error_log.as_deref(), Some("arch warnings"));
+        assert_eq!(archive.status.fatal_error, None);
         assert_eq!(
-            resp.archive.status.error_log.as_deref(),
-            Some("arch warnings")
-        );
-        assert_eq!(resp.archive.status.fatal_error, None);
-        assert_eq!(
-            resp.archive.status.deleted_at.as_deref(),
+            archive.status.deleted_at.as_deref(),
             Some(task.archive_deleted_at.unwrap().to_rfc3339().as_str())
         );
         // Pins status
-        assert_eq!(resp.pins.status.status.as_deref(), Some("in_progress"));
-        assert_eq!(resp.pins.status.error_log, None);
+        let pins = resp.pins.as_ref().unwrap();
+        assert_eq!(pins.status.status.as_deref(), Some("in_progress"));
+        assert_eq!(pins.status.error_log, None);
+        assert_eq!(pins.status.fatal_error.as_deref(), Some("provider error"));
         assert_eq!(
-            resp.pins.status.fatal_error.as_deref(),
-            Some("provider error")
-        );
-        assert_eq!(
-            resp.pins.status.deleted_at.as_deref(),
+            pins.status.deleted_at.as_deref(),
             Some(task.pins_deleted_at.unwrap().to_rfc3339().as_str())
         );
     }
@@ -224,18 +228,11 @@ mod from_backup_task_tests {
         task.expires_at = None;
         task.archive_deleted_at = None;
         task.pins_deleted_at = None;
+        task.storage_mode = "ipfs".to_string();
 
         let resp = BackupResponse::from_backup_task(&task, Vec::new(), 0, 1, 10);
-        assert_eq!(resp.archive.format, None);
-        assert_eq!(resp.archive.expires_at, None);
-        assert_eq!(resp.archive.status.status, None);
-        assert_eq!(resp.archive.status.error_log, None);
-        assert_eq!(resp.archive.status.fatal_error, None);
-        assert_eq!(resp.archive.status.deleted_at, None);
-        assert_eq!(resp.pins.status.status, None);
-        assert_eq!(resp.pins.status.error_log, None);
-        assert_eq!(resp.pins.status.fatal_error, None);
-        assert_eq!(resp.pins.status.deleted_at, None);
+        assert!(resp.archive.is_none());
+        assert!(resp.pins.is_some());
         assert!(resp.tokens.is_empty());
         assert_eq!(resp.total_tokens, 0);
         assert_eq!(resp.page, 1);
