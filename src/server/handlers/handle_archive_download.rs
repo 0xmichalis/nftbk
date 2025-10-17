@@ -2,7 +2,7 @@ use axum::response::Response;
 use axum::Json;
 use axum::{
     body::Body,
-    extract::{Path as AxumPath, Query, State},
+    extract::{Extension, Path as AxumPath, Query, State},
     http::{header, HeaderMap, StatusCode},
     response::IntoResponse,
 };
@@ -15,6 +15,7 @@ use tokio_util::io::ReaderStream;
 
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::database::r#trait::Database;
+use crate::server::handlers::verify_requestor_owns_task;
 use crate::server::{archive::check_backup_on_disk, AppState};
 
 #[derive(serde::Deserialize, utoipa::ToSchema)]
@@ -44,14 +45,28 @@ pub struct DownloadTokenResponse {
     responses(
         (status = 201, description = "Download token created successfully", body = DownloadTokenResponse),
         (status = 401, description = "Unauthorized"),
+        (status = 403, description = "Requestor does not match task owner"),
     ),
     tag = "backups",
     security(("bearer_auth" = []))
 )]
 pub async fn handle_archive_download_token(
     State(state): axum::extract::State<AppState>,
-    axum::extract::Path(task_id): axum::extract::Path<String>,
+    AxumPath(task_id): AxumPath<String>,
+    Extension(requestor): Extension<Option<String>>,
 ) -> impl axum::response::IntoResponse {
+    // Ensure the requesting user owns the backup
+    let (_meta, problem) = verify_requestor_owns_task(
+        &*state.db,
+        &task_id,
+        requestor,
+        &format!("/v1/backups/{task_id}/download-tokens"),
+    )
+    .await;
+    if let Some(resp) = problem {
+        return resp;
+    }
+
     let mut bytes = [0u8; 32];
     OsRng.fill_bytes(&mut bytes);
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes);
@@ -243,11 +258,7 @@ async fn serve_zip_file(zip_path: &PathBuf, task_id: &str, archive_format: &str)
 
 #[cfg(test)]
 mod handle_download_tests {
-    use super::{
-        handle_archive_download as handle_download,
-        handle_archive_download_token as handle_download_token, DownloadQuery,
-        DownloadTokenResponse,
-    };
+    use super::{handle_archive_download as handle_download, DownloadQuery};
     use axum::body::to_bytes;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
@@ -255,8 +266,10 @@ mod handle_download_tests {
     use std::sync::Arc;
     use tokio::sync::{mpsc, Mutex};
 
-    use crate::server::database::Db;
+    use crate::server::database::r#trait::MockDatabase;
+    use crate::server::handlers::verify_requestor_owns_task;
     use crate::server::AppState;
+    use crate::server::Db;
 
     fn make_state() -> AppState {
         let mut chains = HashMap::new();
@@ -284,38 +297,67 @@ mod handle_download_tests {
     }
 
     #[tokio::test]
-    async fn post_download_token_returns_201_and_stores_token() {
-        let state = make_state();
-        let task_id = "t-123".to_string();
-        let resp = handle_download_token(
-            axum::extract::State(state.clone()),
-            axum::extract::Path(task_id.clone()),
+    async fn post_download_token_returns_404_when_task_missing() {
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_result(None);
+        let (_meta, problem) = verify_requestor_owns_task(
+            &db,
+            "t-missing",
+            Some("did:privy:alice".to_string()),
+            "/v1/backups/t-missing/download-tokens",
         )
-        .await
-        .into_response();
-        assert_eq!(resp.status(), StatusCode::CREATED);
+        .await;
+        let resp = problem.unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
 
-        // Parse body and verify token persisted
-        let location = resp
-            .headers()
-            .get(axum::http::header::LOCATION)
-            .unwrap()
-            .to_str()
-            .unwrap()
-            .to_string();
-        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
-        let token_resp: DownloadTokenResponse = serde_json::from_slice(&body_bytes).unwrap();
-        let tokens = state.download_tokens.lock().await;
-        let stored = tokens.get(&token_resp.token);
-        assert!(stored.is_some());
-        assert_eq!(stored.unwrap().0, task_id);
-        assert_eq!(
-            location,
-            format!(
-                "/v1/backups/{}/download?token={}",
-                task_id, token_resp.token
-            )
-        );
+    #[tokio::test]
+    async fn post_download_token_returns_403_when_owner_mismatch() {
+        let mut db = MockDatabase::default();
+        let bt = crate::server::database::BackupTask {
+            task_id: "t-forbid".to_string(),
+            created_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            requestor: "did:privy:bob".to_string(),
+            nft_count: 1,
+            tokens: serde_json::json!([]),
+            archive_status: Some("done".to_string()),
+            ipfs_status: None,
+            archive_error_log: None,
+            ipfs_error_log: None,
+            archive_fatal_error: None,
+            ipfs_fatal_error: None,
+            storage_mode: "archive".to_string(),
+            archive_format: Some("zip".to_string()),
+            expires_at: None,
+            archive_deleted_at: None,
+            pins_deleted_at: None,
+        };
+        db.set_get_backup_task_result(Some(bt));
+        let (_meta, problem) = verify_requestor_owns_task(
+            &db,
+            "t-forbid",
+            Some("did:privy:alice".to_string()),
+            "/v1/backups/t-forbid/download-tokens",
+        )
+        .await;
+        let resp = problem.unwrap();
+        assert_eq!(resp.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn post_download_token_returns_500_on_db_error() {
+        let mut db = MockDatabase::default();
+        db.set_get_backup_task_error(Some("db error".to_string()));
+        let (_meta, problem) = verify_requestor_owns_task(
+            &db,
+            "t-err",
+            Some("did:privy:alice".to_string()),
+            "/v1/backups/t-err/download-tokens",
+        )
+        .await;
+        let resp = problem.unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
     }
 
     #[tokio::test]

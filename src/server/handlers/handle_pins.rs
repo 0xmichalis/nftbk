@@ -117,7 +117,7 @@ pub async fn handle_pins(
     Extension(requestor): Extension<Option<String>>,
     Query(query): Query<PinsQuery>,
 ) -> impl IntoResponse {
-    let subject = match requestor {
+    let requestor = match requestor {
         Some(req) => req,
         None => {
             error!("No requestor found in request extensions");
@@ -125,7 +125,7 @@ pub async fn handle_pins(
                 StatusCode::UNAUTHORIZED,
                 ProblemJson::from_status(
                     StatusCode::UNAUTHORIZED,
-                    Some("Missing authentication subject".to_string()),
+                    Some("Missing requestor".to_string()),
                     Some("/v1/pins".to_string()),
                 ),
             )
@@ -135,22 +135,22 @@ pub async fn handle_pins(
 
     debug!(
         "Getting pinned tokens for requestor: {} with query: {:?}",
-        subject, query
+        requestor, query
     );
 
-    handle_pins_core(&*state.db, &subject, query).await
+    handle_pins_core(&*state.db, &requestor, query).await
 }
 
 async fn handle_pins_core<DB: Database + ?Sized>(
     db: &DB,
-    subject: &str,
+    requestor: &str,
     query: PinsQuery,
 ) -> axum::response::Response {
     let limit = query.limit.clamp(1, 100);
     let page = query.page.max(1);
     let offset = ((page - 1) * limit) as i64;
     match db
-        .get_pinned_tokens_by_requestor(subject, limit as i64, offset)
+        .get_pinned_tokens_by_requestor(requestor, limit as i64, offset)
         .await
     {
         Ok((tokens, total)) => {
@@ -179,7 +179,7 @@ async fn handle_pins_core<DB: Database + ?Sized>(
             info!(
                 "Retrieved {} pinned tokens for requestor: {} (page {}, limit {})",
                 filtered.len(),
-                subject,
+                requestor,
                 page,
                 limit
             );
@@ -188,7 +188,7 @@ async fn handle_pins_core<DB: Database + ?Sized>(
         Err(e) => {
             error!(
                 "Failed to get pinned tokens for requestor {}: {}",
-                subject, e
+                requestor, e
             );
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -349,7 +349,7 @@ mod handle_pins_core_mockdb_tests {
     }
 
     #[tokio::test]
-    async fn returns_200_with_all_tokens_for_subject() {
+    async fn returns_200_with_all_tokens_for_requestor() {
         let mut db = MockDatabase::default();
         let tokens = create_test_tokens();
         db.set_get_pinned_tokens_by_requestor_result((tokens, 2));
@@ -400,5 +400,65 @@ mod handle_pins_core_mockdb_tests {
             .unwrap();
         let problem: crate::server::api::ApiProblem = serde_json::from_slice(&body).unwrap();
         assert_eq!(problem.status, StatusCode::INTERNAL_SERVER_ERROR.as_u16());
+    }
+}
+
+#[cfg(test)]
+mod handle_pins_endpoint_tests {
+    use super::handle_pins;
+    use axum::http::StatusCode;
+    use axum::{routing::get, Extension, Router};
+    use hyper::Request;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+    use tower::Service;
+
+    use crate::ipfs::IpfsPinningConfig;
+    use crate::server::database::Db;
+    use crate::server::AppState;
+
+    fn make_state(ipfs_pinning_configs: Vec<IpfsPinningConfig>) -> AppState {
+        let mut chains = HashMap::new();
+        chains.insert("ethereum".to_string(), "rpc://dummy".to_string());
+        let chain_config = crate::backup::ChainConfig(chains);
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let pool = sqlx::postgres::PgPoolOptions::new()
+            .connect_lazy("postgres://user:pass@localhost/db")
+            .unwrap();
+        let db = Arc::new(Db { pool });
+        AppState {
+            chain_config: Arc::new(chain_config),
+            base_dir: Arc::new("/tmp".to_string()),
+            unsafe_skip_checksum_check: true,
+            auth_token: None,
+            pruner_enabled: false,
+            pruner_retention_days: 7,
+            download_tokens: Arc::new(Mutex::new(HashMap::new())),
+            backup_task_sender: tx,
+            db,
+            shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ipfs_pinning_configs,
+            ipfs_pinning_instances: Arc::new(Vec::new()),
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_401_when_missing_requestor() {
+        let state = make_state(Vec::new());
+        let app = Router::new()
+            .route("/pins", get(handle_pins))
+            .with_state(state)
+            .layer(Extension::<Option<String>>(None));
+
+        let request = Request::builder()
+            .method("GET")
+            .uri("/pins")
+            .body(axum::body::Body::empty())
+            .unwrap();
+
+        let mut app = app;
+        let response = app.call(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 }

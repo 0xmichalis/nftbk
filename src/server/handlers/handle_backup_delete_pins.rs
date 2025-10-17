@@ -7,6 +7,7 @@ use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::database::r#trait::Database;
+use crate::server::handlers::verify_requestor_owns_task;
 use crate::server::AppState;
 
 /// Delete only the IPFS pins for a backup task.
@@ -21,7 +22,6 @@ use crate::server::AppState;
     ),
     responses(
         (status = 202, description = "Pins deletion request accepted and will be processed asynchronously"),
-        (status = 400, description = "Bad request", body = ApiProblem, content_type = "application/problem+json"),
         (status = 403, description = "Requestor does not match task owner", body = ApiProblem, content_type = "application/problem+json"),
         (status = 404, description = "Task not found", body = ApiProblem, content_type = "application/problem+json"),
         (status = 409, description = "Can only delete completed tasks", body = ApiProblem, content_type = "application/problem+json"),
@@ -45,48 +45,18 @@ async fn handle_backup_delete_pins_core<DB: Database + ?Sized>(
     task_id: &str,
     requestor: Option<String>,
 ) -> axum::response::Response {
-    let requestor_str = match requestor {
-        Some(s) if !s.is_empty() => s,
-        _ => {
-            let problem = ProblemJson::from_status(
-                StatusCode::BAD_REQUEST,
-                Some("Requestor required".to_string()),
-                Some(format!("/v1/backups/{task_id}/pins")),
-            );
-            return problem.into_response();
-        }
-    };
-
-    // Check if the task exists and get its metadata
-    let meta = match db.get_backup_task(task_id).await {
-        Ok(Some(m)) => m,
-        Ok(None) => {
-            let problem = ProblemJson::from_status(
-                StatusCode::NOT_FOUND,
-                Some("Nothing found to delete".to_string()),
-                Some(format!("/v1/backups/{task_id}/pins")),
-            );
-            return problem.into_response();
-        }
-        Err(e) => {
-            let problem = ProblemJson::from_status(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Some(format!("Failed to read metadata: {e}")),
-                Some(format!("/v1/backups/{task_id}/pins")),
-            );
-            return problem.into_response();
-        }
-    };
-
-    // Verify requestor matches task owner
-    if meta.requestor != requestor_str {
-        let problem = ProblemJson::from_status(
-            StatusCode::FORBIDDEN,
-            Some("Requestor does not match task owner".to_string()),
-            Some(format!("/v1/backups/{task_id}/pins")),
-        );
-        return problem.into_response();
+    // Verify ownership and get metadata
+    let (meta, problem) = verify_requestor_owns_task(
+        db,
+        task_id,
+        requestor.clone(),
+        &format!("/v1/backups/{task_id}/pins"),
+    )
+    .await;
+    if let Some(resp) = problem {
+        return resp;
     }
+    let meta = meta.unwrap();
 
     // Check if backup uses IPFS storage
     if meta.storage_mode == "archive" {
@@ -111,7 +81,7 @@ async fn handle_backup_delete_pins_core<DB: Database + ?Sized>(
     // Enqueue deletion task with IPFS scope and return 202
     let deletion_task = crate::server::DeletionTask {
         task_id: task_id.to_string(),
-        requestor: Some(requestor_str),
+        requestor: requestor.clone(),
         scope: crate::server::StorageMode::Ipfs,
     };
     if let Err(e) = backup_task_sender
@@ -168,13 +138,13 @@ mod handle_backup_delete_pins_core_tests {
     }
 
     #[tokio::test]
-    async fn returns_400_when_missing_requestor() {
+    async fn returns_404_when_missing_requestor() {
         let db = MockDatabase::default();
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", None)
             .await
             .into_response();
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 
     #[tokio::test]
