@@ -44,6 +44,8 @@ pub async fn start_deletion_for_scope<DB: Database + ?Sized>(
     scope: &StorageMode,
     storage_mode: &str,
 ) -> Result<(), sqlx::Error> {
+    // The database-layer helpers now reject starting deletion when a subresource is in_progress.
+    // Here we simply route to the appropriate DB call based on scope and storage_mode.
     match scope {
         StorageMode::Full => db.start_deletion(task_id).await,
         StorageMode::Archive => {
@@ -617,6 +619,29 @@ mod tests {
         let task_id = "test_task";
 
         let result = start_deletion_for_scope(&mock_db, task_id, &StorageMode::Full, "full").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn start_deletion_for_scope_rejects_when_in_progress_archive() {
+        let mut mock_db = MockDatabase::default();
+        mock_db.set_start_archive_request_deletion_error(Some(
+            "in_progress task cannot be deleted".to_string(),
+        ));
+        let task_id = "test_task";
+        let result =
+            start_deletion_for_scope(&mock_db, task_id, &StorageMode::Archive, "full").await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn start_deletion_for_scope_rejects_when_in_progress_ipfs() {
+        let mut mock_db = MockDatabase::default();
+        mock_db.set_start_pin_request_deletions_error(Some(
+            "in_progress task cannot be deleted".to_string(),
+        ));
+        let task_id = "test_task";
+        let result = start_deletion_for_scope(&mock_db, task_id, &StorageMode::Ipfs, "full").await;
         assert!(result.is_err());
     }
 

@@ -472,71 +472,107 @@ impl Db {
     }
 
     pub async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
+        let sql = r#"
+            WITH task_mode AS (
+                SELECT storage_mode FROM backup_tasks WHERE task_id = $1
+            ),
+            touch AS (
+                UPDATE backup_tasks SET updated_at = NOW() WHERE task_id = $1 RETURNING 1
+            ),
+            ar_inprog AS (
+                SELECT 1 FROM archive_requests ar, task_mode tm
+                WHERE ar.task_id = $1 AND ar.status = 'in_progress'
+                  AND tm.storage_mode IN ('archive','full')
+                LIMIT 1
+            ),
+            pr_inprog AS (
+                SELECT 1 FROM pin_requests pr, task_mode tm
+                WHERE pr.task_id = $1 AND pr.status = 'in_progress'
+                  AND tm.storage_mode IN ('ipfs','full')
+                LIMIT 1
+            ),
+            upd_archive AS (
+                UPDATE archive_requests ar
+                SET deleted_at = NOW()
+                WHERE ar.task_id = $1 AND ar.deleted_at IS NULL
+                  AND EXISTS (SELECT 1 FROM task_mode tm WHERE tm.storage_mode IN ('archive','full'))
+                  AND NOT EXISTS (SELECT 1 FROM ar_inprog)
+                RETURNING 1
+            ),
+            upd_pins AS (
+                UPDATE pin_requests pr
+                SET deleted_at = NOW()
+                WHERE pr.task_id = $1 AND pr.deleted_at IS NULL
+                  AND EXISTS (SELECT 1 FROM task_mode tm WHERE tm.storage_mode IN ('ipfs','full'))
+                  AND NOT EXISTS (SELECT 1 FROM pr_inprog)
+                RETURNING 1
+            )
+            SELECT EXISTS(SELECT 1 FROM ar_inprog) AS ar_blocked,
+                   EXISTS(SELECT 1 FROM pr_inprog) AS pr_blocked
+        "#;
 
-        // Touch parent row
-        sqlx::query!(
-            r#"UPDATE backup_tasks SET updated_at = NOW() WHERE task_id = $1"#,
-            task_id
-        )
-        .execute(&mut *tx)
-        .await?;
-
-        // Mark archive subresource as being deleted
-        sqlx::query!(
-            r#"
-            UPDATE archive_requests
-            SET deleted_at = NOW()
-            WHERE task_id = $1 AND deleted_at IS NULL
-            "#,
-            task_id
-        )
-        .execute(&mut *tx)
-        .await?;
-
-        // Mark IPFS subresource as being deleted
-        sqlx::query!(
-            r#"
-            UPDATE pin_requests
-            SET deleted_at = NOW()
-            WHERE task_id = $1 AND deleted_at IS NULL
-            "#,
-            task_id
-        )
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
+        let row = sqlx::query(sql).bind(task_id).fetch_one(&self.pool).await?;
+        let ar_blocked: bool = row.get("ar_blocked");
+        let pr_blocked: bool = row.get("pr_blocked");
+        if ar_blocked || pr_blocked {
+            return Err(sqlx::Error::Protocol(
+                "in_progress task cannot be deleted".into(),
+            ));
+        }
         Ok(())
     }
 
     /// Mark archive as being deleted (similar to start_deletion but for archive subresource)
     pub async fn start_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        let row = sqlx::query(
             r#"
-            UPDATE archive_requests 
-            SET deleted_at = NOW() 
-            WHERE task_id = $1 AND deleted_at IS NULL
+            WITH ar_inprog AS (
+                SELECT 1 FROM archive_requests WHERE task_id = $1 AND status = 'in_progress' LIMIT 1
+            ), upd AS (
+                UPDATE archive_requests
+                SET deleted_at = NOW()
+                WHERE task_id = $1 AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM ar_inprog)
+                RETURNING 1
+            )
+            SELECT EXISTS(SELECT 1 FROM ar_inprog) AS blocked
             "#,
-            task_id
         )
-        .execute(&self.pool)
+        .bind(task_id)
+        .fetch_one(&self.pool)
         .await?;
+        let blocked: bool = row.get("blocked");
+        if blocked {
+            return Err(sqlx::Error::Protocol(
+                "in_progress task cannot be deleted".into(),
+            ));
+        }
         Ok(())
     }
 
     /// Mark IPFS pins as being deleted (similar to start_deletion but for IPFS pins subresource)
     pub async fn start_pin_request_deletions(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        let row = sqlx::query(
             r#"
-            UPDATE pin_requests 
-            SET deleted_at = NOW() 
-            WHERE task_id = $1 AND deleted_at IS NULL
+            WITH pr_inprog AS (
+                SELECT 1 FROM pin_requests WHERE task_id = $1 AND status = 'in_progress' LIMIT 1
+            ), upd AS (
+                UPDATE pin_requests
+                SET deleted_at = NOW()
+                WHERE task_id = $1 AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM pr_inprog)
+                RETURNING 1
+            )
+            SELECT EXISTS(SELECT 1 FROM pr_inprog) AS blocked
             "#,
-            task_id
         )
-        .execute(&self.pool)
+        .bind(task_id)
+        .fetch_one(&self.pool)
         .await?;
+        let blocked: bool = row.get("blocked");
+        if blocked {
+            return Err(sqlx::Error::Protocol(
+                "in_progress task cannot be deleted".into(),
+            ));
+        }
         Ok(())
     }
 
