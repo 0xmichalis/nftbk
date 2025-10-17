@@ -148,28 +148,49 @@ impl Db {
     ) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
 
-        // Insert into backup_tasks
+        // Insert into backup_tasks (tokens JSON removed; tokens are stored in tokens table)
         sqlx::query(
             r#"
             INSERT INTO backup_tasks (
-                task_id, created_at, updated_at, requestor, nft_count, tokens, storage_mode
+                task_id, created_at, updated_at, requestor, nft_count, storage_mode
             ) VALUES (
-                $1, NOW(), NOW(), $2, $3, $4, $5
+                $1, NOW(), NOW(), $2, $3, $4
             )
             ON CONFLICT (task_id) DO UPDATE SET
                 updated_at = NOW(),
                 nft_count = EXCLUDED.nft_count,
-                tokens = EXCLUDED.tokens,
                 storage_mode = EXCLUDED.storage_mode
             "#,
         )
         .bind(task_id)
         .bind(requestor)
         .bind(nft_count)
-        .bind(tokens)
         .bind(storage_mode)
         .execute(&mut *tx)
         .await?;
+
+        // Replace tokens for this task with the provided list (idempotent)
+        // Expecting JSON shape: Vec<crate::server::api::Tokens>
+        let token_entries: Vec<crate::server::api::Tokens> =
+            serde_json::from_value(tokens.clone()).unwrap_or_default();
+
+        for entry in &token_entries {
+            for token_str in &entry.tokens {
+                if let Some((contract_address, token_id)) = token_str.split_once(':') {
+                    sqlx::query(
+                        r#"INSERT INTO tokens (task_id, chain, contract_address, token_id)
+                           VALUES ($1, $2, $3, $4)
+                           ON CONFLICT (task_id, chain, contract_address, token_id) DO NOTHING"#,
+                    )
+                    .bind(task_id)
+                    .bind(&entry.chain)
+                    .bind(contract_address)
+                    .bind(token_id)
+                    .execute(&mut *tx)
+                    .await?;
+                }
+            }
+        }
 
         // Insert into archive_requests if storage mode includes archive
         if storage_mode == "archive" || storage_mode == "full" {
@@ -556,8 +577,8 @@ impl Db {
         let row = sqlx::query(
             r#"
             SELECT 
-                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
-                b.tokens, ar.status as archive_status, ar.fatal_error, b.storage_mode,
+                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count,
+                ar.status as archive_status, ar.fatal_error, b.storage_mode,
                 ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
                 pr.status as ipfs_status,
@@ -574,13 +595,151 @@ impl Db {
         .fetch_optional(&self.pool)
         .await?;
 
-        Ok(row.map(|row| BackupTask {
+        if let Some(row) = row {
+            // Fetch tokens for this task from tokens table and aggregate by chain
+            let token_rows = sqlx::query(
+                r#"
+                SELECT chain, contract_address, token_id
+                FROM tokens
+                WHERE task_id = $1
+                ORDER BY chain, contract_address, token_id
+                "#,
+            )
+            .bind(task_id)
+            .fetch_all(&self.pool)
+            .await?;
+
+            use std::collections::BTreeMap;
+            let mut by_chain: BTreeMap<String, Vec<String>> = BTreeMap::new();
+            for r in token_rows {
+                let chain: String = r.get("chain");
+                let contract_address: String = r.get("contract_address");
+                let token_id: String = r.get("token_id");
+                by_chain
+                    .entry(chain)
+                    .or_default()
+                    .push(format!("{}:{}", contract_address, token_id));
+            }
+            let tokens_json = serde_json::json!(by_chain
+                .into_iter()
+                .map(|(chain, toks)| serde_json::json!({
+                    "chain": chain,
+                    "tokens": toks,
+                }))
+                .collect::<Vec<_>>());
+
+            Ok(Some(BackupTask {
+                task_id: row.get("task_id"),
+                created_at: row.get("created_at"),
+                updated_at: row.get("updated_at"),
+                requestor: row.get("requestor"),
+                nft_count: row.get("nft_count"),
+                tokens: tokens_json,
+                archive_status: row
+                    .try_get::<Option<String>, _>("archive_status")
+                    .ok()
+                    .flatten(),
+                ipfs_status: row
+                    .try_get::<Option<String>, _>("ipfs_status")
+                    .ok()
+                    .flatten(),
+                archive_error_log: row.get("archive_error_log"),
+                ipfs_error_log: row.get("ipfs_error_log"),
+                archive_fatal_error: row.get("fatal_error"),
+                ipfs_fatal_error: row
+                    .try_get::<Option<String>, _>("ipfs_fatal_error")
+                    .ok()
+                    .flatten(),
+                storage_mode: row.get("storage_mode"),
+                archive_format: row.get("archive_format"),
+                expires_at: row.get("expires_at"),
+                archive_deleted_at: row.get("archive_deleted_at"),
+                pins_deleted_at: row.get("pins_deleted_at"),
+            }))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Fetch backup task plus a paginated slice of its tokens; returns (meta, total_token_count)
+    pub async fn get_backup_task_with_tokens(
+        &self,
+        task_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Option<(BackupTask, u32)>, sqlx::Error> {
+        // Base metadata (same as get_backup_task)
+        let row = sqlx::query(
+            r#"
+            SELECT 
+                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count,
+                ar.status as archive_status, ar.fatal_error, b.storage_mode,
+                ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
+                ar.error_log as archive_error_log,
+                pr.status as ipfs_status,
+                pr.error_log as ipfs_error_log,
+                pr.fatal_error as ipfs_fatal_error,
+                pr.deleted_at as pins_deleted_at
+            FROM backup_tasks b
+            LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
+            LEFT JOIN pin_requests pr ON b.task_id = pr.task_id
+            WHERE b.task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        let Some(row) = row else { return Ok(None) };
+
+        // Total tokens for pagination
+        let total_row = sqlx::query!(
+            r#"SELECT COUNT(*) as count FROM tokens WHERE task_id = $1"#,
+            task_id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        let total: u32 = (total_row.count.unwrap_or(0) as i64).max(0) as u32;
+
+        // Page of tokens
+        let token_rows = sqlx::query(
+            r#"
+            SELECT chain, contract_address, token_id
+            FROM tokens
+            WHERE task_id = $1
+            ORDER BY chain, contract_address, token_id
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(task_id)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+
+        use std::collections::BTreeMap;
+        let mut by_chain: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for r in token_rows {
+            let chain: String = r.get("chain");
+            let contract_address: String = r.get("contract_address");
+            let token_id: String = r.get("token_id");
+            by_chain
+                .entry(chain)
+                .or_default()
+                .push(format!("{}:{}", contract_address, token_id));
+        }
+        let tokens_json = serde_json::json!(by_chain
+            .into_iter()
+            .map(|(chain, toks)| serde_json::json!({ "chain": chain, "tokens": toks }))
+            .collect::<Vec<_>>());
+
+        let meta = BackupTask {
             task_id: row.get("task_id"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
             requestor: row.get("requestor"),
             nft_count: row.get("nft_count"),
-            tokens: row.get("tokens"),
+            tokens: tokens_json,
             archive_status: row
                 .try_get::<Option<String>, _>("archive_status")
                 .ok()
@@ -601,18 +760,17 @@ impl Db {
             expires_at: row.get("expires_at"),
             archive_deleted_at: row.get("archive_deleted_at"),
             pins_deleted_at: row.get("pins_deleted_at"),
-        }))
+        };
+
+        Ok(Some((meta, total)))
     }
 
     pub async fn list_requestor_backup_tasks_paginated(
         &self,
         requestor: &str,
-        include_tokens: bool,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<BackupTask>, u32), sqlx::Error> {
-        let tokens_field = if include_tokens { "b.tokens," } else { "" };
-
         // Total count
         let total_row = sqlx::query!(
             r#"SELECT COUNT(*) as count FROM backup_tasks b WHERE b.requestor = $1"#,
@@ -622,11 +780,11 @@ impl Db {
         .await?;
         let total: u32 = (total_row.count.unwrap_or(0) as i64).max(0) as u32;
 
-        let query = format!(
+        let rows = sqlx::query(
             r#"
             SELECT 
-                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
-                {tokens_field} ar.status as archive_status, ar.fatal_error, b.storage_mode,
+                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count,
+                ar.status as archive_status, ar.fatal_error, b.storage_mode,
                 ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
                 pr.status as ipfs_status,
@@ -640,32 +798,27 @@ impl Db {
             ORDER BY b.created_at DESC
             LIMIT $2 OFFSET $3
             "#,
-        );
-
-        let rows = sqlx::query(&query)
-            .bind(requestor)
-            .bind(limit)
-            .bind(offset)
-            .fetch_all(&self.pool)
-            .await?;
+        )
+        .bind(requestor)
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
 
         let recs = rows
             .into_iter()
             .map(|row| {
-                let tokens = if include_tokens {
-                    row.try_get::<serde_json::Value, _>("tokens")
-                        .unwrap_or(serde_json::Value::Null)
-                } else {
-                    serde_json::Value::Null
-                };
+                let task_id: String = row.get("task_id");
 
                 BackupTask {
-                    task_id: row.get("task_id"),
+                    task_id,
                     created_at: row.get("created_at"),
                     updated_at: row.get("updated_at"),
                     requestor: row.get("requestor"),
                     nft_count: row.get("nft_count"),
-                    tokens,
+                    // Client should use get_backup_task to get tokens so the tokens
+                    // can be properly paginated.
+                    tokens: serde_json::Value::Null,
                     archive_status: row
                         .try_get::<Option<String>, _>("archive_status")
                         .ok()
@@ -722,8 +875,8 @@ impl Db {
         let rows = sqlx::query(
             r#"
             SELECT 
-                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count, 
-                b.tokens, ar.status as archive_status, ar.fatal_error, b.storage_mode,
+                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count,
+                ar.status as archive_status, ar.fatal_error, b.storage_mode,
                 ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
                 ar.error_log as archive_error_log,
                 pr.status as ipfs_status,
@@ -756,7 +909,8 @@ impl Db {
                 updated_at: row.get("updated_at"),
                 requestor: row.get("requestor"),
                 nft_count: row.get("nft_count"),
-                tokens: row.get("tokens"),
+                // No need for tokens here, the pruner does not care
+                tokens: serde_json::Value::Null,
                 archive_status: row
                     .try_get::<Option<String>, _>("archive_status")
                     .ok()
@@ -840,17 +994,40 @@ impl Db {
             pin_ids.push(row.get("id"));
         }
 
-        // Insert pinned tokens using the generated pin_ids
+        // Resolve token_ids and update pins rows with token_id
         for (index, chain, contract_address, token_id) in &all_token_data {
-            sqlx::query(
-                "INSERT INTO pinned_tokens (pin_id, chain, contract_address, token_id) VALUES ($1, $2, $3, $4)"
+            // Ensure token row exists and fetch its id
+            let inserted = sqlx::query(
+                r#"INSERT INTO tokens (task_id, chain, contract_address, token_id)
+                   VALUES ($1, $2, $3, $4)
+                   ON CONFLICT (task_id, chain, contract_address, token_id) DO NOTHING
+                   RETURNING id"#,
             )
-            .bind(pin_ids[*index])
+            .bind(task_id)
             .bind(chain)
             .bind(contract_address)
             .bind(token_id)
-            .execute(&mut *tx)
+            .fetch_optional(&mut *tx)
             .await?;
+
+            let tok_id: i64 = if let Some(row) = inserted {
+                row.get("id")
+            } else {
+                sqlx::query("SELECT id FROM tokens WHERE task_id = $1 AND chain = $2 AND contract_address = $3 AND token_id = $4")
+                    .bind(task_id)
+                    .bind(chain)
+                    .bind(contract_address)
+                    .bind(token_id)
+                    .fetch_one(&mut *tx)
+                    .await?
+                    .get("id")
+            };
+
+            sqlx::query("UPDATE pins SET token_id = $2 WHERE id = $1")
+                .bind(pin_ids[*index])
+                .bind(tok_id)
+                .execute(&mut *tx)
+                .await?;
         }
 
         // Commit the transaction
@@ -902,9 +1079,9 @@ impl Db {
             r#"
             SELECT COUNT(*) as count
             FROM (
-                SELECT DISTINCT pt.chain, pt.contract_address, pt.token_id
-                FROM pinned_tokens pt
-                JOIN pins p ON p.id = pt.pin_id
+                SELECT DISTINCT t.chain, t.contract_address, t.token_id
+                FROM tokens t
+                JOIN pins p ON p.token_id = t.id
                 JOIN backup_tasks bt ON bt.task_id = p.task_id
                 WHERE bt.requestor = $1
             ) t
@@ -920,12 +1097,12 @@ impl Db {
             r#"
             SELECT t.chain, t.contract_address, t.token_id
             FROM (
-                SELECT pt.chain, pt.contract_address, pt.token_id, MAX(pt.created_at) AS last_created
-                FROM pinned_tokens pt
-                JOIN pins p ON p.id = pt.pin_id
+                SELECT t.chain, t.contract_address, t.token_id, MAX(p.created_at) AS last_created
+                FROM tokens t
+                JOIN pins p ON p.token_id = t.id
                 JOIN backup_tasks bt ON bt.task_id = p.task_id
                 WHERE bt.requestor = $1
-                GROUP BY pt.chain, pt.contract_address, pt.token_id
+                GROUP BY t.chain, t.contract_address, t.token_id
             ) t
             ORDER BY last_created DESC
             LIMIT $2 OFFSET $3
@@ -942,16 +1119,16 @@ impl Db {
         for r in rows {
             let token_rows = sqlx::query(
                 r#"
-                SELECT pt.chain, pt.contract_address, pt.token_id,
-                       p.cid, p.provider_type, p.provider_url, p.pin_status, pt.created_at
-                FROM pinned_tokens pt
-                JOIN pins p ON p.id = pt.pin_id
+                SELECT t.chain, t.contract_address, t.token_id,
+                       p.cid, p.provider_type, p.provider_url, p.pin_status, p.created_at
+                FROM tokens t
+                JOIN pins p ON p.token_id = t.id
                 JOIN backup_tasks bt ON bt.task_id = p.task_id
                 WHERE bt.requestor = $1
-                  AND pt.chain = $2
-                  AND pt.contract_address = $3
-                  AND pt.token_id = $4
-                ORDER BY pt.created_at DESC
+                  AND t.chain = $2
+                  AND t.contract_address = $3
+                  AND t.token_id = $4
+                ORDER BY p.created_at DESC
                 "#,
             )
             .bind(requestor)
@@ -1006,16 +1183,16 @@ impl Db {
         token_id: &str,
     ) -> Result<Option<TokenWithPins>, sqlx::Error> {
         let query = r#"
-            SELECT pt.chain, pt.contract_address, pt.token_id,
-                   p.cid, p.provider_type, p.provider_url, p.pin_status, pt.created_at
-            FROM pinned_tokens pt
-            JOIN pins p ON p.id = pt.pin_id
+            SELECT t.chain, t.contract_address, t.token_id,
+                   p.cid, p.provider_type, p.provider_url, p.pin_status, p.created_at
+            FROM tokens t
+            JOIN pins p ON p.token_id = t.id
             JOIN backup_tasks bt ON bt.task_id = p.task_id
             WHERE bt.requestor = $1
-              AND pt.chain = $2
-              AND pt.contract_address = $3
-              AND pt.token_id = $4
-            ORDER BY pt.created_at DESC
+              AND t.chain = $2
+              AND t.contract_address = $3
+              AND t.token_id = $4
+            ORDER BY p.created_at DESC
         "#;
 
         let rows = sqlx::query(query)
@@ -1357,6 +1534,15 @@ impl Database for Db {
         Db::get_backup_task(self, task_id).await
     }
 
+    async fn get_backup_task_with_tokens(
+        &self,
+        task_id: &str,
+        limit: i64,
+        offset: i64,
+    ) -> Result<Option<(BackupTask, u32)>, sqlx::Error> {
+        Db::get_backup_task_with_tokens(self, task_id, limit, offset).await
+    }
+
     async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error> {
         Db::delete_backup_task(self, task_id).await
     }
@@ -1368,12 +1554,10 @@ impl Database for Db {
     async fn list_requestor_backup_tasks_paginated(
         &self,
         requestor: &str,
-        include_tokens: bool,
         limit: i64,
         offset: i64,
     ) -> Result<(Vec<BackupTask>, u32), sqlx::Error> {
-        Db::list_requestor_backup_tasks_paginated(self, requestor, include_tokens, limit, offset)
-            .await
+        Db::list_requestor_backup_tasks_paginated(self, requestor, limit, offset).await
     }
 
     async fn list_unprocessed_expired_backups(&self) -> Result<Vec<ExpiredBackup>, sqlx::Error> {

@@ -385,6 +385,10 @@ async fn wait_for_done_backup(
                     let status: StatusResponse = r.json().await.unwrap_or({
                         // Fallback shape with nulls
                         StatusResponse {
+                            tokens: Vec::new(),
+                            total_tokens: 0,
+                            page: 1,
+                            limit: 50,
                             archive: nftbk::server::api::SubresourceStatus {
                                 status: None,
                                 fatal_error: None,

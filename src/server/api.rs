@@ -50,6 +50,14 @@ pub struct SubresourceStatus {
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct StatusResponse {
+    /// Paginated tokens for this task (current page)
+    pub tokens: Vec<Tokens>,
+    /// Total number of tokens for this task (for pagination)
+    pub total_tokens: u32,
+    /// Current page number
+    pub page: u32,
+    /// Page size
+    pub limit: u32,
     /// Archive subresource status/errors
     pub archive: SubresourceStatus,
     /// IPFS subresource status/errors
