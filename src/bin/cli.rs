@@ -388,6 +388,7 @@ async fn wait_for_done_backup(
                         BackupResponse {
                             task_id: task_id.to_string(),
                             created_at: String::new(),
+                            storage_mode: String::new(),
                             tokens: Vec::new(),
                             total_tokens: 0,
                             page: 1,

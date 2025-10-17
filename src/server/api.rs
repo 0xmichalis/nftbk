@@ -74,6 +74,8 @@ pub struct BackupResponse {
     pub task_id: String,
     /// When the backup task was created (ISO 8601)
     pub created_at: String,
+    /// Storage mode used for the backup (archive, ipfs, full)
+    pub storage_mode: String,
     /// Paginated tokens for this task (current page)
     pub tokens: Vec<Tokens>,
     /// Total number of tokens for this task (for pagination)
@@ -125,6 +127,7 @@ impl BackupResponse {
         BackupResponse {
             task_id: task.task_id.clone(),
             created_at: task.created_at.to_rfc3339(),
+            storage_mode: task.storage_mode.clone(),
             tokens,
             total_tokens,
             page,
@@ -173,6 +176,7 @@ mod from_backup_task_tests {
         let resp = BackupResponse::from_backup_task(&task, tokens.clone(), 3, 2, 50);
         assert_eq!(resp.task_id, task.task_id);
         assert_eq!(resp.created_at, task.created_at.to_rfc3339());
+        assert_eq!(resp.storage_mode, task.storage_mode);
         assert_eq!(resp.total_tokens, 3);
         assert_eq!(resp.page, 2);
         assert_eq!(resp.limit, 50);
