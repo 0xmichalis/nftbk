@@ -121,7 +121,7 @@ pub trait Database {
 
     async fn start_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
 
-    async fn start_pin_request_deletions(&self, task_id: &str) -> Result<(), sqlx::Error>;
+    async fn start_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
 
     async fn complete_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
 
@@ -202,7 +202,7 @@ pub struct MockDatabase {
     // Deletion operations
     pub start_deletion_error: Option<String>,
     pub start_archive_request_deletion_error: Option<String>,
-    pub start_pin_request_deletions_error: Option<String>,
+    pub start_pin_request_deletion_error: Option<String>,
     pub complete_archive_request_deletion_error: Option<String>,
     pub complete_pin_request_deletion_error: Option<String>,
 
@@ -335,8 +335,8 @@ impl MockDatabase {
         self.start_archive_request_deletion_error = error;
     }
 
-    pub fn set_start_pin_request_deletions_error(&mut self, error: Option<String>) {
-        self.start_pin_request_deletions_error = error;
+    pub fn set_start_pin_request_deletion_error(&mut self, error: Option<String>) {
+        self.start_pin_request_deletion_error = error;
     }
 
     pub fn set_complete_archive_request_deletion_error(&mut self, error: Option<String>) {
@@ -676,8 +676,8 @@ impl Database for MockDatabase {
         }
     }
 
-    async fn start_pin_request_deletions(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.start_pin_request_deletions_error {
+    async fn start_pin_request_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+        if let Some(error) = &self.start_pin_request_deletion_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
             Ok(())
