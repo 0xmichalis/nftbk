@@ -1,15 +1,15 @@
+use std::future::Future;
+use std::path::PathBuf;
+use std::time::Duration;
+
 use alloy::{
     contract::Error,
     primitives::{Address, U256},
     providers::ProviderBuilder,
     sol,
-    transports::http::{Client, Http},
 };
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::future::Future;
-use std::path::PathBuf;
-use std::time::Duration;
 use tokio::time::sleep;
 use tracing::debug;
 
@@ -19,6 +19,25 @@ use crate::content::Options;
 use crate::httpclient::HttpClient;
 use crate::ipfs::IpfsPinningProvider;
 use crate::StorageConfig;
+
+// Type alias for the provider returned by alloy::providers::ProviderBuilder::new().connect()
+type EvmProvider = alloy::providers::fillers::FillProvider<
+    alloy::providers::fillers::JoinFill<
+        alloy::providers::Identity,
+        alloy::providers::fillers::JoinFill<
+            alloy::providers::fillers::GasFiller,
+            alloy::providers::fillers::JoinFill<
+                alloy::providers::fillers::BlobGasFiller,
+                alloy::providers::fillers::JoinFill<
+                    alloy::providers::fillers::NonceFiller,
+                    alloy::providers::fillers::ChainIdFiller,
+                >,
+            >,
+        >,
+    >,
+    alloy::providers::RootProvider<alloy::network::Ethereum>,
+    alloy::network::Ethereum,
+>;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -121,7 +140,7 @@ trait CryptoPunksContract: Sync {
 }
 
 struct CryptoPunks<'a> {
-    rpc: &'a alloy::providers::RootProvider<Http<Client>>,
+    rpc: &'a EvmProvider,
     address: Address,
 }
 
@@ -129,12 +148,12 @@ struct CryptoPunks<'a> {
 impl<'a> CryptoPunksContract for CryptoPunks<'a> {
     async fn punk_image_svg(&self, punk_id: u16) -> Result<String, Error> {
         let c = ICryptoPunks::new(self.address, self.rpc);
-        c.punkImageSvg(punk_id).call().await.map(|r| r._0)
+        c.punkImageSvg(punk_id).call().await
     }
 
     async fn punk_attributes(&self, punk_id: u16) -> Result<String, Error> {
         let c = ICryptoPunks::new(self.address, self.rpc);
-        c.punkAttributes(punk_id).call().await.map(|r| r._0)
+        c.punkAttributes(punk_id).call().await
     }
 }
 
@@ -175,15 +194,15 @@ where
 }
 
 pub struct EvmChainProcessor {
-    pub rpc: alloy::providers::RootProvider<Http<Client>>,
+    pub rpc: EvmProvider,
     pub output_path: Option<PathBuf>,
     pub ipfs_pinning_providers: Vec<Box<dyn IpfsPinningProvider>>,
     pub http_client: HttpClient,
 }
 
 impl EvmChainProcessor {
-    pub fn new(rpc_url: &str, storage_config: StorageConfig) -> anyhow::Result<Self> {
-        let rpc = ProviderBuilder::new().on_http(rpc_url.parse()?);
+    pub async fn new(rpc_url: &str, storage_config: StorageConfig) -> anyhow::Result<Self> {
+        let rpc = ProviderBuilder::new().connect(rpc_url).await?;
         let ipfs_pinning_providers: Vec<Box<dyn IpfsPinningProvider>> = storage_config
             .ipfs_pinning_configs
             .iter()
@@ -202,7 +221,7 @@ impl EvmChainProcessor {
 impl crate::chain::NFTChainProcessor for EvmChainProcessor {
     type Metadata = NFTMetadata;
     type ContractTokenId = ContractTokenId;
-    type RpcClient = alloy::providers::RootProvider<Http<Client>>;
+    type RpcClient = EvmProvider;
 
     async fn fetch_metadata(
         &self,
@@ -343,14 +362,14 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
         })
         .await
         {
-            Ok(uri) => Ok(uri._0),
+            Ok(uri) => Ok(uri),
             Err(e) if !is_rate_limited(&e) => {
                 let uri = try_call(|| {
                     let nft = nft.clone();
                     async move { nft.uri(token_id).call().await }
                 })
                 .await?;
-                Ok(uri._0)
+                Ok(uri)
             }
             Err(e) => Err(e),
         }?;
@@ -404,7 +423,7 @@ fn replace_id_pattern(uri: &str, token_id: &U256) -> Option<String> {
 
 /// Handle special contract URI generation for contracts that don't follow ERC-721/ERC-1155 standards
 async fn handle_special_contract_uri(
-    rpc: &alloy::providers::RootProvider<Http<Client>>,
+    rpc: &EvmProvider,
     chain_name: &str,
     token_address: &str,
     token_id: &U256,
@@ -434,7 +453,7 @@ async fn handle_special_contract_uri(
 
 /// Generate a data URI for CryptoPunks metadata using contract calls
 async fn generate_cryptopunks_data_uri(
-    rpc: &alloy::providers::RootProvider<Http<Client>>,
+    rpc: &EvmProvider,
     token_id: &U256,
 ) -> anyhow::Result<String> {
     // CryptoPunks contract address
@@ -762,14 +781,16 @@ mod new_tests {
     use super::*;
     use crate::chain::NFTChainProcessor;
 
-    #[test]
-    fn constructs_with_valid_rpc_and_storage_config() {
+    #[tokio::test]
+    async fn constructs_with_valid_rpc_and_storage_config() {
         let storage = crate::StorageConfig {
             output_path: Some(std::path::PathBuf::from("/tmp")),
             prune_redundant: false,
             ipfs_pinning_configs: vec![],
         };
-        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
+        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage)
+            .await
+            .expect("new ok");
         // basic sanity
         let _ = proc.http_client();
         let _ = proc.ipfs_pinning_providers();
@@ -783,8 +804,8 @@ mod ipfs_pinning_providers_tests {
     use super::*;
     use crate::chain::NFTChainProcessor;
 
-    #[test]
-    fn returns_configured_providers() {
+    #[tokio::test]
+    async fn returns_configured_providers() {
         let storage = crate::StorageConfig {
             output_path: None,
             prune_redundant: false,
@@ -793,7 +814,9 @@ mod ipfs_pinning_providers_tests {
                 bearer_token_env: None,
             }],
         };
-        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
+        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage)
+            .await
+            .expect("new ok");
         assert_eq!(proc.ipfs_pinning_providers().len(), 1);
     }
 }
@@ -803,14 +826,16 @@ mod http_client_tests {
     use super::*;
     use crate::chain::NFTChainProcessor;
 
-    #[test]
-    fn returns_http_client_reference() {
+    #[tokio::test]
+    async fn returns_http_client_reference() {
         let storage = crate::StorageConfig {
             output_path: None,
             prune_redundant: false,
             ipfs_pinning_configs: vec![],
         };
-        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
+        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage)
+            .await
+            .expect("new ok");
         let _client_ref = proc.http_client();
     }
 }
@@ -820,14 +845,16 @@ mod output_path_tests {
     use super::*;
     use crate::chain::NFTChainProcessor;
 
-    #[test]
-    fn returns_configured_output_path() {
+    #[tokio::test]
+    async fn returns_configured_output_path() {
         let storage = crate::StorageConfig {
             output_path: Some(std::path::PathBuf::from("/tmp")),
             prune_redundant: false,
             ipfs_pinning_configs: vec![],
         };
-        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage).expect("new ok");
+        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage)
+            .await
+            .expect("new ok");
         assert_eq!(proc.output_path().unwrap().to_str().unwrap(), "/tmp");
     }
 }

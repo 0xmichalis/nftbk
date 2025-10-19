@@ -166,8 +166,9 @@ pub mod backup {
                     )
                     .await?
                 } else {
-                    let processor =
-                        Arc::new(EvmChainProcessor::new(rpc_url, cfg.storage_config.clone())?);
+                    let processor = Arc::new(
+                        EvmChainProcessor::new(rpc_url, cfg.storage_config.clone()).await?,
+                    );
                     let process_config = cfg.process_config.clone();
                     process_nfts(
                         processor,

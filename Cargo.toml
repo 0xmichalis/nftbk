@@ -18,9 +18,9 @@ name = "nftbk-server"
 path = "src/bin/server.rs"
 
 [dependencies]
-alloy = { version = "0.9.2", features = ["full"] }
-alloy-contract = { version = "0.9.2" }
-alloy-sol-types = "0.8.19"
+alloy = { version = "1.0.7", features = ["full"] }
+alloy-contract = { version = "1.0.7" }
+alloy-sol-types = "1.0.7"
 anyhow = "1.0"
 async-compression = { version = "0.4", features = ["tokio", "futures-io", "gzip"] }
 async-trait = "0.1.88"
