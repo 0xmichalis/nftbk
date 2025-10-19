@@ -24,7 +24,7 @@ alloy-sol-types = "1.0.7"
 anyhow = "1.0"
 async-compression = { version = "0.4", features = ["tokio", "futures-io", "gzip"] }
 async-trait = "0.1.88"
-axum = "0.7"
+axum = "0.8"
 base64 = "0.21"
 chrono = { version = "0.4.39", features = ["serde"] }
 clap = { version = "4.3", features = ["derive", "env"] }
@@ -64,11 +64,17 @@ tracing-subscriber = { version = "0.3.19", features = ["env-filter", "time"] }
 url = "2.4"
 urlencoding = "2.1"
 utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
-utoipa-swagger-ui = { version = "8", features = ["axum"] }
+utoipa-swagger-ui = { version = "9", features = ["axum"] }
 uuid = { version = "1.4", features = ["v4"] }
+x402-axum = { git = "https://github.com/0xmichalis/x402-rs", branch = "dynamic-resolver", package = "x402-axum" }
+x402-rs = { version = "0.7" }
 zip = "0.6"
 
 [dev-dependencies]
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+p256 = { version = "0.13", features = ["pkcs8"] }
+pkcs8 = "0.10"
+rand_core = "0.6"
 tempfile = "3.8"
 tokio-test = "0.4"
 wiremock = "0.5"

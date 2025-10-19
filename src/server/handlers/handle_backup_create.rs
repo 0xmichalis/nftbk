@@ -113,7 +113,7 @@ async fn ensure_backup_exists<DB: Database + ?Sized>(
 
 /// Create a backup task for the authenticated user. This task will be processed asynchronously and the result will be available in the /v1/backups/{task_id} endpoint.
 /// By default, this endpoint creates an archive file with metadata and content from all tokens to be downloaded by the user. The archive format depends on the user-agent (zip or tar.gz).
-/// The user can optionally request to pin content that is stored on IPFS.
+/// The user can optionally request to pin content that is stored on IPFS. If configured in the server, a payment can be required to create the backup task.
 #[utoipa::path(
     post,
     path = "/v1/backups",
@@ -126,6 +126,7 @@ async fn ensure_backup_exists<DB: Database + ?Sized>(
         (status = 202, description = "Backup task accepted and queued", body = BackupCreateResponse),
         (status = 200, description = "Backup already exists or in progress", body = BackupCreateResponse),
         (status = 400, description = "Invalid request", body = ApiProblem, content_type = "application/problem+json"),
+        (status = 402, description = "Payment required. See https://www.x402.org/ for more details.", body = ApiProblem, content_type = "application/problem+json"),
         (status = 403, description = "Requestor does not match task owner", body = ApiProblem, content_type = "application/problem+json"),
         (status = 409, description = "Invalid scope for existing task", body = ApiProblem, content_type = "application/problem+json"),
         (status = 500, description = "Internal server error", body = ApiProblem, content_type = "application/problem+json"),

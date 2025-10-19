@@ -17,6 +17,7 @@ use crate::server::api::{
     ApiProblem, BackupCreateResponse, BackupRequest, BackupResponse, ProblemJson, Tokens,
 };
 use crate::server::auth::jwt::verify_jwt;
+use crate::server::auth::x402::X402Config;
 use crate::server::database::{PinInfo, TokenWithPins};
 use crate::server::handlers::handle_archive_download::{DownloadQuery, DownloadTokenResponse};
 use crate::server::handlers::handle_archive_download::{
@@ -182,35 +183,61 @@ async fn auth_middleware(
         .into_response()
 }
 
-pub fn build_router(state: AppState, jwt_credentials: Vec<(String, String, String)>) -> Router {
+pub fn build_router(
+    state: AppState,
+    jwt_credentials: Vec<(String, String, String)>,
+    x402_config: Option<X402Config>,
+) -> Router {
     // Public router (no auth middleware)
     let public_router = Router::new()
-        .route("/v1/backups/:task_id/download", get(handle_download))
+        .route("/v1/backups/{task_id}/download", get(handle_download))
         .merge(SwaggerUi::new("/v1/swagger-ui").url("/v1/openapi.json", ApiDoc::openapi()))
         .with_state(state.clone());
 
     // Authenticated router
     let mut authed_router = Router::new()
+        .route("/v1/backups", get(handle_backups))
+        .route("/v1/backups/{task_id}", get(handle_backup))
         .route(
-            "/v1/backups",
-            get(handle_backups).post(handle_backup_create),
-        )
-        .route("/v1/backups/:task_id", get(handle_backup))
-        .route(
-            "/v1/backups/:task_id/download-tokens",
+            "/v1/backups/{task_id}/download-tokens",
             post(handle_download_token),
         )
-        .route("/v1/backups/:task_id/retries", post(handle_backup_retries))
+        .route("/v1/backups/{task_id}/retries", post(handle_backup_retries))
         .route(
-            "/v1/backups/:task_id/archive",
+            "/v1/backups/{task_id}/archive",
             delete(handle_backup_delete_archive),
         )
         .route(
-            "/v1/backups/:task_id/pins",
+            "/v1/backups/{task_id}/pins",
             delete(handle_backup_delete_pins),
         )
         .route("/v1/pins", get(handle_pins))
         .with_state(state.clone());
+
+    // Add POST /v1/backups route with optional x402 middleware
+    let post_backups_route = match x402_config {
+        None => Router::new()
+            .route("/v1/backups", post(handle_backup_create))
+            .with_state(state.clone()),
+        Some(config) => {
+            let x402 = config
+                .to_middleware()
+                .expect("invalid x402 middleware config")
+                .with_description("Backup creation API");
+
+            // TODO: make this configurable
+            let price_tag = config
+                .usdc_price_tag_for_amount("0.1")
+                .expect("invalid x402 price");
+
+            Router::new()
+                .route("/v1/backups", post(handle_backup_create))
+                .layer(x402.with_price_tag(price_tag))
+                .with_state(state.clone())
+        }
+    };
+
+    authed_router = authed_router.merge(post_backups_route);
 
     let auth_state = AuthState {
         app_state: state.clone(),

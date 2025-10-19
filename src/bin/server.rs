@@ -13,6 +13,7 @@ use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
 
+use nftbk::server::auth::x402::{X402Config, X402ConfigRaw};
 use nftbk::server::pin_monitor::run_pin_monitor;
 use nftbk::server::pruner::run_pruner;
 use nftbk::server::router::build_router;
@@ -95,6 +96,8 @@ struct JwtCredential {
 #[derive(serde::Deserialize)]
 struct AuthFile {
     jwt: Vec<JwtCredential>,
+    #[serde(default)]
+    x402: Option<X402ConfigRaw>,
 }
 
 #[derive(serde::Deserialize)]
@@ -118,6 +121,7 @@ async fn main() {
 
     // Load JWT credentials from file if provided
     let mut jwt_credentials: Vec<JwtCredential> = Vec::new();
+    let mut x402_config: Option<X402Config> = None;
     if let Some(path) = &args.jwt_config {
         match std::fs::read_to_string(path) {
             Ok(contents) => match toml::from_str::<AuthFile>(&contents) {
@@ -127,6 +131,18 @@ async fn main() {
                         normalized.verification_key =
                             normalized.verification_key.replace("\\n", "\n");
                         jwt_credentials.push(normalized);
+                    }
+                    if let Some(raw) = file.x402.take() {
+                        match X402Config::compile(raw) {
+                            Ok(cfg) => {
+                                x402_config = Some(cfg);
+                                info!("Loaded x402 config from '{}'", path);
+                            }
+                            Err(e) => {
+                                error!("Failed to compile x402 config from '{}': {}", path, e);
+                                std::process::exit(1);
+                            }
+                        }
                     }
                     info!(
                         "Loaded {} JWT credential set(s) from config file '{}'",
@@ -276,7 +292,11 @@ async fn main() {
             .into_iter()
             .map(|c| (c.issuer, c.audience, c.verification_key))
             .collect(),
+        x402_config.clone(),
     );
+    if let Some(cfg) = x402_config {
+        info!("x402 config loaded (facilitator: {})", cfg.facilitator.url);
+    }
     info!("Listening on {}", addr);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal)
