@@ -302,6 +302,8 @@ pub fn negotiate_archive_format(accept: Option<&str>, user_agent: Option<&str>) 
 #[cfg(test)]
 mod archive_helpers_tests {
     use super::{archive_format_from_accept, negotiate_archive_format};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
 
     #[test]
     fn accept_zip_parses_to_zip() {
@@ -358,5 +360,34 @@ mod archive_helpers_tests {
         assert_eq!(fmt_windows, "zip");
         let fmt_mac = negotiate_archive_format(Some("*/*"), Some("Macintosh"));
         assert_eq!(fmt_mac, "zip");
+    }
+
+    #[test]
+    fn test_shutdown_interruption_returns_correct_error() {
+        use super::{check_shutdown_signal, ARCHIVE_INTERRUPTED_BY_SHUTDOWN};
+        use std::io;
+
+        // Test that shutdown signal returns the correct error message
+        let shutdown_flag = Arc::new(AtomicBool::new(true));
+        let result = check_shutdown_signal(Some(&shutdown_flag));
+
+        assert!(result.is_err());
+        let error = result.unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(error.to_string(), ARCHIVE_INTERRUPTED_BY_SHUTDOWN);
+    }
+
+    #[test]
+    fn test_no_shutdown_signal_returns_ok() {
+        use super::check_shutdown_signal;
+
+        // Test that no shutdown signal returns Ok
+        let shutdown_flag = Arc::new(AtomicBool::new(false));
+        let result = check_shutdown_signal(Some(&shutdown_flag));
+        assert!(result.is_ok());
+
+        // Test that no flag at all returns Ok
+        let result = check_shutdown_signal(None);
+        assert!(result.is_ok());
     }
 }

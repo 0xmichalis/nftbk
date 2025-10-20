@@ -54,6 +54,13 @@ async fn persist_non_fatal_error_logs<DB: Database + ?Sized>(
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum ArchiveResult {
+    Success,
+    Error,
+    ShutdownInterrupted,
+}
+
 async fn process_archive_outcome<DB: Database + ?Sized>(
     state: &AppState,
     task: &BackupTask,
@@ -62,7 +69,7 @@ async fn process_archive_outcome<DB: Database + ?Sized>(
     archive_outcome: &crate::ArchiveOutcome,
     shutdown_flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     db: &DB,
-) -> bool {
+) -> ArchiveResult {
     // Sync all files and directories to disk before archiving
     info!("Syncing {} to disk before archiving", out_path.display());
     let files_written = archive_outcome.files.clone();
@@ -76,7 +83,7 @@ async fn process_archive_outcome<DB: Database + ?Sized>(
         let error_msg = "Sync before archiving failed".to_string();
         error!("{error_msg}");
         let _ = db.set_archive_request_error(task_id, &error_msg).await;
-        return false;
+        return ArchiveResult::Error;
     }
     info!(
         "Synced {} to disk before archiving ({} files)",
@@ -109,7 +116,7 @@ async fn process_archive_outcome<DB: Database + ?Sized>(
             let error_msg = "Archiving task panicked".to_string();
             error!("{error_msg}");
             let _ = db.set_archive_request_error(task_id, &error_msg).await;
-            return false;
+            return ArchiveResult::Error;
         }
     };
 
@@ -125,7 +132,7 @@ async fn process_archive_outcome<DB: Database + ?Sized>(
                 let error_msg = format!("Failed to write archive checksum file: {e}");
                 error!("{error_msg}");
                 let _ = db.set_archive_request_error(task_id, &error_msg).await;
-                return false;
+                return ArchiveResult::Error;
             }
         }
         Err(e) => {
@@ -135,16 +142,16 @@ async fn process_archive_outcome<DB: Database + ?Sized>(
                     "Archiving for backup {task_id} was gracefully interrupted by shutdown signal"
                 );
                 let _ = std::fs::remove_file(&zip_pathbuf);
-                return false;
+                return ArchiveResult::ShutdownInterrupted;
             }
             let error_msg = format!("Failed to archive backup: {e}");
             error!("{error_msg}");
             let _ = db.set_archive_request_error(task_id, &error_msg).await;
-            return false;
+            return ArchiveResult::Error;
         }
     }
 
-    true
+    ArchiveResult::Success
 }
 
 async fn process_ipfs_outcome<DB: Database + ?Sized>(
@@ -268,7 +275,7 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
         }
         StorageMode::Archive => {
             let out_path = output_path.as_ref().unwrap();
-            let success = process_archive_outcome(
+            let result = process_archive_outcome(
                 &state,
                 &task,
                 &task_id,
@@ -278,8 +285,17 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
                 db,
             )
             .await;
-            let status = if success { "done" } else { "error" };
-            let _ = db.update_archive_request_status(&task_id, status).await;
+            match result {
+                ArchiveResult::Success => {
+                    let _ = db.update_archive_request_status(&task_id, "done").await;
+                }
+                ArchiveResult::Error => {
+                    let _ = db.update_archive_request_status(&task_id, "error").await;
+                }
+                ArchiveResult::ShutdownInterrupted => {
+                    // Don't update status; leave it as is (likely "in_progress")
+                }
+            }
         }
         StorageMode::Full => {
             let out_path = output_path.as_ref().unwrap().clone();
@@ -290,7 +306,7 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
             // Process archive and IPFS outcomes in parallel. This should speed up status
             // updates for ipfs tasks since archives usually take longer to complete.
             let archive_fut = async move {
-                let success = process_archive_outcome(
+                let result = process_archive_outcome(
                     state_ref,
                     task_ref,
                     &task_id_ref,
@@ -300,8 +316,19 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
                     db,
                 )
                 .await;
-                let status = if success { "done" } else { "error" };
-                let _ = db.update_archive_request_status(&task_id_ref, status).await;
+                match result {
+                    ArchiveResult::Success => {
+                        let _ = db.update_archive_request_status(&task_id_ref, "done").await;
+                    }
+                    ArchiveResult::Error => {
+                        let _ = db
+                            .update_archive_request_status(&task_id_ref, "error")
+                            .await;
+                    }
+                    ArchiveResult::ShutdownInterrupted => {
+                        // Don't update status; leave it as is (likely "in_progress")
+                    }
+                }
             };
 
             let ipfs_fut = async {
@@ -313,7 +340,6 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
             tokio::join!(archive_fut, ipfs_fut);
         }
     }
-    info!("Backup {} ready", task_id);
 }
 
 pub async fn run_backup_task(state: AppState, task: BackupTask) {

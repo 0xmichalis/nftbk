@@ -1,8 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+use tracing::{info, warn};
 
 use crate::server::database::r#trait::Database;
+use crate::server::StorageMode;
 
 pub mod r#trait;
 
@@ -291,6 +293,15 @@ impl Db {
         Ok(())
     }
 
+    /// Log a human-friendly backup status based on a machine status value and storage mode
+    fn log_status(task_id: &str, status: &str, mode: &StorageMode) {
+        match status {
+            "done" => info!("Backup {} ready (storage: {})", task_id, mode.as_str()),
+            "error" => warn!("Backup {} errored (storage: {})", task_id, mode.as_str()),
+            _ => (),
+        }
+    }
+
     pub async fn update_pin_request_status(
         &self,
         task_id: &str,
@@ -307,6 +318,9 @@ impl Db {
         .bind(status)
         .execute(&self.pool)
         .await?;
+
+        Self::log_status(task_id, status, &StorageMode::Ipfs);
+
         Ok(())
     }
 
@@ -326,6 +340,9 @@ impl Db {
         .bind(status)
         .execute(&self.pool)
         .await?;
+
+        Self::log_status(task_id, status, &StorageMode::Archive);
+
         Ok(())
     }
 
