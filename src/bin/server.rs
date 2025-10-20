@@ -98,21 +98,34 @@ async fn main() {
     let args = Args::parse();
     logging::init(args.log_level.clone(), !args.no_color);
     info!(
-        "Starting {} {} (commit {})",
+        "Version: {} {} (commit {})",
         env!("CARGO_BIN_NAME"),
         env!("CARGO_PKG_VERSION"),
         env!("GIT_COMMIT")
     );
+    info!("Initializing server with options: {:?}", args);
 
     // Load authentication config
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
+    info!(
+        "Symmetric authentication enabled: {}",
+        is_defined(&auth_token)
+    );
     let mut jwt_credentials: Vec<JwtCredential> = Vec::new();
     let mut x402_config: Option<X402Config> = None;
     if let Some(path) = &args.auth_config {
         match load_auth_config(std::path::Path::new(path)) {
             Ok(auth_config) => {
                 jwt_credentials = auth_config.jwt_credentials;
+                info!(
+                    "JWT authentication enabled: {} ({} credential set(s))",
+                    !jwt_credentials.is_empty(),
+                    jwt_credentials.len()
+                );
                 x402_config = auth_config.x402_config;
+                if let Some(ref cfg) = x402_config {
+                    info!("x402 config loaded (facilitator: {})", cfg.facilitator.url);
+                }
             }
             Err(e) => {
                 error!("Failed to load auth config from '{}': {}", path, e);
@@ -168,17 +181,6 @@ async fn main() {
         ipfs_pinning_configs,
     )
     .await;
-
-    info!("Starting server with options: {:?}", args);
-    info!(
-        "Symmetric authentication enabled: {}",
-        is_defined(&auth_token)
-    );
-    info!(
-        "JWT authentication enabled: {} ({} credential set(s))",
-        !jwt_credentials.is_empty(),
-        jwt_credentials.len()
-    );
 
     // Spawn worker pool for backup tasks
     let worker_handles =
@@ -255,9 +257,6 @@ async fn main() {
             .collect(),
         x402_config.clone(),
     );
-    if let Some(cfg) = x402_config {
-        info!("x402 config loaded (facilitator: {})", cfg.facilitator.url);
-    }
     info!("Listening on {}", addr);
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown_signal)
