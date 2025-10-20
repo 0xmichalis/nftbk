@@ -49,13 +49,17 @@ pub fn load_auth_config(config_path: &Path) -> Result<AuthConfig, String> {
     for cred in file.jwt.drain(..) {
         let mut normalized = cred.clone();
         normalized.verification_key = normalized.verification_key.replace("\\n", "\n");
-        jwt_credentials.push(normalized);
+        jwt_credentials.push(normalized.clone());
+        info!(
+            "Loaded JWT credential set (issuer: {}, audience: {})",
+            normalized.issuer, normalized.audience
+        );
     }
 
     let x402_config = if let Some(raw) = file.x402.take() {
         match X402Config::compile(raw) {
             Ok(cfg) => {
-                info!("Loaded x402 config from '{}'", config_path.display());
+                info!("Loaded x402 config (facilitator: {})", cfg.facilitator.url);
                 Some(cfg)
             }
             Err(e) => {
@@ -69,12 +73,6 @@ pub fn load_auth_config(config_path: &Path) -> Result<AuthConfig, String> {
     } else {
         None
     };
-
-    info!(
-        "Loaded {} JWT credential set(s) from config file '{}'",
-        jwt_credentials.len(),
-        config_path.display()
-    );
 
     Ok(AuthConfig {
         jwt_credentials,

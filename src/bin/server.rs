@@ -117,15 +117,7 @@ async fn main() {
         match load_auth_config(std::path::Path::new(path)) {
             Ok(auth_config) => {
                 jwt_credentials = auth_config.jwt_credentials;
-                info!(
-                    "JWT authentication enabled: {} ({} credential set(s))",
-                    !jwt_credentials.is_empty(),
-                    jwt_credentials.len()
-                );
                 x402_config = auth_config.x402_config;
-                if let Some(ref cfg) = x402_config {
-                    info!("x402 config loaded (facilitator: {})", cfg.facilitator.url);
-                }
             }
             Err(e) => {
                 error!("Failed to load auth config from '{}': {}", path, e);
