@@ -12,8 +12,8 @@ use tracing::{error, info};
 use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
-
-use nftbk::server::auth::x402::{X402Config, X402ConfigRaw};
+use nftbk::server::auth::x402::X402Config;
+use nftbk::server::auth::{load_auth_config, JwtCredential};
 use nftbk::server::pin_monitor::run_pin_monitor;
 use nftbk::server::pruner::run_pruner;
 use nftbk::server::router::build_router;
@@ -86,20 +86,6 @@ struct Args {
     ipfs_config: Option<String>,
 }
 
-#[derive(serde::Deserialize, Clone, Debug)]
-struct JwtCredential {
-    issuer: String,
-    audience: String,
-    verification_key: String,
-}
-
-#[derive(serde::Deserialize)]
-struct AuthFile {
-    jwt: Vec<JwtCredential>,
-    #[serde(default)]
-    x402: Option<X402ConfigRaw>,
-}
-
 #[derive(serde::Deserialize)]
 struct IpfsConfigFile {
     ipfs_pinning_provider: Vec<nftbk::ipfs::IpfsPinningConfig>,
@@ -117,45 +103,20 @@ async fn main() {
         env!("CARGO_PKG_VERSION"),
         env!("GIT_COMMIT")
     );
-    let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
 
-    // Load JWT credentials from file if provided
+    // Load authentication config
+    let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
     let mut jwt_credentials: Vec<JwtCredential> = Vec::new();
     let mut x402_config: Option<X402Config> = None;
     if let Some(path) = &args.jwt_config {
-        match std::fs::read_to_string(path) {
-            Ok(contents) => match toml::from_str::<AuthFile>(&contents) {
-                Ok(mut file) => {
-                    for cred in file.jwt.drain(..) {
-                        let mut normalized = cred.clone();
-                        normalized.verification_key =
-                            normalized.verification_key.replace("\\n", "\n");
-                        jwt_credentials.push(normalized);
-                    }
-                    if let Some(raw) = file.x402.take() {
-                        match X402Config::compile(raw) {
-                            Ok(cfg) => {
-                                x402_config = Some(cfg);
-                                info!("Loaded x402 config from '{}'", path);
-                            }
-                            Err(e) => {
-                                error!("Failed to compile x402 config from '{}': {}", path, e);
-                                std::process::exit(1);
-                            }
-                        }
-                    }
-                    info!(
-                        "Loaded {} JWT credential set(s) from config file '{}'",
-                        jwt_credentials.len(),
-                        path
-                    );
-                }
-                Err(e) => {
-                    error!("Failed to parse JWT config file '{path}': {e}");
-                }
-            },
+        match load_auth_config(std::path::Path::new(path)) {
+            Ok(auth_config) => {
+                jwt_credentials = auth_config.jwt_credentials;
+                x402_config = auth_config.x402_config;
+            }
             Err(e) => {
-                error!("Failed to read JWT config file '{path}': {e}");
+                error!("Failed to load auth config from '{}': {}", path, e);
+                std::process::exit(1);
             }
         }
     }
