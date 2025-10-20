@@ -78,7 +78,7 @@ struct Args {
 
     /// Path to a TOML file with one or more JWT credential sets
     #[arg(long)]
-    jwt_config: Option<String>,
+    auth_config: Option<String>,
 
     /// Path to a TOML file with IPFS provider configuration
     /// When provided, this is used instead of IPFS_* env vars
@@ -108,7 +108,7 @@ async fn main() {
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
     let mut jwt_credentials: Vec<JwtCredential> = Vec::new();
     let mut x402_config: Option<X402Config> = None;
-    if let Some(path) = &args.jwt_config {
+    if let Some(path) = &args.auth_config {
         match load_auth_config(std::path::Path::new(path)) {
             Ok(auth_config) => {
                 jwt_credentials = auth_config.jwt_credentials;

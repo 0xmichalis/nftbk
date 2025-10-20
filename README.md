@@ -35,9 +35,9 @@ USERNAME=michalis \
 
 ### JWT authentication support
 
-The server supports authenticating JWT tokens using a TOML configuration file containing one or more credential sets, passed via the `--jwt-config` flag.
+The server supports authenticating JWT tokens using a TOML configuration file containing one or more credential sets, passed via the `--auth-config` flag.
 
-Example `config_jwt.toml` (multiple `[[jwt]]` tables):
+Example `config_auth.toml` (multiple `[[jwt]]` tables):
 
 ```toml
 [[jwt]]
