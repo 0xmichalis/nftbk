@@ -71,6 +71,7 @@ x402-rs = { version = "0.7" }
 zip = "0.6"
 
 [dev-dependencies]
+cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 p256 = { version = "0.13", features = ["pkcs8"] }
 pkcs8 = "0.10"
