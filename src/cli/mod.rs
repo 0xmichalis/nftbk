@@ -7,6 +7,7 @@ use crate::logging::LogLevel;
 
 pub mod commands;
 pub mod config;
+pub mod x402;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
