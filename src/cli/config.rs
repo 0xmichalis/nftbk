@@ -1,9 +1,10 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use tokio::fs;
 
 use crate::backup::{BackupConfig, ChainConfig, TokenConfig};
+use crate::config::Config;
 use crate::ipfs::IpfsPinningConfig;
 use crate::{ProcessManagementConfig, StorageConfig};
 
@@ -42,6 +43,10 @@ pub fn load_ipfs_config(path: Option<&String>) -> Result<Vec<IpfsPinningConfig>>
     let config: IpfsConfigFile = toml::from_str(&contents)
         .with_context(|| format!("Failed to parse IPFS config file '{path}'"))?;
     Ok(config.ipfs_pinning_provider)
+}
+
+pub fn load_config(path: &Path) -> Result<Config> {
+    Config::load_from_file(path).context("Failed to load config")
 }
 
 pub fn create_backup_config(

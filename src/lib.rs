@@ -16,6 +16,7 @@ use crate::envvar::resolve_env_placeholders;
 
 pub mod chain;
 pub mod cli;
+pub mod config;
 pub mod content;
 pub mod envvar;
 pub mod httpclient;

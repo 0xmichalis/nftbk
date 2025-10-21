@@ -134,7 +134,7 @@ impl Default for AppState {
 impl AppState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        chain_config_path: &str,
+        config_path: &str,
         base_dir: &str,
         unsafe_skip_checksum_check: bool,
         auth_token: Option<String>,
@@ -146,12 +146,10 @@ impl AppState {
         shutdown_flag: Arc<AtomicBool>,
         ipfs_pinning_configs: Vec<IpfsPinningConfig>,
     ) -> Self {
-        let config_content = tokio::fs::read_to_string(chain_config_path)
-            .await
-            .expect("Failed to read chain config");
-        let chains: std::collections::HashMap<String, String> =
-            toml::from_str(&config_content).expect("Failed to parse chain config");
-        let mut chain_config = ChainConfig(chains);
+        let unified_config =
+            crate::config::Config::load_from_file(std::path::Path::new(config_path))
+                .expect("Failed to load unified config");
+        let mut chain_config = unified_config.chain_config();
         chain_config
             .resolve_env_vars()
             .expect("Failed to resolve environment variables in chain config");

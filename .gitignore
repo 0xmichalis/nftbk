@@ -3,7 +3,7 @@
 .env*
 !.env.*.example
 config_*.toml
-!config_chains.toml
+config.toml
 /nft_backup*
 /*.json
 !.sqlx/*

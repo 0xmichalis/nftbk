@@ -28,9 +28,9 @@ pub struct Cli {
 pub enum Commands {
     /// Create a backup locally
     Create {
-        /// The path to the chains configuration file
-        #[arg(short = 'c', long, default_value = "config_chains.toml")]
-        chains_config_path: PathBuf,
+        /// The path to the unified configuration file
+        #[arg(short = 'c', long, default_value = "config.toml")]
+        config_path: PathBuf,
 
         /// The path to the tokens configuration file
         #[arg(short = 't', long, default_value = "config_tokens.toml")]
@@ -47,10 +47,6 @@ pub enum Commands {
         /// Exit on the first error encountered
         #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
         exit_on_error: bool,
-
-        /// Path to a TOML file with IPFS provider configuration
-        #[arg(long)]
-        ipfs_config: Option<String>,
     },
     /// Server-related operations
     Server {
@@ -121,20 +117,18 @@ impl Cli {
     pub async fn run(self) -> Result<()> {
         match self.command {
             Commands::Create {
-                chains_config_path,
+                config_path,
                 tokens_config_path,
                 output_path,
                 prune_redundant,
                 exit_on_error,
-                ipfs_config,
             } => {
                 commands::create::run(
-                    chains_config_path,
+                    config_path,
                     tokens_config_path,
                     output_path,
                     prune_redundant,
                     exit_on_error,
-                    ipfs_config,
                 )
                 .await
             }
@@ -190,19 +184,17 @@ mod tests {
             assert!(!cli.no_color);
             match cli.command {
                 Commands::Create {
-                    chains_config_path,
+                    config_path,
                     tokens_config_path,
                     output_path,
                     prune_redundant,
                     exit_on_error,
-                    ipfs_config,
                 } => {
-                    assert_eq!(chains_config_path, PathBuf::from("config_chains.toml"));
+                    assert_eq!(config_path, PathBuf::from("config.toml"));
                     assert_eq!(tokens_config_path, PathBuf::from("config_tokens.toml"));
                     assert_eq!(output_path, Some(PathBuf::from("nft_backup")));
                     assert!(!prune_redundant);
                     assert!(!exit_on_error);
-                    assert!(ipfs_config.is_none());
                 }
                 _ => panic!("Expected Create command"),
             }
@@ -217,8 +209,8 @@ mod tests {
                 "--no-color",
                 "true",
                 "create",
-                "--chains-config-path",
-                "custom_chains.toml",
+                "--config-path",
+                "custom_config.toml",
                 "--tokens-config-path",
                 "custom_tokens.toml",
                 "--output-path",
@@ -227,8 +219,6 @@ mod tests {
                 "true",
                 "--exit-on-error",
                 "true",
-                "--ipfs-config",
-                "ipfs.toml",
             ];
             let cli = Cli::try_parse_from(args).unwrap();
 
@@ -236,19 +226,17 @@ mod tests {
             assert!(cli.no_color);
             match cli.command {
                 Commands::Create {
-                    chains_config_path,
+                    config_path,
                     tokens_config_path,
                     output_path,
                     prune_redundant,
                     exit_on_error,
-                    ipfs_config,
                 } => {
-                    assert_eq!(chains_config_path, PathBuf::from("custom_chains.toml"));
+                    assert_eq!(config_path, PathBuf::from("custom_config.toml"));
                     assert_eq!(tokens_config_path, PathBuf::from("custom_tokens.toml"));
                     assert_eq!(output_path, Some(PathBuf::from("/tmp/backup")));
                     assert!(prune_redundant);
                     assert!(exit_on_error);
-                    assert_eq!(ipfs_config, Some("ipfs.toml".to_string()));
                 }
                 _ => panic!("Expected Create command"),
             }

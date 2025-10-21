@@ -9,11 +9,11 @@ use tokio::signal;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
+use nftbk::config::Config;
 use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::auth::x402::X402Config;
-use nftbk::server::auth::{load_auth_config, JwtCredential};
 use nftbk::server::pin_monitor::run_pin_monitor;
 use nftbk::server::pruner::run_pruner;
 use nftbk::server::router::build_router;
@@ -28,9 +28,9 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1:8080")]
     listen_address: String,
 
-    /// The path to the chains configuration file
-    #[arg(short = 'c', long, default_value = "config_chains.toml")]
-    chain_config: String,
+    /// The path to the configuration file
+    #[arg(short = 'c', long, default_value = "config.toml")]
+    config: String,
 
     /// The base directory to save the backup to
     #[arg(long, default_value = "/tmp")]
@@ -75,20 +75,6 @@ struct Args {
     /// Disable colored log output
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     no_color: bool,
-
-    /// Path to a TOML file with one or more JWT credential sets
-    #[arg(long)]
-    auth_config: Option<String>,
-
-    /// Path to a TOML file with IPFS provider configuration
-    /// When provided, this is used instead of IPFS_* env vars
-    #[arg(long)]
-    ipfs_config: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-struct IpfsConfigFile {
-    ipfs_pinning_provider: Vec<nftbk::ipfs::IpfsPinningConfig>,
 }
 
 #[tokio::main]
@@ -105,54 +91,43 @@ async fn main() {
     );
     info!("Initializing server with options: {:?}", args);
 
-    // Load authentication config
+    // Load unified configuration
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
     info!(
         "Symmetric authentication enabled: {}",
         is_defined(&auth_token)
     );
-    let mut jwt_credentials: Vec<JwtCredential> = Vec::new();
-    let mut x402_config: Option<X402Config> = None;
-    if let Some(path) = &args.auth_config {
-        match load_auth_config(std::path::Path::new(path)) {
-            Ok(auth_config) => {
-                jwt_credentials = auth_config.jwt_credentials;
-                x402_config = auth_config.x402_config;
-            }
-            Err(e) => {
-                error!("Failed to load auth config from '{}': {}", path, e);
-                std::process::exit(1);
-            }
-        }
-    }
 
-    // Load IPFS provider configuration from file if provided
-    let ipfs_pinning_configs = if args.ipfs_config.is_none() {
-        // No config file, use empty list (AppState will fall back to env vars)
-        Vec::new()
-    } else {
-        let path = args.ipfs_config.as_ref().unwrap();
-        match std::fs::read_to_string(path) {
-            Ok(contents) => match toml::from_str::<IpfsConfigFile>(&contents) {
-                Ok(file) => {
-                    info!(
-                        "Loaded {} IPFS pinning provider(s) from config file '{}'",
-                        file.ipfs_pinning_provider.len(),
-                        path
-                    );
-                    file.ipfs_pinning_provider
-                }
-                Err(e) => {
-                    error!("Failed to parse IPFS config file '{}': {}", path, e);
-                    std::process::exit(1);
-                }
-            },
-            Err(e) => {
-                error!("Failed to read IPFS config file '{}': {}", path, e);
-                std::process::exit(1);
-            }
+    let unified_config = match Config::load_from_file(std::path::Path::new(&args.config)) {
+        Ok(config) => {
+            info!("Loaded unified configuration from '{}'", args.config);
+            config
+        }
+        Err(e) => {
+            error!("Failed to load config from '{}': {}", args.config, e);
+            std::process::exit(1);
         }
     };
+
+    let jwt_credentials = unified_config.jwt_credentials().to_vec();
+    let x402_config = if let Some(raw_config) = unified_config.x402_config() {
+        match X402Config::compile(raw_config.clone()) {
+            Ok(compiled_config) => {
+                info!(
+                    "Loaded x402 config (network: {}, facilitator: {})",
+                    compiled_config.facilitator.network, compiled_config.facilitator.url
+                );
+                Some(compiled_config)
+            }
+            Err(e) => {
+                error!("Failed to compile x402 config: {}", e);
+                return;
+            }
+        }
+    } else {
+        None
+    };
+    let ipfs_pinning_configs = unified_config.ipfs_pinning_providers().to_vec();
 
     let (backup_task_sender, backup_task_receiver) =
         mpsc::channel::<BackupTaskOrShutdown>(args.backup_queue_size);
@@ -160,7 +135,7 @@ async fn main() {
         std::env::var("DATABASE_URL").expect("DATABASE_URL env var must be set for Postgres");
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let state = AppState::new(
-        &args.chain_config,
+        &args.config,
         &args.base_dir,
         args.unsafe_skip_checksum_check,
         auth_token.clone(),

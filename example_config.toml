@@ -1,0 +1,56 @@
+# Unified Configuration File for nftbk
+# This file combines chains, authentication, and IPFS provider configurations
+
+# Chain configurations (RPC endpoints)
+[chains]
+arbitrum = "https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+base = "https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+ethereum = "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+optimism = "https://opt-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+polygon = "https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+shape = "https://shape-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+tezos = "https://mainnet.smartpy.io"
+zora = "https://zora-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+
+# JWT authentication credentials
+[[jwt]]
+issuer = "privy.io"
+# Expected audience - your app id if using Privy
+audience = "youraudience"
+# Use \n to encode newlines if storing on one line (e.g. in env files)
+verification_key = "-----BEGIN PUBLIC KEY-----\nPK/AAAAAAAAAAAAAA==\n-----END PUBLIC KEY-----"
+
+# x402 payment configuration
+[x402]
+# Currency to accept payments with; only USDC support for now
+asset_symbol = "USDC"
+# Base URL for protected resources—this is included in 402 responses and
+# should change to a proper domain in production.
+base_url = "https://localhost:8080/"
+# Recipient of x402 payments
+recipient_address = "0xYourRecipientAddress"
+# Maximum time allowed for payment completion
+max_timeout_seconds = 300
+
+[x402.facilitator]
+# Check https://www.x402.org/ecosystem?category=facilitators for more facilitator options
+url = "https://x402.org/facilitator"
+network = "base-sepolia"
+
+# IPFS pinning providers
+[[ipfs_pinning_provider]]
+type = "pinning-service"
+base_url = "https://api.filebase.io/v1/ipfs"
+bearer_token_env = "FILEBASE_TOKEN"
+
+# Example 2: Pinata
+# [[ipfs_pinning_provider]]
+# type = "pinata"
+# base_url = "https://api.pinata.cloud"
+# bearer_token_env = "PINATA_TOKEN"
+
+# Example 3: Another pinning service instance with a different token
+#[[ipfs_pinning_provider]]
+#type = "pinning-service"
+#base_url = "https://my-ipfs-service.example.com"
+#bearer_token_env = "PINNING_SERVICE_BACKUP_TOKEN"
