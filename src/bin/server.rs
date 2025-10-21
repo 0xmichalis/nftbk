@@ -5,7 +5,7 @@ use dotenv::dotenv;
 use tracing::{error, info};
 
 use nftbk::config::{load_and_validate_config, Config};
-use nftbk::envvar::is_defined;
+use nftbk::envvar::{is_defined, should_enable_color};
 use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::{run_server, ServerConfig};
@@ -57,7 +57,7 @@ struct Args {
     #[arg(long, default_value_t = 10000)]
     backup_queue_size: usize,
 
-    /// Disable colored log output
+    /// Disable colored log output. NO_COLOR and FORCE_COLOR environment variables take precedence.
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     no_color: bool,
 }
@@ -67,7 +67,8 @@ async fn main() {
     // We are consuming config both from the environment and from the command line
     dotenv().ok();
     let args = Args::parse();
-    logging::init(args.log_level, !args.no_color);
+    let enable_color = should_enable_color(args.no_color);
+    logging::init(args.log_level, enable_color);
     info!(
         "Version: {} {} (commit {})",
         env!("CARGO_BIN_NAME"),

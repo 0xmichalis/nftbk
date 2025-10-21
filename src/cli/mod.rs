@@ -16,7 +16,7 @@ pub struct Cli {
     #[arg(short, long, value_enum, default_value = "info")]
     pub log_level: LogLevel,
 
-    /// Disable colored log output
+    /// Disable colored log output. NO_COLOR and FORCE_COLOR environment variables take precedence.
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     pub no_color: bool,
 
