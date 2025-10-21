@@ -9,11 +9,10 @@ use tokio::signal;
 use tokio::sync::mpsc;
 use tracing::{error, info};
 
-use nftbk::config::Config;
+use nftbk::config::{load_and_validate_config, Config};
 use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
-use nftbk::server::auth::x402::X402Config;
 use nftbk::server::pin_monitor::run_pin_monitor;
 use nftbk::server::pruner::run_pruner;
 use nftbk::server::router::build_router;
@@ -98,60 +97,18 @@ async fn main() {
         is_defined(&auth_token)
     );
 
-    let unified_config = match Config::load_from_file(std::path::Path::new(&args.config)) {
-        Ok(config) => {
-            info!("Loaded unified configuration from '{}'", args.config);
-            config
-        }
+    let Config {
+        chain_config,
+        jwt_credentials,
+        x402_config,
+        ipfs_pinning_configs,
+    } = match load_and_validate_config(&args.config) {
+        Ok(config) => config,
         Err(e) => {
-            error!("Failed to load config from '{}': {}", args.config, e);
+            error!("Failed to load and validate config: {}", e);
             std::process::exit(1);
         }
     };
-
-    let jwt_credentials = unified_config.jwt_credentials().to_vec();
-    if jwt_credentials.is_empty() {
-        info!("No JWT credentials configured");
-    } else {
-        info!("Loaded {} JWT credential(s):", jwt_credentials.len());
-        for cred in &jwt_credentials {
-            info!("  - issuer: {}, audience: {}", cred.issuer, cred.audience);
-        }
-    }
-
-    let x402_config = if let Some(raw_config) = unified_config.x402_config() {
-        match X402Config::compile(raw_config.clone()) {
-            Ok(compiled_config) => {
-                info!(
-                    "Loaded x402 config (network: {}, facilitator: {})",
-                    compiled_config.facilitator.network, compiled_config.facilitator.url
-                );
-                Some(compiled_config)
-            }
-            Err(e) => {
-                error!("Failed to compile x402 config: {}", e);
-                return;
-            }
-        }
-    } else {
-        None
-    };
-    let ipfs_pinning_configs = unified_config.ipfs_pinning_providers().to_vec();
-    if ipfs_pinning_configs.is_empty() {
-        info!("No IPFS pinning providers configured");
-    } else {
-        info!(
-            "Loaded {} IPFS pinning provider(s):",
-            ipfs_pinning_configs.len()
-        );
-        for config in &ipfs_pinning_configs {
-            info!(
-                "  - type: {}, base_url: {}",
-                config.provider_type(),
-                config.base_url()
-            );
-        }
-    }
 
     let (backup_task_sender, backup_task_receiver) =
         mpsc::channel::<BackupTaskOrShutdown>(args.backup_queue_size);
@@ -159,7 +116,7 @@ async fn main() {
         std::env::var("DATABASE_URL").expect("DATABASE_URL env var must be set for Postgres");
     let shutdown_flag = Arc::new(AtomicBool::new(false));
     let state = AppState::new(
-        &args.config,
+        chain_config,
         &args.base_dir,
         args.unsafe_skip_checksum_check,
         auth_token.clone(),

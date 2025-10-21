@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use tokio::fs;
 
 use crate::backup::{BackupConfig, ChainConfig, TokenConfig};
-use crate::config::Config;
+use crate::config::ConfigRaw;
 use crate::ipfs::IpfsPinningConfig;
 use crate::{ProcessManagementConfig, StorageConfig};
 
@@ -45,8 +45,8 @@ pub fn load_ipfs_config(path: Option<&String>) -> Result<Vec<IpfsPinningConfig>>
     Ok(config.ipfs_pinning_provider)
 }
 
-pub fn load_config(path: &Path) -> Result<Config> {
-    Config::load_from_file(path).context("Failed to load config")
+pub fn load_config(path: &Path) -> Result<ConfigRaw> {
+    ConfigRaw::load_from_file(path).context("Failed to load config")
 }
 
 pub fn create_backup_config(

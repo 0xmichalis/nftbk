@@ -134,7 +134,7 @@ impl Default for AppState {
 impl AppState {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        config_path: &str,
+        chain_config: ChainConfig,
         base_dir: &str,
         unsafe_skip_checksum_check: bool,
         auth_token: Option<String>,
@@ -146,13 +146,6 @@ impl AppState {
         shutdown_flag: Arc<AtomicBool>,
         ipfs_pinning_configs: Vec<IpfsPinningConfig>,
     ) -> Self {
-        let unified_config =
-            crate::config::Config::load_from_file(std::path::Path::new(config_path))
-                .expect("Failed to load unified config");
-        let mut chain_config = unified_config.chain_config();
-        chain_config
-            .resolve_env_vars()
-            .expect("Failed to resolve environment variables in chain config");
         let db = Arc::new(Db::new(db_url, max_connections).await);
 
         // Create IPFS provider instances at startup
