@@ -1,24 +1,14 @@
+use std::env;
+
 use clap::Parser;
 use dotenv::dotenv;
-use std::env;
-use std::io::Write;
-use std::net::SocketAddr;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use tokio::signal;
-use tokio::sync::mpsc;
 use tracing::{error, info};
 
 use nftbk::config::{load_and_validate_config, Config};
 use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
-use nftbk::server::pin_monitor::spawn_pin_monitor;
-use nftbk::server::pruner::spawn_pruner;
-use nftbk::server::router::build_router;
-use nftbk::server::{
-    recover_incomplete_tasks, spawn_backup_workers, AppState, BackupTaskOrShutdown,
-};
+use nftbk::server::{run_server, ServerConfig};
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -86,7 +76,7 @@ async fn main() {
     );
     info!("Initializing server with options: {:?}", args);
 
-    // Load unified configuration
+    // Load configuration
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
     info!(
         "Symmetric authentication enabled: {}",
@@ -106,120 +96,25 @@ async fn main() {
         }
     };
 
-    let (backup_task_sender, backup_task_receiver) =
-        mpsc::channel::<BackupTaskOrShutdown>(args.backup_queue_size);
-    let db_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL env var must be set for Postgres");
-    let shutdown_flag = Arc::new(AtomicBool::new(false));
-    let state = AppState::new(
+    // Start the server
+    let config = ServerConfig {
+        listen_address: args.listen_address,
+        base_dir: args.base_dir,
+        unsafe_skip_checksum_check: args.unsafe_skip_checksum_check,
+        auth_token,
+        pruner_retention_days: args.pruner_retention_days,
+        pruner_interval_seconds: args.pruner_interval_seconds,
+        pin_monitor_interval_seconds: args.pin_monitor_interval_seconds,
+        backup_parallelism: args.backup_parallelism,
+        backup_queue_size: args.backup_queue_size,
         chain_config,
-        &args.base_dir,
-        args.unsafe_skip_checksum_check,
-        auth_token.clone(),
-        args.pruner_retention_days,
-        backup_task_sender.clone(),
-        &db_url,
-        (args.backup_queue_size + 1) as u32,
-        shutdown_flag.clone(),
+        jwt_credentials,
+        x402_config,
         ipfs_pinning_configs,
-    )
-    .await;
-
-    // Spawn worker pool for backup tasks
-    let worker_handles =
-        spawn_backup_workers(args.backup_parallelism, backup_task_receiver, state.clone());
-
-    // Recover incomplete backup tasks from previous server runs
-    match recover_incomplete_tasks(&*state.db, &state.backup_task_sender).await {
-        Ok(count) => {
-            if count > 0 {
-                info!("Successfully recovered {} incomplete backup tasks", count);
-            }
-        }
-        Err(e) => {
-            error!("Failed to recover incomplete backup tasks: {}", e);
-            // Don't exit the server, just log the error and continue
-        }
-    }
-
-    // Start the pruner thread
-    let pruner_handle = spawn_pruner(
-        state.db.clone(),
-        args.base_dir.clone(),
-        args.pruner_interval_seconds,
-        state.shutdown_flag.clone(),
-    );
-
-    // Start the pin monitor thread if IPFS providers are configured
-    let pin_monitor_handle = spawn_pin_monitor(
-        state.db.clone(),
-        state.ipfs_pinning_instances.clone(),
-        args.pin_monitor_interval_seconds,
-        state.shutdown_flag.clone(),
-    );
-
-    // Add graceful shutdown
-    let shutdown_signal = async move {
-        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install SIGTERM handler");
-
-        tokio::select! {
-            _ = signal::ctrl_c() => {
-                info!("Received SIGINT (Ctrl+C), shutting down server...");
-            }
-            _ = sigterm.recv() => {
-                info!("Received SIGTERM, shutting down server...");
-            }
-        }
-        shutdown_flag.store(true, Ordering::SeqCst);
     };
 
-    // Start the server
-    let addr: SocketAddr = args.listen_address.parse().expect("Invalid listen address");
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    let app = build_router(
-        state.clone(),
-        jwt_credentials
-            .into_iter()
-            .map(|c| (c.issuer, c.audience, c.verification_key))
-            .collect(),
-        x402_config.clone(),
-    );
-    info!("Listening on {}", addr);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await
-        .unwrap();
-    info!("Server has exited");
-
-    if let Some(handle) = pruner_handle {
-        let _ = handle.await;
+    if let Err(e) = run_server(config).await {
+        error!("Server failed: {}", e);
+        std::process::exit(1);
     }
-    info!("Pruner has exited");
-
-    if let Some(handle) = pin_monitor_handle {
-        let _ = handle.await;
-    }
-    info!("Pin monitor has exited");
-
-    // On shutdown, send one Shutdown message per worker
-    for _ in 0..args.backup_parallelism {
-        let _ = state
-            .backup_task_sender
-            .send(BackupTaskOrShutdown::Shutdown)
-            .await;
-    }
-    // Drop the last sender to close the channel and signal workers to exit
-    drop(state.backup_task_sender);
-    info!("Backup task sender has exited");
-
-    // Wait for all workers to finish
-    for handle in worker_handles {
-        let _ = handle.await;
-    }
-    info!("Backup workers have exited");
-
-    // Give time for final logs to flush
-    let _ = std::io::stdout().flush();
-    std::thread::sleep(std::time::Duration::from_millis(200));
 }

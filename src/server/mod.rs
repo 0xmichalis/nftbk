@@ -1,15 +1,21 @@
 use std::collections::HashMap;
 use std::fmt;
+use std::io::Write;
+use std::net::SocketAddr;
 use std::str::FromStr;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+use tokio::signal;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use tracing::error;
+use tracing::{error, info};
 
 use crate::backup::ChainConfig;
 use crate::ipfs::{IpfsPinningConfig, IpfsPinningProvider};
 use crate::server::api::{BackupRequest, Tokens};
+use crate::server::auth::x402::X402Config;
+use crate::server::auth::JwtCredential;
 use crate::server::database::Db;
 
 pub mod api;
@@ -176,4 +182,154 @@ impl AppState {
             ipfs_pinning_instances: Arc::new(ipfs_pinning_instances),
         }
     }
+}
+
+/// Configuration for running the server
+#[derive(Debug, Clone)]
+pub struct ServerConfig {
+    pub listen_address: String,
+    pub base_dir: String,
+    pub unsafe_skip_checksum_check: bool,
+    pub auth_token: Option<String>,
+    pub pruner_retention_days: u64,
+    pub pruner_interval_seconds: u64,
+    pub pin_monitor_interval_seconds: u64,
+    pub backup_parallelism: usize,
+    pub backup_queue_size: usize,
+    pub chain_config: ChainConfig,
+    pub jwt_credentials: Vec<JwtCredential>,
+    pub x402_config: Option<X402Config>,
+    pub ipfs_pinning_configs: Vec<IpfsPinningConfig>,
+}
+
+/// Run the server with the given configuration
+pub async fn run_server(
+    config: ServerConfig,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use crate::server::pin_monitor::spawn_pin_monitor;
+    use crate::server::pruner::spawn_pruner;
+    use crate::server::router::build_router;
+    let (backup_task_sender, backup_task_receiver) =
+        mpsc::channel::<BackupTaskOrShutdown>(config.backup_queue_size);
+    let db_url =
+        std::env::var("DATABASE_URL").expect("DATABASE_URL env var must be set for Postgres");
+    let shutdown_flag = Arc::new(AtomicBool::new(false));
+
+    let state = AppState::new(
+        config.chain_config,
+        &config.base_dir,
+        config.unsafe_skip_checksum_check,
+        config.auth_token.clone(),
+        config.pruner_retention_days,
+        backup_task_sender.clone(),
+        &db_url,
+        (config.backup_queue_size + 1) as u32,
+        shutdown_flag.clone(),
+        config.ipfs_pinning_configs,
+    )
+    .await;
+
+    // Spawn worker pool for backup tasks
+    let worker_handles = spawn_backup_workers(
+        config.backup_parallelism,
+        backup_task_receiver,
+        state.clone(),
+    );
+
+    // Recover incomplete backup tasks from previous server runs
+    match recover_incomplete_tasks(&*state.db, &state.backup_task_sender).await {
+        Ok(count) => {
+            if count > 0 {
+                info!("Successfully recovered {} incomplete backup tasks", count);
+            }
+        }
+        Err(e) => {
+            error!("Failed to recover incomplete backup tasks: {}", e);
+            // Don't exit the server, just log the error and continue
+        }
+    }
+
+    // Start the pruner thread
+    let pruner_handle = spawn_pruner(
+        state.db.clone(),
+        config.base_dir.clone(),
+        config.pruner_interval_seconds,
+        state.shutdown_flag.clone(),
+    );
+
+    // Start the pin monitor thread if IPFS providers are configured
+    let pin_monitor_handle = spawn_pin_monitor(
+        state.db.clone(),
+        state.ipfs_pinning_instances.clone(),
+        config.pin_monitor_interval_seconds,
+        state.shutdown_flag.clone(),
+    );
+
+    // Add graceful shutdown
+    let shutdown_signal = async move {
+        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+
+        tokio::select! {
+            _ = signal::ctrl_c() => {
+                info!("Received SIGINT (Ctrl+C), shutting down server...");
+            }
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM, shutting down server...");
+            }
+        }
+        shutdown_flag.store(true, Ordering::SeqCst);
+    };
+
+    // Start the server
+    let addr: SocketAddr = config
+        .listen_address
+        .parse()
+        .expect("Invalid listen address");
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let app = build_router(
+        state.clone(),
+        config
+            .jwt_credentials
+            .into_iter()
+            .map(|c| (c.issuer, c.audience, c.verification_key))
+            .collect(),
+        config.x402_config.clone(),
+    );
+    info!("Listening on {}", addr);
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
+    info!("Server has exited");
+
+    // Graceful shutdown
+    if let Some(handle) = pruner_handle {
+        let _ = handle.await;
+    }
+    info!("Pruner has exited");
+
+    if let Some(handle) = pin_monitor_handle {
+        let _ = handle.await;
+    }
+    info!("Pin monitor has exited");
+
+    for _ in 0..config.backup_parallelism {
+        let _ = state
+            .backup_task_sender
+            .send(BackupTaskOrShutdown::Shutdown)
+            .await;
+    }
+    drop(state.backup_task_sender);
+    info!("Backup task sender has exited");
+
+    for handle in worker_handles {
+        let _ = handle.await;
+    }
+    info!("Backup workers have exited");
+
+    // Give time for final logs to flush
+    let _ = std::io::stdout().flush();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+
+    Ok(())
 }
