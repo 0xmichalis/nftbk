@@ -106,9 +106,16 @@ pub async fn run_inner(
     let arr: Vec<BackupResponse> = resp.json().await.context("Invalid server response")?;
     let mut table = Table::new();
     if show_errors {
-        table.add_row(row!["Task ID", "Status", "Error", "Error Log", "NFT Count"]);
+        table.add_row(row![
+            "Task ID",
+            "Status",
+            "Storage Mode",
+            "Error",
+            "Error Log",
+            "NFT Count"
+        ]);
     } else {
-        table.add_row(row!["Task ID", "Status", "NFT Count"]);
+        table.add_row(row!["Task ID", "Status", "Storage Mode", "NFT Count"]);
     }
     for entry in arr {
         let task_id = entry.task_id.as_str();
@@ -162,10 +169,18 @@ pub async fn run_inner(
         }
         let combined = logs.join(" | ");
         let nft_count = entry.total_tokens as u64;
+        let storage_mode = entry.storage_mode.as_str();
         if show_errors {
-            table.add_row(row![task_id, status, error, combined, nft_count]);
+            table.add_row(row![
+                task_id,
+                status,
+                storage_mode,
+                error,
+                combined,
+                nft_count
+            ]);
         } else {
-            table.add_row(row![task_id, status, nft_count]);
+            table.add_row(row![task_id, status, storage_mode, nft_count]);
         }
     }
     if let Some(mut w) = writer {
