@@ -1,5 +1,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration as TokioDuration};
 use tracing::{error, info, warn};
 
@@ -86,14 +87,14 @@ pub async fn run_pin_monitor(
     shutdown_flag: Arc<AtomicBool>,
 ) {
     while !shutdown_flag.load(Ordering::SeqCst) {
-        info!("Running pin monitoring process...");
+        info!("Running pin monitor");
 
         match monitor_pin_requests(&*db, &providers).await {
             Ok(()) => {
-                info!("Pin monitoring process completed successfully");
+                info!("Pin monitor completed");
             }
             Err(e) => {
-                error!("Pin monitoring process failed: {}", e);
+                error!("Pin monitor failed: {}", e);
             }
         }
 
@@ -107,6 +108,28 @@ pub async fn run_pin_monitor(
     }
 
     info!("Pin monitor stopped");
+}
+
+/// Spawn the pin monitor thread if IPFS providers are configured
+pub fn spawn_pin_monitor(
+    db: Arc<Db>,
+    providers: Arc<Vec<Arc<dyn IpfsPinningProvider>>>,
+    interval_seconds: u64,
+    shutdown_flag: Arc<AtomicBool>,
+) -> Option<JoinHandle<()>> {
+    if providers.is_empty() {
+        return None;
+    }
+
+    info!(
+        "Starting pin monitor with {} IPFS provider(s) and {} second interval",
+        providers.len(),
+        interval_seconds
+    );
+
+    Some(tokio::spawn(async move {
+        run_pin_monitor(db, providers.to_vec(), interval_seconds, shutdown_flag).await;
+    }))
 }
 
 #[cfg(test)]

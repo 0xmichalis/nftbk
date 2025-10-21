@@ -432,7 +432,6 @@ mod handle_pins_endpoint_tests {
             base_dir: Arc::new("/tmp".to_string()),
             unsafe_skip_checksum_check: true,
             auth_token: None,
-            pruner_enabled: false,
             pruner_retention_days: 7,
             download_tokens: Arc::new(Mutex::new(HashMap::new())),
             backup_task_sender: tx,

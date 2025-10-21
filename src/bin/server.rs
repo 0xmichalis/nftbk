@@ -13,8 +13,8 @@ use nftbk::config::{load_and_validate_config, Config};
 use nftbk::envvar::is_defined;
 use nftbk::logging;
 use nftbk::logging::LogLevel;
-use nftbk::server::pin_monitor::run_pin_monitor;
-use nftbk::server::pruner::run_pruner;
+use nftbk::server::pin_monitor::spawn_pin_monitor;
+use nftbk::server::pruner::spawn_pruner;
 use nftbk::server::router::build_router;
 use nftbk::server::{
     recover_incomplete_tasks, spawn_backup_workers, AppState, BackupTaskOrShutdown,
@@ -42,10 +42,6 @@ struct Args {
     /// Skip checksum verification
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     unsafe_skip_checksum_check: bool,
-
-    /// Enable the pruner thread
-    #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-    enable_pruner: bool,
 
     /// Pruner retention period in days
     #[arg(long, default_value_t = 3)]
@@ -120,7 +116,6 @@ async fn main() {
         &args.base_dir,
         args.unsafe_skip_checksum_check,
         auth_token.clone(),
-        args.enable_pruner,
         args.pruner_retention_days,
         backup_task_sender.clone(),
         &db_url,
@@ -148,35 +143,20 @@ async fn main() {
     }
 
     // Start the pruner thread
-    let pruner_handle = if !args.enable_pruner {
-        None
-    } else {
-        let db = state.db.clone();
-        let base_dir = args.base_dir.clone();
-        let interval = args.pruner_interval_seconds;
-        let shutdown_flag = state.shutdown_flag.clone();
-        Some(tokio::spawn(async move {
-            run_pruner(db, base_dir, interval, shutdown_flag).await;
-        }))
-    };
+    let pruner_handle = spawn_pruner(
+        state.db.clone(),
+        args.base_dir.clone(),
+        args.pruner_interval_seconds,
+        state.shutdown_flag.clone(),
+    );
 
     // Start the pin monitor thread if IPFS providers are configured
-    let pin_monitor_handle = if state.ipfs_pinning_instances.is_empty() {
-        None
-    } else {
-        let db = state.db.clone();
-        let providers = state.ipfs_pinning_instances.clone();
-        let interval = args.pin_monitor_interval_seconds;
-        let shutdown_flag = state.shutdown_flag.clone();
-        info!(
-            "Starting pin monitor with {} IPFS provider(s) and {} second interval",
-            providers.len(),
-            interval
-        );
-        Some(tokio::spawn(async move {
-            run_pin_monitor(db, providers.to_vec(), interval, shutdown_flag).await;
-        }))
-    };
+    let pin_monitor_handle = spawn_pin_monitor(
+        state.db.clone(),
+        state.ipfs_pinning_instances.clone(),
+        args.pin_monitor_interval_seconds,
+        state.shutdown_flag.clone(),
+    );
 
     // Add graceful shutdown
     let shutdown_signal = async move {

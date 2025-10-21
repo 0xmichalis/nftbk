@@ -1,6 +1,7 @@
 use std::fs::{remove_dir_all, remove_file};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, Duration as TokioDuration};
 use tracing::{info, warn};
 
@@ -40,7 +41,7 @@ pub async fn run_pruner(
     shutdown_flag: Arc<AtomicBool>,
 ) {
     while !shutdown_flag.load(Ordering::SeqCst) {
-        info!("Running pruning process...");
+        info!("Running pruner with interval of {interval_seconds} seconds");
         match db.list_unprocessed_expired_backups().await {
             Ok(expired) => {
                 prune_backups(&*db, &base_dir, &expired).await;
@@ -49,7 +50,7 @@ pub async fn run_pruner(
                 warn!("Failed to query expired backups: {}", e);
             }
         }
-        info!("Pruning process completed");
+        info!("Pruner completed");
         let mut slept = 0;
         let sleep_step = 1;
         while slept < interval_seconds && !shutdown_flag.load(Ordering::SeqCst) {
@@ -58,4 +59,16 @@ pub async fn run_pruner(
         }
     }
     info!("Pruner stopped");
+}
+
+/// Spawn the pruner thread if enabled
+pub fn spawn_pruner(
+    db: Arc<Db>,
+    base_dir: String,
+    interval_seconds: u64,
+    shutdown_flag: Arc<AtomicBool>,
+) -> Option<JoinHandle<()>> {
+    Some(tokio::spawn(async move {
+        run_pruner(db, base_dir, interval_seconds, shutdown_flag).await;
+    }))
 }
