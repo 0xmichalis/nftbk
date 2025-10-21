@@ -95,6 +95,10 @@ pub enum ServerCommands {
         /// The server address to request backups from
         #[arg(long, default_value = "http://127.0.0.1:8080")]
         server_address: String,
+
+        /// Show error details in the output table
+        #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+        show_errors: bool,
     },
 }
 
@@ -140,9 +144,10 @@ impl Cli {
                     )
                     .await
                 }
-                ServerCommands::List { server_address } => {
-                    commands::server::list::run(server_address).await
-                }
+                ServerCommands::List {
+                    server_address,
+                    show_errors,
+                } => commands::server::list::run(server_address, show_errors).await,
             },
         }
     }
@@ -314,8 +319,12 @@ mod tests {
 
             match cli.command {
                 Commands::Server { command } => match command {
-                    ServerCommands::List { server_address } => {
+                    ServerCommands::List {
+                        server_address,
+                        show_errors,
+                    } => {
                         assert_eq!(server_address, "http://127.0.0.1:8080");
+                        assert!(!show_errors);
                     }
                     _ => panic!("Expected Server List command"),
                 },
@@ -336,8 +345,32 @@ mod tests {
 
             match cli.command {
                 Commands::Server { command } => match command {
-                    ServerCommands::List { server_address } => {
+                    ServerCommands::List {
+                        server_address,
+                        show_errors,
+                    } => {
                         assert_eq!(server_address, "https://api.example.com");
+                        assert!(!show_errors);
+                    }
+                    _ => panic!("Expected Server List command"),
+                },
+                _ => panic!("Expected Server command"),
+            }
+        }
+
+        #[test]
+        fn parses_server_list_command_with_show_errors() {
+            let args = vec!["nftbk-cli", "server", "list", "--show-errors", "true"];
+            let cli = Cli::try_parse_from(args).unwrap();
+
+            match cli.command {
+                Commands::Server { command } => match command {
+                    ServerCommands::List {
+                        server_address,
+                        show_errors,
+                    } => {
+                        assert_eq!(server_address, "http://127.0.0.1:8080");
+                        assert!(show_errors);
                     }
                     _ => panic!("Expected Server List command"),
                 },
