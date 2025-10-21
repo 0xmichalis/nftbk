@@ -15,8 +15,11 @@ use crate::envvar::is_defined;
 use crate::server::api::{self, BackupCreateResponse, BackupRequest, BackupResponse, Tokens};
 use crate::server::archive::archive_format_from_user_agent;
 
+use super::common::delete_backup;
+
 const BACKUPS_API_PATH: &str = "/v1/backups";
 
+#[derive(Debug)]
 enum BackupStart {
     Created(BackupCreateResponse),
     Exists(BackupCreateResponse),
@@ -33,8 +36,8 @@ pub async fn run(
     output_path: Option<PathBuf>,
     force: bool,
     user_agent: String,
-    _ipfs_config: Option<String>,
     pin_on_ipfs: bool,
+    polling_interval_ms: Option<u64>,
 ) -> Result<()> {
     let token_config = load_token_config(&tokens_config_path).await?;
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
@@ -150,7 +153,15 @@ pub async fn run(
         }
     };
 
-    wait_for_done_backup(&client, &server_address, &task_id, auth_token.as_deref()).await?;
+    let polling_interval = polling_interval_ms.unwrap_or(10000); // Default 10 seconds
+    wait_for_done_backup(
+        &client,
+        &server_address,
+        &task_id,
+        auth_token.as_deref(),
+        polling_interval,
+    )
+    .await?;
 
     return download_backup(
         &client,
@@ -161,66 +172,6 @@ pub async fn run(
         &archive_format_from_user_agent(&user_agent),
     )
     .await;
-}
-
-async fn delete_backup(
-    client: &Client,
-    server_address: &str,
-    task_id: &str,
-    auth_token: Option<&str>,
-) -> Result<()> {
-    let server = server_address.trim_end_matches('/');
-    let url = format!("{server}{BACKUPS_API_PATH}/{task_id}",);
-    let mut req = client.delete(url);
-    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
-        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
-    }
-    let resp = req
-        .send()
-        .await
-        .context("Failed to send DELETE to server")?;
-
-    match resp.status().as_u16() {
-        202 => {
-            println!("Deletion request sent for backup {task_id}, waiting for completion...");
-            // Poll until backup is actually deleted (returns 404)
-            loop {
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-                let status_url = format!("{server}{BACKUPS_API_PATH}/{task_id}");
-                let mut status_req = client.get(&status_url);
-                if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
-                    status_req = status_req
-                        .header("Authorization", format!("Bearer {}", auth_token.unwrap()));
-                }
-                match status_req.send().await {
-                    Ok(status_resp) => {
-                        if status_resp.status().as_u16() == 404 {
-                            println!("Backup {task_id} successfully deleted");
-                            return Ok(());
-                        }
-                        // Still exists, continue polling
-                    }
-                    Err(_) => {
-                        // Network error, continue polling
-                    }
-                }
-            }
-        }
-        404 => {
-            println!("Backup {task_id} already deleted");
-            Ok(())
-        }
-        409 => {
-            // In progress; proceed with new request anyway
-            println!("Existing backup {task_id} is in progress; proceeding to create new request");
-            Ok(())
-        }
-        code => {
-            let text = resp.text().await.unwrap_or_default();
-            println!("Warning: failed to delete existing backup ({code}): {text}");
-            Ok(())
-        }
-    }
 }
 
 async fn request_backup(
@@ -354,6 +305,7 @@ async fn wait_for_done_backup(
     server_address: &str,
     task_id: &str,
     auth_token: Option<&str>,
+    polling_interval_ms: u64,
 ) -> Result<()> {
     let status_url = format!(
         "{}{}/{}",
@@ -484,7 +436,7 @@ async fn wait_for_done_backup(
                 println!("Error polling status: {e}");
             }
         }
-        tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(polling_interval_ms)).await;
     }
     Ok(())
 }
@@ -579,4 +531,653 @@ async fn download_backup(
     }
     println!("Backup extracted to {}", output_path.display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backup::TokenConfig;
+    use std::collections::HashMap;
+    use tempfile::TempDir;
+    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn create_test_token_config() -> TokenConfig {
+        let mut chains = HashMap::new();
+        chains.insert("ethereum".to_string(), vec!["0x123:1".to_string()]);
+        TokenConfig { chains }
+    }
+
+    fn create_test_backup_create_response() -> BackupCreateResponse {
+        BackupCreateResponse {
+            task_id: "test-task-123".to_string(),
+        }
+    }
+
+    fn create_test_backup_response() -> BackupResponse {
+        BackupResponse {
+            task_id: "test-task-123".to_string(),
+            created_at: "2023-01-01T00:00:00Z".to_string(),
+            storage_mode: "full".to_string(),
+            tokens: vec![],
+            total_tokens: 5,
+            page: 1,
+            limit: 50,
+            archive: Some(api::Archive {
+                status: api::SubresourceStatus {
+                    status: Some("done".to_string()),
+                    fatal_error: None,
+                    error_log: None,
+                    deleted_at: None,
+                },
+                format: Some("zip".to_string()),
+                expires_at: None,
+            }),
+            pins: Some(api::Pins {
+                status: api::SubresourceStatus {
+                    status: Some("done".to_string()),
+                    fatal_error: None,
+                    error_log: None,
+                    deleted_at: None,
+                },
+            }),
+        }
+    }
+
+    mod request_backup_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn creates_new_backup_successfully() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let token_config = create_test_token_config();
+
+            let backup_response = create_test_backup_create_response();
+
+            Mock::given(method("POST"))
+                .and(path("/v1/backups"))
+                .respond_with(ResponseTemplate::new(201).set_body_json(&backup_response))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result = request_backup(
+                &token_config,
+                &server_address,
+                &client,
+                None,
+                "TestAgent",
+                false,
+                None,
+            )
+            .await;
+
+            assert!(result.is_ok());
+            match result.unwrap() {
+                BackupStart::Created(resp) => {
+                    assert_eq!(resp.task_id, "test-task-123");
+                }
+                _ => panic!("Expected Created variant"),
+            }
+        }
+
+        #[tokio::test]
+        async fn handles_existing_backup() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let token_config = create_test_token_config();
+
+            let backup_response = create_test_backup_create_response();
+
+            Mock::given(method("POST"))
+                .and(path("/v1/backups"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&backup_response))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result = request_backup(
+                &token_config,
+                &server_address,
+                &client,
+                None,
+                "TestAgent",
+                false,
+                None,
+            )
+            .await;
+
+            assert!(result.is_ok());
+            match result.unwrap() {
+                BackupStart::Exists(resp) => {
+                    assert_eq!(resp.task_id, "test-task-123");
+                }
+                _ => panic!("Expected Exists variant"),
+            }
+        }
+
+        #[tokio::test]
+        async fn handles_conflict_response() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let token_config = create_test_token_config();
+
+            let conflict_response = serde_json::json!({
+                "task_id": "conflict-task-456",
+                "retry_url": "/v1/backups/conflict-task-456/retry",
+                "error": "Task already in progress"
+            });
+
+            Mock::given(method("POST"))
+                .and(path("/v1/backups"))
+                .respond_with(ResponseTemplate::new(409).set_body_json(&conflict_response))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result = request_backup(
+                &token_config,
+                &server_address,
+                &client,
+                None,
+                "TestAgent",
+                false,
+                None,
+            )
+            .await;
+
+            assert!(result.is_ok());
+            match result.unwrap() {
+                BackupStart::Conflict {
+                    task_id,
+                    retry_url,
+                    message,
+                } => {
+                    assert_eq!(task_id, "conflict-task-456");
+                    assert_eq!(retry_url, "/v1/backups/conflict-task-456/retry");
+                    assert_eq!(message, "Task already in progress");
+                }
+                _ => panic!("Expected Conflict variant"),
+            }
+        }
+
+        #[tokio::test]
+        async fn includes_auth_header_when_token_present() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let token_config = create_test_token_config();
+
+            let backup_response = create_test_backup_create_response();
+
+            Mock::given(method("POST"))
+                .and(path("/v1/backups"))
+                .and(header("Authorization", "Bearer test-token-123"))
+                .respond_with(ResponseTemplate::new(201).set_body_json(&backup_response))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result = request_backup(
+                &token_config,
+                &server_address,
+                &client,
+                Some("test-token-123"),
+                "TestAgent",
+                false,
+                None,
+            )
+            .await;
+
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn includes_user_agent_header() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let token_config = create_test_token_config();
+
+            let backup_response = create_test_backup_create_response();
+
+            Mock::given(method("POST"))
+                .and(path("/v1/backups"))
+                .and(header("User-Agent", "CustomAgent/1.0"))
+                .respond_with(ResponseTemplate::new(201).set_body_json(&backup_response))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result = request_backup(
+                &token_config,
+                &server_address,
+                &client,
+                None,
+                "CustomAgent/1.0",
+                false,
+                None,
+            )
+            .await;
+
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn handles_server_error() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let token_config = create_test_token_config();
+
+            Mock::given(method("POST"))
+                .and(path("/v1/backups"))
+                .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result = request_backup(
+                &token_config,
+                &server_address,
+                &client,
+                None,
+                "TestAgent",
+                false,
+                None,
+            )
+            .await;
+
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Server error"));
+        }
+    }
+
+    mod wait_for_done_backup_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn waits_for_backup_completion() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let task_id = "test-task-123";
+
+            let backup_response = create_test_backup_response();
+
+            Mock::given(method("GET"))
+                .and(path(format!("/v1/backups/{}", task_id)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&backup_response))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result = wait_for_done_backup(&client, &server_address, task_id, None, 10).await;
+
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn handles_backup_with_errors() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let task_id = "test-task-error";
+
+            let mut backup_response = create_test_backup_response();
+            backup_response.archive.as_mut().unwrap().status.status = Some("error".to_string());
+            backup_response.archive.as_mut().unwrap().status.fatal_error =
+                Some("Archive creation failed".to_string());
+
+            Mock::given(method("GET"))
+                .and(path(format!("/v1/backups/{}", task_id)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&backup_response))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result = wait_for_done_backup(&client, &server_address, task_id, None, 10).await;
+
+            if result.is_ok() {
+                println!("Expected error but got Ok result");
+            }
+            assert!(result.is_err());
+            assert!(result.unwrap_err().to_string().contains("Server error"));
+        }
+
+        #[tokio::test]
+        async fn includes_auth_header_when_token_present() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let task_id = "test-task-auth";
+
+            let backup_response = create_test_backup_response();
+
+            Mock::given(method("GET"))
+                .and(path(format!("/v1/backups/{}", task_id)))
+                .and(header("Authorization", "Bearer test-token-123"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&backup_response))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result = wait_for_done_backup(
+                &client,
+                &server_address,
+                task_id,
+                Some("test-token-123"),
+                10,
+            )
+            .await;
+
+            assert!(result.is_ok());
+        }
+    }
+
+    mod download_backup_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn downloads_and_extracts_zip_archive() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let task_id = "test-task-123";
+
+            // Create a temporary directory for extraction
+            let temp_dir = TempDir::new().unwrap();
+            let output_path = temp_dir.path();
+
+            // Mock download token response
+            let token_response = serde_json::json!({
+                "token": "download-token-123"
+            });
+
+            Mock::given(method("POST"))
+                .and(path(format!("/v1/backups/{}/download-tokens", task_id)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&token_response))
+                .mount(&mock_server)
+                .await;
+
+            // Create a simple zip file content
+            let mut zip_data = Vec::new();
+            {
+                use std::io::Write;
+                let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_data));
+                zip.start_file("test.txt", zip::write::FileOptions::default())
+                    .unwrap();
+                zip.write_all(b"Hello, World!").unwrap();
+                zip.finish().unwrap();
+            }
+
+            // Mock download response
+            Mock::given(method("GET"))
+                .and(path(format!("/v1/backups/{}/download", task_id)))
+                .and(query_param("token", "download-token-123"))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(zip_data.clone()))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result = download_backup(
+                &client,
+                &server_address,
+                task_id,
+                Some(&output_path.to_path_buf()),
+                None,
+                "zip",
+            )
+            .await;
+
+            assert!(result.is_ok());
+
+            // Verify the file was extracted
+            let extracted_file = output_path.join("test.txt");
+            assert!(extracted_file.exists());
+            let content = std::fs::read_to_string(&extracted_file).unwrap();
+            assert_eq!(content, "Hello, World!");
+        }
+
+        #[tokio::test]
+        async fn downloads_and_extracts_tar_gz_archive() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let task_id = "test-task-tar";
+
+            // Create a temporary directory for extraction
+            let temp_dir = TempDir::new().unwrap();
+            let output_path = temp_dir.path();
+
+            // Mock download token response
+            let token_response = serde_json::json!({
+                "token": "download-token-tar"
+            });
+
+            Mock::given(method("POST"))
+                .and(path(format!("/v1/backups/{}/download-tokens", task_id)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&token_response))
+                .mount(&mock_server)
+                .await;
+
+            // Create a simple tar.gz file content
+            let mut tar_data = Vec::new();
+            {
+                use flate2::write::GzEncoder;
+                use flate2::Compression;
+                use tar::Builder;
+
+                let gz = GzEncoder::new(&mut tar_data, Compression::default());
+                let mut tar = Builder::new(gz);
+                let mut header = tar::Header::new_gnu();
+                header.set_path("test.txt").unwrap();
+                header.set_size(13);
+                header.set_cksum();
+                tar.append(&header, &b"Hello, World!"[..]).unwrap();
+                tar.finish().unwrap();
+            }
+
+            // Mock download response
+            Mock::given(method("GET"))
+                .and(path(format!("/v1/backups/{}/download", task_id)))
+                .and(query_param("token", "download-token-tar"))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(tar_data.clone()))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result = download_backup(
+                &client,
+                &server_address,
+                task_id,
+                Some(&output_path.to_path_buf()),
+                None,
+                "tar.gz",
+            )
+            .await;
+
+            assert!(result.is_ok());
+
+            // Verify the file was extracted
+            let extracted_file = output_path.join("test.txt");
+            assert!(extracted_file.exists());
+            let content = std::fs::read_to_string(&extracted_file).unwrap();
+            assert_eq!(content, "Hello, World!");
+        }
+
+        #[tokio::test]
+        async fn handles_download_token_error() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let task_id = "test-task-token-error";
+
+            Mock::given(method("POST"))
+                .and(path(format!("/v1/backups/{}/download-tokens", task_id)))
+                .respond_with(ResponseTemplate::new(500).set_body_string("Token generation failed"))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result =
+                download_backup(&client, &server_address, task_id, None, None, "zip").await;
+
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to get download token"));
+        }
+
+        #[tokio::test]
+        async fn handles_download_error() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let task_id = "test-task-download-error";
+
+            // Mock download token response
+            let token_response = serde_json::json!({
+                "token": "download-token-error"
+            });
+
+            Mock::given(method("POST"))
+                .and(path(format!("/v1/backups/{}/download-tokens", task_id)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&token_response))
+                .mount(&mock_server)
+                .await;
+
+            // Mock download error
+            Mock::given(method("GET"))
+                .and(path(format!("/v1/backups/{}/download", task_id)))
+                .respond_with(ResponseTemplate::new(500).set_body_string("Download failed"))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result =
+                download_backup(&client, &server_address, task_id, None, None, "zip").await;
+
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Failed to download archive"));
+        }
+
+        #[tokio::test]
+        async fn handles_unknown_archive_format() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let task_id = "test-task-unknown-format";
+
+            // Mock download token response
+            let token_response = serde_json::json!({
+                "token": "download-token-unknown"
+            });
+
+            Mock::given(method("POST"))
+                .and(path(format!("/v1/backups/{}/download-tokens", task_id)))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&token_response))
+                .mount(&mock_server)
+                .await;
+
+            // Mock download response
+            Mock::given(method("GET"))
+                .and(path(format!("/v1/backups/{}/download", task_id)))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(b"some data"))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result =
+                download_backup(&client, &server_address, task_id, None, None, "unknown").await;
+
+            assert!(result.is_err());
+            assert!(result
+                .unwrap_err()
+                .to_string()
+                .contains("Unknown archive format"));
+        }
+    }
+
+    mod run_tests {
+        use super::*;
+        use std::fs;
+
+        #[tokio::test]
+        async fn runs_successfully_with_valid_config() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+
+            // Create a temporary tokens config file
+            let temp_dir = TempDir::new().unwrap();
+            let tokens_config_path = temp_dir.path().join("tokens.toml");
+            fs::write(
+                &tokens_config_path,
+                r#"
+ethereum = ["0x123:1"]
+"#,
+            )
+            .unwrap();
+
+            // Mock the backup creation
+            let backup_response = create_test_backup_create_response();
+            Mock::given(method("POST"))
+                .and(path("/v1/backups"))
+                .respond_with(ResponseTemplate::new(201).set_body_json(&backup_response))
+                .mount(&mock_server)
+                .await;
+
+            // Mock the status check
+            let status_response = create_test_backup_response();
+            Mock::given(method("GET"))
+                .and(path("/v1/backups/test-task-123"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&status_response))
+                .mount(&mock_server)
+                .await;
+
+            // Mock download token response
+            let token_response = serde_json::json!({
+                "token": "download-token-123"
+            });
+            Mock::given(method("POST"))
+                .and(path("/v1/backups/test-task-123/download-tokens"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&token_response))
+                .mount(&mock_server)
+                .await;
+
+            // Create a simple tar.gz file content (Linux user agent maps to tar.gz)
+            let mut tar_data = Vec::new();
+            {
+                use flate2::write::GzEncoder;
+                use flate2::Compression;
+                use tar::Builder;
+
+                let gz = GzEncoder::new(&mut tar_data, Compression::default());
+                let mut tar = Builder::new(gz);
+                let mut header = tar::Header::new_gnu();
+                header.set_path("test.txt").unwrap();
+                header.set_size(13);
+                header.set_cksum();
+                tar.append(&header, &b"Hello, World!"[..]).unwrap();
+                tar.finish().unwrap();
+            }
+
+            // Mock download response
+            Mock::given(method("GET"))
+                .and(path("/v1/backups/test-task-123/download"))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(tar_data.clone()))
+                .mount(&mock_server)
+                .await;
+
+            let result = run(
+                tokens_config_path,
+                server_address,
+                Some(temp_dir.path().to_path_buf()),
+                false,
+                "Linux".to_string(),
+                false,
+                Some(10), // Very fast polling for tests
+            )
+            .await;
+
+            if let Err(e) = &result {
+                println!("Test failed with error: {}", e);
+            }
+            assert!(result.is_ok());
+        }
+    }
 }
