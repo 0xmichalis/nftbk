@@ -96,7 +96,7 @@ async fn main() {
     // We are consuming config both from the environment and from the command line
     dotenv().ok();
     let args = Args::parse();
-    logging::init(args.log_level.clone(), !args.no_color);
+    logging::init(args.log_level, !args.no_color);
     info!(
         "Version: {} {} (commit {})",
         env!("CARGO_BIN_NAME"),

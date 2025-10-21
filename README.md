@@ -75,10 +75,19 @@ bearer_token_env = "PINATA_TOKEN"
 
 ### CLI
 
-To run the CLI:
+Check the supported options in the CLI:
 
 ```sh
+./target/debug/nftbk-cli --help
+```
+
+A few useful targets in the Makefile:
+
+```sh
+# Create a local backup based on config_chains.toml and config_tokens.toml
 make run-cli
+# Request a backup from a local server running at localhost:8080 using tokens defined in config_tokens_test.toml
+make run-cli-server-test 
 ```
 
 ### Postgres

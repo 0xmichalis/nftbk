@@ -5,7 +5,7 @@ use tracing_subscriber::fmt::format::{FormatFields, Writer};
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormattedFields};
 use tracing_subscriber::registry::LookupSpan;
 
-#[derive(clap::ValueEnum, Clone, Debug)]
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq)]
 pub enum LogLevel {
     Debug,
     Info,

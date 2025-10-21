@@ -15,6 +15,7 @@ use crate::chain::tezos::TezosChainProcessor;
 use crate::envvar::resolve_env_placeholders;
 
 pub mod chain;
+pub mod cli;
 pub mod content;
 pub mod envvar;
 pub mod httpclient;
@@ -64,7 +65,7 @@ impl ChainConfig {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct TokenConfig {
     #[serde(flatten)]
     pub chains: HashMap<String, Vec<String>>,
