@@ -110,6 +110,15 @@ async fn main() {
     };
 
     let jwt_credentials = unified_config.jwt_credentials().to_vec();
+    if jwt_credentials.is_empty() {
+        info!("No JWT credentials configured");
+    } else {
+        info!("Loaded {} JWT credential(s):", jwt_credentials.len());
+        for cred in &jwt_credentials {
+            info!("  - issuer: {}, audience: {}", cred.issuer, cred.audience);
+        }
+    }
+
     let x402_config = if let Some(raw_config) = unified_config.x402_config() {
         match X402Config::compile(raw_config.clone()) {
             Ok(compiled_config) => {
@@ -128,6 +137,21 @@ async fn main() {
         None
     };
     let ipfs_pinning_configs = unified_config.ipfs_pinning_providers().to_vec();
+    if ipfs_pinning_configs.is_empty() {
+        info!("No IPFS pinning providers configured");
+    } else {
+        info!(
+            "Loaded {} IPFS pinning provider(s):",
+            ipfs_pinning_configs.len()
+        );
+        for config in &ipfs_pinning_configs {
+            info!(
+                "  - type: {}, base_url: {}",
+                config.provider_type(),
+                config.base_url()
+            );
+        }
+    }
 
     let (backup_task_sender, backup_task_receiver) =
         mpsc::channel::<BackupTaskOrShutdown>(args.backup_queue_size);

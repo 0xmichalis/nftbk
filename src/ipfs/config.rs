@@ -65,6 +65,22 @@ pub enum IpfsPinningConfig {
 }
 
 impl IpfsPinningConfig {
+    /// Get the provider type as a string
+    pub fn provider_type(&self) -> &'static str {
+        match self {
+            IpfsPinningConfig::IpfsPinningService { .. } => "pinning-service",
+            IpfsPinningConfig::Pinata { .. } => "pinata",
+        }
+    }
+
+    /// Get the base URL for this provider
+    pub fn base_url(&self) -> &str {
+        match self {
+            IpfsPinningConfig::IpfsPinningService { base_url, .. } => base_url,
+            IpfsPinningConfig::Pinata { base_url, .. } => base_url,
+        }
+    }
+
     /// Create a provider instance from this configuration
     /// Returns an error if a referenced environment variable is not set
     pub fn create_provider(&self) -> Result<Box<dyn IpfsPinningProvider>> {

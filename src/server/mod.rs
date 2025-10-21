@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::error;
 
 use crate::backup::ChainConfig;
 use crate::ipfs::{IpfsPinningConfig, IpfsPinningProvider};
@@ -160,11 +160,6 @@ impl AppState {
         for config in &ipfs_pinning_configs {
             match config.create_provider() {
                 Ok(provider) => {
-                    info!(
-                        "Successfully created IPFS provider {} ({})",
-                        provider.provider_type(),
-                        provider.provider_url()
-                    );
                     ipfs_pinning_instances.push(Arc::from(provider));
                 }
                 Err(e) => {
