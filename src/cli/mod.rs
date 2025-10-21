@@ -83,13 +83,13 @@ pub enum ServerCommands {
         #[arg(long, default_value = "Linux")]
         user_agent: String,
 
-        /// Path to a TOML file with IPFS provider configuration
-        #[arg(long)]
-        ipfs_config: Option<String>,
-
         /// Request server to pin downloaded assets on IPFS
         #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
         pin_on_ipfs: bool,
+
+        /// Polling interval in milliseconds for checking backup status
+        #[arg(long, default_value = "10000")]
+        polling_interval_ms: u64,
     },
     /// List existing backups on the server
     List {
@@ -100,6 +100,20 @@ pub enum ServerCommands {
         /// Show error details in the output table
         #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
         show_errors: bool,
+    },
+    /// Delete a backup from the server
+    Delete {
+        /// The server address to request backups from
+        #[arg(long, default_value = "http://127.0.0.1:8080")]
+        server_address: String,
+
+        /// The task ID of the backup to delete
+        #[arg(short = 't', long)]
+        task_id: String,
+
+        /// Show what would be deleted without actually deleting
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        dry_run: bool,
     },
 }
 
@@ -131,8 +145,8 @@ impl Cli {
                     output_path,
                     force,
                     user_agent,
-                    ipfs_config,
                     pin_on_ipfs,
+                    polling_interval_ms,
                 } => {
                     commands::server::create::run(
                         tokens_config_path,
@@ -140,8 +154,8 @@ impl Cli {
                         output_path,
                         force,
                         user_agent,
-                        ipfs_config,
                         pin_on_ipfs,
+                        Some(polling_interval_ms),
                     )
                     .await
                 }
@@ -149,6 +163,11 @@ impl Cli {
                     server_address,
                     show_errors,
                 } => commands::server::list::run(server_address, show_errors).await,
+                ServerCommands::Delete {
+                    server_address,
+                    task_id,
+                    dry_run,
+                } => commands::server::delete::run(server_address, task_id, dry_run).await,
             },
         }
     }
@@ -248,16 +267,16 @@ mod tests {
                         output_path,
                         force,
                         user_agent,
-                        ipfs_config,
                         pin_on_ipfs,
+                        polling_interval_ms,
                     } => {
                         assert_eq!(tokens_config_path, PathBuf::from("config_tokens.toml"));
                         assert_eq!(server_address, "http://127.0.0.1:8080");
                         assert_eq!(output_path, Some(PathBuf::from("nft_backup")));
                         assert!(!force);
                         assert_eq!(user_agent, "Linux");
-                        assert!(ipfs_config.is_none());
                         assert!(!pin_on_ipfs);
+                        assert_eq!(polling_interval_ms, 10000);
                     }
                     _ => panic!("Expected Server Create command"),
                 },
@@ -281,8 +300,6 @@ mod tests {
                 "true",
                 "--user-agent",
                 "CustomAgent/1.0",
-                "--ipfs-config",
-                "ipfs.toml",
                 "--pin-on-ipfs",
                 "true",
             ];
@@ -296,16 +313,16 @@ mod tests {
                         output_path,
                         force,
                         user_agent,
-                        ipfs_config,
                         pin_on_ipfs,
+                        polling_interval_ms,
                     } => {
                         assert_eq!(tokens_config_path, PathBuf::from("custom_tokens.toml"));
                         assert_eq!(server_address, "https://api.example.com");
                         assert_eq!(output_path, Some(PathBuf::from("/tmp/server_backup")));
                         assert!(force);
                         assert_eq!(user_agent, "CustomAgent/1.0");
-                        assert_eq!(ipfs_config, Some("ipfs.toml".to_string()));
                         assert!(pin_on_ipfs);
+                        assert_eq!(polling_interval_ms, 10000); // Default value
                     }
                     _ => panic!("Expected Server Create command"),
                 },
@@ -374,6 +391,66 @@ mod tests {
                         assert!(show_errors);
                     }
                     _ => panic!("Expected Server List command"),
+                },
+                _ => panic!("Expected Server command"),
+            }
+        }
+
+        #[test]
+        fn parses_server_delete_command_with_defaults() {
+            let args = vec![
+                "nftbk-cli",
+                "server",
+                "delete",
+                "--task-id",
+                "test-task-123",
+            ];
+            let cli = Cli::try_parse_from(args).unwrap();
+
+            match cli.command {
+                Commands::Server { command } => match command {
+                    ServerCommands::Delete {
+                        server_address,
+                        task_id,
+                        dry_run,
+                    } => {
+                        assert_eq!(server_address, "http://127.0.0.1:8080");
+                        assert_eq!(task_id, "test-task-123");
+                        assert!(dry_run);
+                    }
+                    _ => panic!("Expected Server Delete command"),
+                },
+                _ => panic!("Expected Server command"),
+            }
+        }
+
+        #[test]
+        fn parses_server_delete_command_with_custom_options() {
+            let args = vec![
+                "nftbk-cli",
+                "server",
+                "delete",
+                "--server-address",
+                "https://api.example.com",
+                "--task-id",
+                "custom-task-456",
+                "--dry-run",
+                "true",
+            ];
+            let cli = Cli::try_parse_from(args).unwrap();
+
+            match cli.command {
+                Commands::Server { command } => match command {
+                    ServerCommands::Delete {
+                        server_address,
+                        task_id,
+                        dry_run,
+                    } => {
+                        assert_eq!(server_address, "https://api.example.com");
+                        assert_eq!(task_id, "custom-task-456");
+                        assert!(dry_run);
+                    }
+                    _ => panic!("Expected Server Delete command"),
                 },
                 _ => panic!("Expected Server command"),
             }
