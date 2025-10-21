@@ -10,6 +10,7 @@ use tar::Archive;
 use zip::ZipArchive;
 
 use crate::cli::config::load_token_config;
+use crate::cli::x402::X402PaymentHandler;
 use crate::envvar::is_defined;
 use crate::server::api::{self, BackupCreateResponse, BackupRequest, BackupResponse, Tokens};
 use crate::server::archive::archive_format_from_user_agent;
@@ -37,6 +38,7 @@ pub async fn run(
 ) -> Result<()> {
     let token_config = load_token_config(&tokens_config_path).await?;
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
+    let x402_private_key = env::var("NFTBK_X402_PRIVATE_KEY").ok();
     let client = Client::new();
 
     // First, try to create the backup
@@ -47,6 +49,7 @@ pub async fn run(
         auth_token.as_deref(),
         &user_agent,
         pin_on_ipfs,
+        x402_private_key.as_deref(),
     )
     .await?;
 
@@ -70,6 +73,7 @@ pub async fn run(
                     auth_token.as_deref(),
                     &user_agent,
                     pin_on_ipfs,
+                    x402_private_key.as_deref(),
                 )
                 .await?;
                 match second_try {
@@ -113,6 +117,7 @@ pub async fn run(
                     auth_token.as_deref(),
                     &user_agent,
                     pin_on_ipfs,
+                    x402_private_key.as_deref(),
                 )
                 .await?;
                 match second_try {
@@ -225,6 +230,7 @@ async fn request_backup(
     auth_token: Option<&str>,
     user_agent: &str,
     pin_on_ipfs: bool,
+    x402_private_key: Option<&str>,
 ) -> Result<BackupStart> {
     let mut backup_req = BackupRequest {
         tokens: Vec::new(),
@@ -240,18 +246,27 @@ async fn request_backup(
 
     let server = server_address.trim_end_matches('/');
     println!("Submitting backup request to server at {server}{BACKUPS_API_PATH} ...");
-    let mut req = client
+    let mut req_builder = client
         .post(format!("{server}{BACKUPS_API_PATH}"))
         .json(&backup_req);
-    req = req.header("User-Agent", user_agent);
+    req_builder = req_builder.header("User-Agent", user_agent);
     if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
-        req = req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
+        req_builder =
+            req_builder.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
     }
-    let resp = req
-        .send()
+    let req = req_builder.build().context("Failed to build request")?;
+    let mut resp = client
+        .execute(req.try_clone().context("Failed to clone request")?)
         .await
         .context("Failed to send backup request to server")?;
-    let status = resp.status();
+    let mut status = resp.status();
+
+    // Handle 402 Payment Required response
+    if status.as_u16() == 402 {
+        resp = handle_402_response(client, resp, &req, x402_private_key).await?;
+        status = resp.status();
+    }
+
     if status.is_success() {
         let backup_resp: BackupCreateResponse =
             resp.json().await.context("Invalid server response")?;
@@ -289,6 +304,49 @@ async fn request_backup(
     }
     let text = resp.text().await.unwrap_or_default();
     anyhow::bail!("Server error: {}", text);
+}
+
+/// Handle 402 Payment Required response by creating a payment and retrying the request
+async fn handle_402_response(
+    client: &Client,
+    response: reqwest::Response,
+    original_request: &reqwest::Request,
+    x402_private_key: Option<&str>,
+) -> Result<reqwest::Response> {
+    // Parse the 402 response structure
+    let response_text = response
+        .text()
+        .await
+        .context("Failed to read 402 response body")?;
+    let response_json: serde_json::Value =
+        serde_json::from_str(&response_text).context("Failed to parse 402 response as JSON")?;
+
+    // Extract PaymentRequirements from the accepts array
+    let accepts = response_json
+        .get("accepts")
+        .and_then(|v| v.as_array())
+        .context("Missing or invalid 'accepts' field in 402 response")?;
+
+    if accepts.is_empty() {
+        anyhow::bail!("No payment options available in 402 response");
+    }
+
+    // Use the first payment option
+    let payment_requirements: x402_rs::types::PaymentRequirements =
+        serde_json::from_value(accepts[0].clone())
+            .context("Failed to parse PaymentRequirements from accepts array")?;
+
+    // Create x402 payment handler
+    let payment_handler = X402PaymentHandler::new(x402_private_key)
+        .context("Failed to create x402 payment handler")?;
+
+    // Handle the payment and retry the request
+    let response = payment_handler
+        .handle_402_response(client, original_request, payment_requirements)
+        .await
+        .context("Failed to handle x402 payment")?;
+
+    Ok(response)
 }
 
 async fn wait_for_done_backup(
