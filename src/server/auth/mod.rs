@@ -59,7 +59,10 @@ pub fn load_auth_config(config_path: &Path) -> Result<AuthConfig, String> {
     let x402_config = if let Some(raw) = file.x402.take() {
         match X402Config::compile(raw) {
             Ok(cfg) => {
-                info!("Loaded x402 config (facilitator: {})", cfg.facilitator.url);
+                info!(
+                    "Loaded x402 config (network: {}, facilitator: {})",
+                    cfg.facilitator.network, cfg.facilitator.url
+                );
                 Some(cfg)
             }
             Err(e) => {
