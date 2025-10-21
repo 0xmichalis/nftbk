@@ -14,6 +14,7 @@ use crate::cli::x402::X402PaymentHandler;
 use crate::envvar::is_defined;
 use crate::server::api::{self, BackupCreateResponse, BackupRequest, BackupResponse, Tokens};
 use crate::server::archive::archive_format_from_user_agent;
+use crate::server::hashing::compute_task_id;
 
 use super::common::delete_backup;
 
@@ -23,11 +24,7 @@ const BACKUPS_API_PATH: &str = "/v1/backups";
 enum BackupStart {
     Created(BackupCreateResponse),
     Exists(BackupCreateResponse),
-    Conflict {
-        task_id: String,
-        retry_url: String,
-        message: String,
-    },
+    Conflict { retry_url: String, message: String },
 }
 
 pub async fn run(
@@ -44,105 +41,83 @@ pub async fn run(
     let x402_private_key = env::var("NFTBK_X402_PRIVATE_KEY").ok();
     let client = Client::new();
 
-    // First, try to create the backup
-    let start = request_backup(
-        &token_config,
-        &server_address,
-        &client,
-        auth_token.as_deref(),
-        &user_agent,
+    // Build the backup request to compute task_id
+    let mut backup_req = BackupRequest {
+        tokens: Vec::new(),
         pin_on_ipfs,
-        x402_private_key.as_deref(),
-    )
-    .await?;
+        create_archive: true,
+    };
+    for (chain, tokens) in &token_config.chains {
+        backup_req.tokens.push(Tokens {
+            chain: chain.clone(),
+            tokens: tokens.clone(),
+        });
+    }
 
-    let task_id = match start {
-        BackupStart::Created(resp) => {
-            let task_id = resp.task_id.clone();
-            println!("Task ID: {task_id}");
+    // Compute task_id to check if backup exists without making POST request
+    let task_id = compute_task_id(&backup_req.tokens, auth_token.as_deref());
+
+    // Check if backup exists using GET endpoint (no payment required)
+    let backup_exists =
+        check_backup_exists(&client, &server_address, &task_id, auth_token.as_deref()).await?;
+
+    let final_task_id = if backup_exists {
+        println!("Task ID (exists): {task_id}");
+        if force {
+            // Delete existing backup and create new one
+            let _ = delete_backup(&client, &server_address, &task_id, auth_token.as_deref()).await;
+            let start = request_backup(
+                &token_config,
+                &server_address,
+                &client,
+                auth_token.as_deref(),
+                &user_agent,
+                pin_on_ipfs,
+                x402_private_key.as_deref(),
+            )
+            .await?;
+            match start {
+                BackupStart::Created(resp) | BackupStart::Exists(resp) => {
+                    let task_id2 = resp.task_id.clone();
+                    println!("Task ID (after delete): {task_id2}");
+                    task_id2
+                }
+                BackupStart::Conflict { message, retry_url } => {
+                    anyhow::bail!(
+                        "{}\nCould not create new task after delete. Try POST to {}{}",
+                        message,
+                        server_address.trim_end_matches('/'),
+                        retry_url
+                    );
+                }
+            }
+        } else {
             task_id
         }
-        BackupStart::Exists(resp) => {
-            let task_id = resp.task_id.clone();
-            println!("Task ID (exists): {task_id}");
-            if force {
-                // Delete and re-request
-                let _ =
-                    delete_backup(&client, &server_address, &task_id, auth_token.as_deref()).await;
-                let second_try = request_backup(
-                    &token_config,
-                    &server_address,
-                    &client,
-                    auth_token.as_deref(),
-                    &user_agent,
-                    pin_on_ipfs,
-                    x402_private_key.as_deref(),
-                )
-                .await?;
-                match second_try {
-                    BackupStart::Created(resp2) | BackupStart::Exists(resp2) => {
-                        let task_id2 = resp2.task_id.clone();
-                        println!("Task ID (after delete): {task_id2}");
-                        task_id2
-                    }
-                    BackupStart::Conflict {
-                        message,
-                        retry_url,
-                        task_id: _,
-                    } => {
-                        anyhow::bail!(
-                            "{}\nCould not create new task after delete. Try POST to {}{}",
-                            message,
-                            server_address.trim_end_matches('/'),
-                            retry_url
-                        );
-                    }
-                }
-            } else {
+    } else {
+        // Backup doesn't exist, create it
+        let start = request_backup(
+            &token_config,
+            &server_address,
+            &client,
+            auth_token.as_deref(),
+            &user_agent,
+            pin_on_ipfs,
+            x402_private_key.as_deref(),
+        )
+        .await?;
+        match start {
+            BackupStart::Created(resp) => {
+                let task_id = resp.task_id.clone();
+                println!("Task ID: {task_id}");
                 task_id
             }
-        }
-        BackupStart::Conflict {
-            task_id,
-            retry_url,
-            message,
-        } => {
-            println!("Task ID: {task_id}");
-            if force {
-                println!("Server response: {message}");
-                // Try to delete the existing task by task_id, then request again
-                let _ =
-                    delete_backup(&client, &server_address, &task_id, auth_token.as_deref()).await;
-                let second_try = request_backup(
-                    &token_config,
-                    &server_address,
-                    &client,
-                    auth_token.as_deref(),
-                    &user_agent,
-                    pin_on_ipfs,
-                    x402_private_key.as_deref(),
-                )
-                .await?;
-                match second_try {
-                    BackupStart::Created(resp2) | BackupStart::Exists(resp2) => {
-                        let task_id2 = resp2.task_id.clone();
-                        println!("Task ID (after delete): {task_id2}");
-                        task_id2
-                    }
-                    BackupStart::Conflict {
-                        message,
-                        retry_url,
-                        task_id: _,
-                    } => {
-                        anyhow::bail!(
-                            "{}\nCould not create new task after delete. Try POST to {}{}",
-                            message,
-                            server_address.trim_end_matches('/'),
-                            retry_url
-                        );
-                    }
-                }
-            } else {
+            BackupStart::Exists(resp) => {
+                let task_id = resp.task_id.clone();
+                println!("Task ID (exists): {task_id}");
+                task_id
+            }
+            BackupStart::Conflict { retry_url, message } => {
                 anyhow::bail!(
                     "{}\nRun the CLI with --force true, or POST to {}{}",
                     message,
@@ -157,7 +132,7 @@ pub async fn run(
     wait_for_done_backup(
         &client,
         &server_address,
-        &task_id,
+        &final_task_id,
         auth_token.as_deref(),
         polling_interval,
     )
@@ -166,7 +141,7 @@ pub async fn run(
     return download_backup(
         &client,
         &server_address,
-        &task_id,
+        &final_task_id,
         output_path.as_ref(),
         auth_token.as_deref(),
         &archive_format_from_user_agent(&user_agent),
@@ -232,11 +207,6 @@ async fn request_backup(
             .json()
             .await
             .context("Invalid conflict response from server")?;
-        let task_id = body
-            .get("task_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_string();
         let retry_url = body
             .get("retry_url")
             .and_then(|v| v.as_str())
@@ -247,11 +217,7 @@ async fn request_backup(
             .and_then(|v| v.as_str())
             .unwrap_or(&format!("Server returned conflict for {BACKUPS_API_PATH}"))
             .to_string();
-        return Ok(BackupStart::Conflict {
-            task_id,
-            retry_url,
-            message,
-        });
+        return Ok(BackupStart::Conflict { retry_url, message });
     }
     let text = resp.text().await.unwrap_or_default();
     anyhow::bail!("Server error: {}", text);
@@ -298,6 +264,33 @@ async fn handle_402_response(
         .context("Failed to handle x402 payment")?;
 
     Ok(response)
+}
+
+/// Check if a backup exists by making a GET request to the backup status endpoint
+async fn check_backup_exists(
+    client: &Client,
+    server_address: &str,
+    task_id: &str,
+    auth_token: Option<&str>,
+) -> Result<bool> {
+    let server = server_address.trim_end_matches('/');
+    let mut req_builder = client.get(format!("{server}/v1/backups/{task_id}"));
+
+    if let Some(token) = auth_token {
+        req_builder = req_builder.header("Authorization", format!("Bearer {}", token));
+    }
+
+    let resp = req_builder.send().await?;
+    let status = resp.status();
+
+    match status.as_u16() {
+        200 => Ok(true),  // Backup exists
+        404 => Ok(false), // Backup doesn't exist
+        _ => {
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to check backup status: {} - {}", status, text);
+        }
+    }
 }
 
 async fn wait_for_done_backup(
@@ -689,12 +682,7 @@ mod tests {
 
             assert!(result.is_ok());
             match result.unwrap() {
-                BackupStart::Conflict {
-                    task_id,
-                    retry_url,
-                    message,
-                } => {
-                    assert_eq!(task_id, "conflict-task-456");
+                BackupStart::Conflict { retry_url, message } => {
                     assert_eq!(retry_url, "/v1/backups/conflict-task-456/retry");
                     assert_eq!(message, "Task already in progress");
                 }
