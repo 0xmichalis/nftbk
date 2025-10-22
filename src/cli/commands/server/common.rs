@@ -97,8 +97,7 @@ pub async fn delete_backup(
             Ok(())
         }
         409 => {
-            // In progress; proceed with new request anyway
-            println!("Existing backup {task_id} is in progress; proceeding to create new request");
+            println!("Existing backup {task_id} is in progress");
             Ok(())
         }
         code => {
