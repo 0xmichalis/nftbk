@@ -36,10 +36,14 @@ impl Facilitator for SharedFacilitator {
             handle_result(
                 &this.client,
                 "POST /verify",
-                || {
-                    reqwest::Client::new()
-                        .post(this.client.verify_url().clone())
-                        .json(&req)
+                {
+                    let client = this.client.clone();
+                    let req = req.clone();
+                    move || {
+                        reqwest::Client::new()
+                            .post(client.verify_url().clone())
+                            .json(&req)
+                    }
                 },
                 tolerant_recover_verify,
                 this.client.verify(&req).await,
@@ -58,10 +62,14 @@ impl Facilitator for SharedFacilitator {
             handle_result(
                 &this.client,
                 "POST /settle",
-                || {
-                    reqwest::Client::new()
-                        .post(this.client.settle_url().clone())
-                        .json(&req)
+                {
+                    let client = this.client.clone();
+                    let req = req.clone();
+                    move || {
+                        reqwest::Client::new()
+                            .post(client.settle_url().clone())
+                            .json(&req)
+                    }
                 },
                 |body| tolerant_recover_payment_required::<SettleResponse>("POST /settle", body),
                 this.client.settle(&req).await,
@@ -78,7 +86,10 @@ impl Facilitator for SharedFacilitator {
             handle_result(
                 &this.client,
                 "GET /supported",
-                || reqwest::Client::new().get(this.client.supported_url().clone()),
+                {
+                    let client = this.client.clone();
+                    move || reqwest::Client::new().get(client.supported_url().clone())
+                },
                 |body| tolerant_parse_supported(body).map(Ok),
                 this.client.supported().await,
             )

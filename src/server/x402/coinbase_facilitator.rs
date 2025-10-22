@@ -73,10 +73,14 @@ impl Facilitator for CoinbaseFacilitator {
             handle_result(
                 &client,
                 "POST /verify",
-                || {
-                    reqwest::Client::new()
-                        .post(this.base_client.verify_url().clone())
-                        .json(&req)
+                {
+                    let base_client = this.base_client.clone();
+                    let req = req.clone();
+                    move || {
+                        reqwest::Client::new()
+                            .post(base_client.verify_url().clone())
+                            .json(&req)
+                    }
                 },
                 tolerant_recover_verify,
                 client.verify(&req).await,
@@ -97,10 +101,14 @@ impl Facilitator for CoinbaseFacilitator {
             handle_result(
                 &client,
                 "POST /settle",
-                || {
-                    reqwest::Client::new()
-                        .post(this.base_client.settle_url().clone())
-                        .json(&req)
+                {
+                    let base_client = this.base_client.clone();
+                    let req = req.clone();
+                    move || {
+                        reqwest::Client::new()
+                            .post(base_client.settle_url().clone())
+                            .json(&req)
+                    }
                 },
                 |body| tolerant_recover_payment_required::<SettleResponse>("POST /settle", body),
                 client.settle(&req).await,
@@ -119,7 +127,10 @@ impl Facilitator for CoinbaseFacilitator {
             handle_result(
                 &client,
                 "GET /supported",
-                || reqwest::Client::new().get(this.base_client.supported_url().clone()),
+                {
+                    let base_client = this.base_client.clone();
+                    move || reqwest::Client::new().get(base_client.supported_url().clone())
+                },
                 |body| tolerant_parse_supported(body).map(Ok),
                 client.supported().await,
             )

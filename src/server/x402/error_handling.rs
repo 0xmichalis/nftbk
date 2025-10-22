@@ -6,8 +6,10 @@ use x402_rs::types::{
     FacilitatorErrorReason, MixedAddress, SupportedPaymentKindsResponse, VerifyResponse,
 };
 
+use crate::httpclient::retry::{retry_operation, should_retry};
+
 /// Adds headers from a FacilitatorClient to a reqwest RequestBuilder
-pub async fn add_headers_from_client(
+async fn add_headers_from_client(
     client: &FacilitatorClient,
     req: reqwest::RequestBuilder,
 ) -> reqwest::RequestBuilder {
@@ -21,7 +23,7 @@ pub async fn add_headers_from_client(
 }
 
 /// Logs raw error body with truncation for large responses
-pub async fn log_raw_error_body(method: &str, path: &str, body: &str) {
+async fn log_raw_error_body(method: &str, path: &str, body: &str) {
     let snippet = if body.len() > 4096 {
         &body[..4096]
     } else {
@@ -30,8 +32,153 @@ pub async fn log_raw_error_body(method: &str, path: &str, body: &str) {
     error!("{} {} raw body (truncated): {}", method, path, snippet);
 }
 
+/// Retry logic for server errors (5xx) and network issues
+async fn retry_on_http_error<T, FBuild, FRecover>(
+    client: &FacilitatorClient,
+    context: &'static str,
+    build_req: FBuild,
+    recover: FRecover,
+) -> Result<T, FacilitatorClientError>
+where
+    T: serde::de::DeserializeOwned,
+    FBuild: Fn() -> reqwest::RequestBuilder + Send + Sync + Clone + 'static,
+    FRecover: Fn(&str) -> Option<Result<T, FacilitatorClientError>> + Send + Sync + Clone + 'static,
+{
+    error!("Request failed with server error, retrying with backoff");
+
+    // Use the retry mechanism for server errors
+    let retry_result = retry_operation(
+        {
+            let client = client.clone();
+            let build_req = build_req.clone();
+            let recover = recover.clone();
+            move || {
+                let client = client.clone();
+                let build_req = build_req.clone();
+                let recover = recover.clone();
+                Box::pin(async move {
+                    let req = build_req();
+                    let req = add_headers_from_client(&client, req).await;
+                    match req.send().await {
+                        Ok(resp) => {
+                            let status = resp.status();
+                            match resp.text().await {
+                                Ok(body) => {
+                                    // Derive method and path generically from context like "METHOD /path"
+                                    let mut parts = context.splitn(2, ' ');
+                                    let method = parts.next().unwrap_or("?");
+                                    let path = parts.next().unwrap_or("?");
+                                    log_raw_error_body(method, path, &body).await;
+
+                                    // If it's a successful response, try to parse it directly
+                                    if status.is_success() {
+                                        // For successful responses, we need to parse them directly
+                                        // The recovery function is for error cases only
+                                        match serde_json::from_str::<T>(&body) {
+                                            Ok(value) => return (Ok(value), Some(status)),
+                                            Err(e) => {
+                                                return (
+                                                    Err(anyhow::anyhow!(
+                                                        "Failed to parse successful response: {}",
+                                                        e
+                                                    )),
+                                                    Some(status),
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // For error responses, try recovery
+                                    if let Some(recovered) = recover(&body) {
+                                        return (
+                                            recovered.map_err(|e| anyhow::anyhow!("{}", e)),
+                                            Some(status),
+                                        );
+                                    }
+
+                                    // If no recovery, check if it's a server error
+                                    if status.is_server_error() {
+                                        (
+                                            Err(anyhow::anyhow!("Server error: {}", body)),
+                                            Some(status),
+                                        )
+                                    } else {
+                                        (
+                                            Err(anyhow::anyhow!("Non-recoverable error: {}", body)),
+                                            Some(status),
+                                        )
+                                    }
+                                }
+                                Err(e) => (
+                                    Err(anyhow::anyhow!("Failed to read response body: {}", e)),
+                                    Some(status),
+                                ),
+                            }
+                        }
+                        Err(e) => (Err(anyhow::anyhow!("Request failed: {}", e)), None),
+                    }
+                })
+            }
+        },
+        3, // Max 3 retries
+        should_retry,
+        context,
+    )
+    .await;
+
+    // Convert back to FacilitatorClientError
+    match retry_result {
+        Ok(value) => Ok(value),
+        Err(e) => Err(FacilitatorClientError::HttpStatus {
+            context,
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            body: e.to_string(),
+        }),
+    }
+}
+
+/// Handle JSON deserialization errors by fetching raw response body and applying recovery logic
+async fn handle_deserialization_error<T, FBuild, FRecover>(
+    client: &FacilitatorClient,
+    context: &'static str,
+    build_req: FBuild,
+    recover: FRecover,
+) -> Option<Result<T, FacilitatorClientError>>
+where
+    T: serde::de::DeserializeOwned,
+    FBuild: Fn() -> reqwest::RequestBuilder + Send + Sync + Clone + 'static,
+    FRecover: Fn(&str) -> Option<Result<T, FacilitatorClientError>> + Send + Sync + Clone + 'static,
+{
+    let req = build_req();
+    let req = add_headers_from_client(client, req).await;
+    match req.send().await {
+        Ok(resp) => match resp.text().await {
+            Ok(body) => {
+                // Derive method and path generically from context like "METHOD /path"
+                let mut parts = context.splitn(2, ' ');
+                let method = parts.next().unwrap_or("?");
+                let path = parts.next().unwrap_or("?");
+                log_raw_error_body(method, path, body.as_str()).await;
+                recover(body.as_str())
+            }
+            Err(fetch_err) => {
+                error!(
+                    "Failed to read response body for {}: {}",
+                    context, fetch_err
+                );
+                None
+            }
+        },
+        Err(fetch_err) => {
+            error!("Failed to fetch raw body for {}: {}", context, fetch_err);
+            None
+        }
+    }
+}
+
 /// Generic error handling that attempts to recover from JSON deserialization errors
-/// by fetching the raw response body and applying recovery logic
+/// by fetching the raw response body and applying recovery logic.
+/// Also includes retry logic for server errors (5xx) and network issues.
 pub async fn handle_result<T, FBuild, FRecover>(
     client: &FacilitatorClient,
     context: &'static str,
@@ -40,45 +187,36 @@ pub async fn handle_result<T, FBuild, FRecover>(
     result: Result<T, FacilitatorClientError>,
 ) -> Result<T, FacilitatorClientError>
 where
-    FBuild: FnOnce() -> reqwest::RequestBuilder,
-    FRecover: FnOnce(&str) -> Option<Result<T, FacilitatorClientError>>,
+    T: serde::de::DeserializeOwned,
+    FBuild: Fn() -> reqwest::RequestBuilder + Send + Sync + Clone + 'static,
+    FRecover: Fn(&str) -> Option<Result<T, FacilitatorClientError>> + Send + Sync + Clone + 'static,
 {
     match result {
         Ok(value) => Ok(value),
         Err(err) => {
             error!(error = %err, "{} failed", context);
+
+            // Check if this is a server error (5xx) or rate limit error (429) that should be retried
+            if let FacilitatorClientError::HttpStatus { status, .. } = &err {
+                if status.is_server_error() || status.as_u16() == 429 {
+                    return retry_on_http_error(client, context, build_req, recover).await;
+                }
+            }
+
+            // Handle JSON deserialization errors
             if let FacilitatorClientError::JsonDeserialization {
                 context: err_ctx, ..
             } = &err
             {
                 if *err_ctx == context {
-                    let req = build_req();
-                    let req = add_headers_from_client(client, req).await;
-                    match req.send().await {
-                        Ok(resp) => match resp.text().await {
-                            Ok(body) => {
-                                // Derive method and path generically from context like "METHOD /path"
-                                let mut parts = context.splitn(2, ' ');
-                                let method = parts.next().unwrap_or("?");
-                                let path = parts.next().unwrap_or("?");
-                                log_raw_error_body(method, path, body.as_str()).await;
-                                if let Some(recovered) = recover(body.as_str()) {
-                                    return recovered;
-                                }
-                            }
-                            Err(fetch_err) => {
-                                error!(
-                                    "Failed to read response body for {}: {}",
-                                    context, fetch_err
-                                );
-                            }
-                        },
-                        Err(fetch_err) => {
-                            error!("Failed to fetch raw body for {}: {}", context, fetch_err);
-                        }
+                    if let Some(recovered) =
+                        handle_deserialization_error(client, context, build_req, recover).await
+                    {
+                        return recovered;
                     }
                 }
             }
+
             Err(err)
         }
     }
@@ -170,6 +308,17 @@ pub fn tolerant_recover_payment_required<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::primitives::address;
+    use url::Url;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+    use x402_rs::network::Network;
+    use x402_rs::timestamp::UnixTimestamp;
+    use x402_rs::types::{
+        EvmAddress, ExactEvmPayload, ExactEvmPayloadAuthorization, ExactPaymentPayload,
+        PaymentPayload, PaymentRequirements, Scheme, SettleRequest, SettleResponse, TokenAmount,
+        X402Version,
+    };
 
     #[test]
     fn test_tolerant_parse_supported_with_empty_extra_objects() {
@@ -285,5 +434,105 @@ mod tests {
         assert!(networks.contains(&"solana".to_string()));
         assert!(networks.contains(&"iotex".to_string()));
         assert!(networks.contains(&"peaq".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_retry_on_http_error() {
+        let server = MockServer::start().await;
+
+        // Mock server that returns 500 error first, then success
+        // First mock: returns 500 error
+        Mock::given(method("POST"))
+            .and(path("/settle"))
+            .respond_with(ResponseTemplate::new(500)
+                .set_body_string(r#"{"success":false,"errorReason":"unexpected_settle_error","transaction":"","network":"base-sepolia"}"#)
+                .insert_header("content-type", "application/json"))
+            .up_to_n_times(1)
+            .mount(&server)
+            .await;
+
+        // Second mock: returns success
+        Mock::given(method("POST"))
+            .and(path("/settle"))
+            .respond_with(ResponseTemplate::new(200)
+                .set_body_string(r#"{"success":true,"payer":"0x0000000000000000000000000000000000000001","transaction":"0x1111111111111111111111111111111111111111111111111111111111111111","network":"base-sepolia"}"#)
+                .insert_header("content-type", "application/json"))
+            .mount(&server)
+            .await;
+
+        // Create a test settle request
+        let payment_payload = PaymentPayload {
+            x402_version: X402Version::V1,
+            scheme: Scheme::Exact,
+            network: Network::BaseSepolia,
+            payload: ExactPaymentPayload::Evm(ExactEvmPayload {
+                signature: x402_rs::types::EvmSignature::from([0x12u8; 65]),
+                authorization: ExactEvmPayloadAuthorization {
+                    from: EvmAddress::from(address!("0x0000000000000000000000000000000000000001")),
+                    to: EvmAddress::from(address!("0x0000000000000000000000000000000000000002")),
+                    value: TokenAmount::from(1000000u64),
+                    valid_after: UnixTimestamp::try_now().unwrap(),
+                    valid_before: UnixTimestamp::try_now().unwrap() + 3600,
+                    nonce: x402_rs::types::HexEncodedNonce([0x12u8; 32]),
+                },
+            }),
+        };
+
+        let payment_requirements = PaymentRequirements {
+            scheme: Scheme::Exact,
+            network: Network::BaseSepolia,
+            max_amount_required: TokenAmount::from(1000000u64),
+            resource: Url::parse("https://example.com").unwrap(),
+            description: "test".to_string(),
+            mime_type: "application/json".to_string(),
+            output_schema: None,
+            pay_to: x402_rs::types::MixedAddress::Evm(EvmAddress::from(address!(
+                "0x0000000000000000000000000000000000000002"
+            ))),
+            max_timeout_seconds: 3600,
+            asset: x402_rs::types::MixedAddress::Evm(EvmAddress::from(address!(
+                "0x0000000000000000000000000000000000000003"
+            ))),
+            extra: None,
+        };
+
+        let settle_request = SettleRequest {
+            x402_version: X402Version::V1,
+            payment_payload,
+            payment_requirements,
+        };
+
+        // Create a facilitator client
+        let client = FacilitatorClient::try_new(server.uri().parse().unwrap()).unwrap();
+
+        // Test the retry logic
+        let result = handle_result(
+            &client,
+            "POST /settle",
+            {
+                let settle_request = settle_request.clone();
+                let server_uri = server
+                    .uri()
+                    .parse::<url::Url>()
+                    .unwrap()
+                    .join("/settle")
+                    .unwrap();
+                move || {
+                    let settle_request = settle_request.clone();
+                    reqwest::Client::new()
+                        .post(server_uri.clone())
+                        .json(&settle_request)
+                }
+            },
+            |body| tolerant_recover_payment_required::<SettleResponse>("POST /settle", body),
+            client.settle(&settle_request).await,
+        )
+        .await;
+
+        // Should succeed after retry
+        assert!(result.is_ok());
+        let settle_response = result.unwrap();
+        assert!(settle_response.success);
+        assert_eq!(settle_response.network, Network::BaseSepolia);
     }
 }
