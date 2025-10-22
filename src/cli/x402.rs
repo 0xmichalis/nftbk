@@ -1,6 +1,7 @@
 use std::io::{self, BufReader, Write};
 
 use alloy::primitives::{Address, FixedBytes, U256};
+use alloy::providers::ProviderBuilder;
 use alloy::signers::{k256::ecdsa::SigningKey, Signer};
 use alloy::sol_types::{Eip712Domain, SolStruct};
 use alloy::{hex, sol};
@@ -28,20 +29,34 @@ sol! {
     }
 }
 
+// ERC20 token interface to query decimals
+sol! {
+    #[allow(missing_docs)]
+    #[sol(rpc)]
+    interface IERC20 {
+        function decimals() external view returns (uint8);
+    }
+}
+
 /// Get chain ID from network
-fn chain_id_from_network(network: Network) -> u64 {
+fn chain_id_from_network(network: Network) -> Result<u64> {
     match network {
-        Network::Base => 8453,
-        Network::BaseSepolia => 84532,
-        Network::Polygon => 137,
-        Network::PolygonAmoy => 80002,
-        Network::Avalanche => 43114,
-        Network::AvalancheFuji => 43113,
-        Network::XdcMainnet => 50,
-        Network::Sei => 1329,
-        Network::SeiTestnet => 1328,
-        Network::Solana => 0, // Solana doesn't use chain IDs
-        Network::SolanaDevnet => 0,
+        Network::Base => Ok(8453),
+        Network::BaseSepolia => Ok(84532),
+        _ => anyhow::bail!(
+            "Only Base and Base Sepolia networks are supported for chain id retrieval"
+        ),
+    }
+}
+
+/// Get RPC URL for network
+fn get_rpc_url_for_network(network: Network) -> Result<&'static str> {
+    match network {
+        Network::Base => Ok("https://mainnet.base.org"),
+        Network::BaseSepolia => Ok("https://sepolia.base.org"),
+        _ => anyhow::bail!(
+            "Only Base and Base Sepolia networks are supported for asset decimals queries"
+        ),
     }
 }
 
@@ -101,7 +116,10 @@ impl X402PaymentHandler {
         );
 
         // Prompt user for confirmation before proceeding with payment
-        if !self.confirm_payment(&account_address, &payment_requirements)? {
+        if !self
+            .confirm_payment(&account_address, &payment_requirements)
+            .await?
+        {
             anyhow::bail!("Payment cancelled by user");
         }
 
@@ -238,7 +256,7 @@ impl X402PaymentHandler {
         };
 
         // Get chain ID
-        let chain_id = chain_id_from_network(requirements.network);
+        let chain_id = chain_id_from_network(requirements.network)?;
 
         // Extract token name and version from extra metadata, with USDC defaults
         let (token_name, token_version) = self.extract_token_metadata(requirements);
@@ -279,8 +297,62 @@ impl X402PaymentHandler {
         Ok(HexEncodedNonce(nonce_bytes))
     }
 
+    /// Query asset decimals from the blockchain
+    async fn query_asset_decimals(&self, requirements: &PaymentRequirements) -> Result<u8> {
+        // Only support EVM addresses for now
+        let asset_address = match &requirements.asset {
+            x402_rs::types::MixedAddress::Evm(addr) => Address::from(*addr),
+            _ => anyhow::bail!("Only EVM addresses are supported for asset decimals queries"),
+        };
+
+        // Get RPC URL for the network
+        let rpc_url = get_rpc_url_for_network(requirements.network)?;
+
+        // Create provider
+        let provider = ProviderBuilder::new()
+            .connect(rpc_url)
+            .await
+            .context("Failed to connect to RPC provider")?;
+
+        // Create ERC20 contract instance
+        let erc20_contract = IERC20::new(asset_address, &provider);
+
+        // Query decimals
+        let decimals = erc20_contract
+            .decimals()
+            .call()
+            .await
+            .context("Failed to query token decimals")?;
+
+        Ok(decimals)
+    }
+
+    /// Format token amount with decimals for human-readable display
+    fn format_token_amount(amount: &x402_rs::types::TokenAmount, decimals: u8) -> String {
+        let amount_u256: U256 = (*amount).into();
+        let divisor = U256::from(10).pow(U256::from(decimals));
+
+        let whole_part = amount_u256 / divisor;
+        let fractional_part = amount_u256 % divisor;
+
+        if fractional_part == U256::ZERO {
+            format!("{}", whole_part)
+        } else {
+            // Format fractional part with proper padding
+            let fractional_str = format!("{:0width$}", fractional_part, width = decimals as usize);
+            // Remove trailing zeros
+            let fractional_trimmed = fractional_str.trim_end_matches('0');
+
+            if fractional_trimmed.is_empty() {
+                format!("{}", whole_part)
+            } else {
+                format!("{}.{}", whole_part, fractional_trimmed)
+            }
+        }
+    }
+
     /// Prompt user for confirmation before proceeding with payment
-    fn confirm_payment(
+    async fn confirm_payment(
         &self,
         account_address: &Address,
         payment_requirements: &PaymentRequirements,
@@ -292,10 +364,11 @@ impl X402PaymentHandler {
             &mut io::stdout(),
             &mut stdin,
         )
+        .await
     }
 
     /// Prompt user for confirmation with configurable I/O for testing
-    fn confirm_payment_with_io<W: Write, R: std::io::BufRead>(
+    async fn confirm_payment_with_io<W: Write, R: std::io::BufRead>(
         &self,
         account_address: &Address,
         payment_requirements: &PaymentRequirements,
@@ -306,20 +379,29 @@ impl X402PaymentHandler {
         writeln!(writer, "═══════════════════════════════════════")?;
         writeln!(writer, "Account: {}", account_address)?;
         writeln!(writer, "Network: {:?}", payment_requirements.network)?;
-        writeln!(
-            writer,
-            "Amount: {}",
-            payment_requirements.max_amount_required
-        )?;
-        writeln!(writer, "Recipient: {}", payment_requirements.pay_to)?;
-        writeln!(writer, "Resource: {}", payment_requirements.resource)?;
-        writeln!(writer, "Description: {}", payment_requirements.description)?;
-        writeln!(
-            writer,
-            "Timeout: {} seconds",
-            payment_requirements.max_timeout_seconds
-        )?;
 
+        // Query asset decimals and display human-readable amount
+        match self.query_asset_decimals(payment_requirements).await {
+            Ok(decimals) => {
+                let human_readable_amount =
+                    Self::format_token_amount(&payment_requirements.max_amount_required, decimals);
+                writeln!(
+                    writer,
+                    "Amount: {} (raw: {})",
+                    human_readable_amount, payment_requirements.max_amount_required
+                )?;
+            }
+            Err(e) => {
+                // Fallback to raw amount if decimals query fails
+                writeln!(
+                    writer,
+                    "Amount: {} (failed to query decimals: {})",
+                    payment_requirements.max_amount_required, e
+                )?;
+            }
+        }
+
+        // Display token metadata if available
         if let Some(extra) = &payment_requirements.extra {
             if let Some(name) = extra.get("name").and_then(|v| v.as_str()) {
                 writeln!(writer, "Token: {}", name)?;
@@ -328,6 +410,15 @@ impl X402PaymentHandler {
                 writeln!(writer, "Token Version: {}", version)?;
             }
         }
+
+        writeln!(writer, "Recipient: {}", payment_requirements.pay_to)?;
+        writeln!(writer, "Resource: {}", payment_requirements.resource)?;
+        writeln!(writer, "Description: {}", payment_requirements.description)?;
+        writeln!(
+            writer,
+            "Timeout: {} seconds",
+            payment_requirements.max_timeout_seconds
+        )?;
 
         writeln!(writer, "═══════════════════════════════════════")?;
         write!(writer, "Do you want to proceed with this payment? [y/N]: ")?;
@@ -419,17 +510,9 @@ mod tests {
 
     #[test]
     fn test_chain_id_from_network() {
-        assert_eq!(chain_id_from_network(Network::Base), 8453);
-        assert_eq!(chain_id_from_network(Network::BaseSepolia), 84532);
-        assert_eq!(chain_id_from_network(Network::Polygon), 137);
-        assert_eq!(chain_id_from_network(Network::PolygonAmoy), 80002);
-        assert_eq!(chain_id_from_network(Network::Avalanche), 43114);
-        assert_eq!(chain_id_from_network(Network::AvalancheFuji), 43113);
-        assert_eq!(chain_id_from_network(Network::XdcMainnet), 50);
-        assert_eq!(chain_id_from_network(Network::Sei), 1329);
-        assert_eq!(chain_id_from_network(Network::SeiTestnet), 1328);
-        assert_eq!(chain_id_from_network(Network::Solana), 0);
-        assert_eq!(chain_id_from_network(Network::SolanaDevnet), 0);
+        assert_eq!(chain_id_from_network(Network::Base).unwrap(), 8453);
+        assert_eq!(chain_id_from_network(Network::BaseSepolia).unwrap(), 84532);
+        assert!(chain_id_from_network(Network::Polygon).is_err());
     }
 
     #[test]
@@ -497,16 +580,15 @@ mod tests {
     fn test_eip712_domain_creation_different_networks() {
         let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
 
-        // Test Polygon network
+        // Test Base Sepolia network
         let mut requirements = create_test_payment_requirements();
-        requirements.network = Network::Polygon;
+        requirements.network = Network::BaseSepolia;
         let domain = handler.create_eip712_domain(&requirements).unwrap();
-        assert_eq!(domain.chain_id, Some(U256::from(137)));
+        assert_eq!(domain.chain_id, Some(U256::from(84532)));
 
-        // Test Avalanche network
-        requirements.network = Network::Avalanche;
-        let domain = handler.create_eip712_domain(&requirements).unwrap();
-        assert_eq!(domain.chain_id, Some(U256::from(43114)));
+        // Test unsupported network should fail
+        requirements.network = Network::Polygon;
+        assert!(handler.create_eip712_domain(&requirements).is_err());
     }
 
     #[test]
@@ -715,8 +797,8 @@ mod tests {
             .contains("x402 private key is required"));
     }
 
-    #[test]
-    fn test_confirm_payment_with_io_accepts_yes() {
+    #[tokio::test]
+    async fn test_confirm_payment_with_io_accepts_yes() {
         let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
         let requirements = create_test_payment_requirements();
 
@@ -729,12 +811,9 @@ mod tests {
         let mut input = "yes\n".as_bytes();
         let mut output = Vec::new();
 
-        let result = handler.confirm_payment_with_io(
-            &account_address,
-            &requirements,
-            &mut output,
-            &mut input,
-        );
+        let result = handler
+            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
+            .await;
 
         assert!(result.is_ok());
         assert!(result.unwrap());
@@ -744,12 +823,13 @@ mod tests {
         assert!(output_str.contains("🔐 x402 Payment Authorization Required"));
         assert!(output_str.contains(&format!("Account: {}", account_address)));
         assert!(output_str.contains("Network: Base"));
-        assert!(output_str.contains("Amount: 1000000"));
+        // Note: Amount display now includes human-readable format, so we check for both
+        assert!(output_str.contains("Amount:") && output_str.contains("1000000"));
         assert!(output_str.contains("Do you want to proceed with this payment? [y/N]:"));
     }
 
-    #[test]
-    fn test_confirm_payment_with_io_accepts_y() {
+    #[tokio::test]
+    async fn test_confirm_payment_with_io_accepts_y() {
         let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
         let requirements = create_test_payment_requirements();
 
@@ -762,19 +842,16 @@ mod tests {
         let mut input = "y\n".as_bytes();
         let mut output = Vec::new();
 
-        let result = handler.confirm_payment_with_io(
-            &account_address,
-            &requirements,
-            &mut output,
-            &mut input,
-        );
+        let result = handler
+            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
+            .await;
 
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
 
-    #[test]
-    fn test_confirm_payment_with_io_rejects_no() {
+    #[tokio::test]
+    async fn test_confirm_payment_with_io_rejects_no() {
         let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
         let requirements = create_test_payment_requirements();
 
@@ -787,19 +864,16 @@ mod tests {
         let mut input = "no\n".as_bytes();
         let mut output = Vec::new();
 
-        let result = handler.confirm_payment_with_io(
-            &account_address,
-            &requirements,
-            &mut output,
-            &mut input,
-        );
+        let result = handler
+            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
+            .await;
 
         assert!(result.is_ok());
         assert!(!result.unwrap());
     }
 
-    #[test]
-    fn test_confirm_payment_with_io_rejects_empty() {
+    #[tokio::test]
+    async fn test_confirm_payment_with_io_rejects_empty() {
         let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
         let requirements = create_test_payment_requirements();
 
@@ -812,19 +886,16 @@ mod tests {
         let mut input = "\n".as_bytes();
         let mut output = Vec::new();
 
-        let result = handler.confirm_payment_with_io(
-            &account_address,
-            &requirements,
-            &mut output,
-            &mut input,
-        );
+        let result = handler
+            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
+            .await;
 
         assert!(result.is_ok());
         assert!(!result.unwrap());
     }
 
-    #[test]
-    fn test_confirm_payment_with_io_case_insensitive() {
+    #[tokio::test]
+    async fn test_confirm_payment_with_io_case_insensitive() {
         let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
         let requirements = create_test_payment_requirements();
 
@@ -837,19 +908,16 @@ mod tests {
         let mut input = "YES\n".as_bytes();
         let mut output = Vec::new();
 
-        let result = handler.confirm_payment_with_io(
-            &account_address,
-            &requirements,
-            &mut output,
-            &mut input,
-        );
+        let result = handler
+            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
+            .await;
 
         assert!(result.is_ok());
         assert!(result.unwrap());
     }
 
-    #[test]
-    fn test_confirm_payment_with_io_displays_token_metadata() {
+    #[tokio::test]
+    async fn test_confirm_payment_with_io_displays_token_metadata() {
         let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
         let requirements = create_test_payment_requirements_with_metadata();
 
@@ -862,12 +930,9 @@ mod tests {
         let mut input = "y\n".as_bytes();
         let mut output = Vec::new();
 
-        let result = handler.confirm_payment_with_io(
-            &account_address,
-            &requirements,
-            &mut output,
-            &mut input,
-        );
+        let result = handler
+            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
+            .await;
 
         assert!(result.is_ok());
         assert!(result.unwrap());
@@ -878,8 +943,8 @@ mod tests {
         assert!(output_str.contains("Token Version: 1"));
     }
 
-    #[test]
-    fn test_confirm_payment_with_io_handles_missing_token_metadata() {
+    #[tokio::test]
+    async fn test_confirm_payment_with_io_handles_missing_token_metadata() {
         let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
         let requirements = create_test_payment_requirements(); // No extra metadata
 
@@ -892,12 +957,9 @@ mod tests {
         let mut input = "y\n".as_bytes();
         let mut output = Vec::new();
 
-        let result = handler.confirm_payment_with_io(
-            &account_address,
-            &requirements,
-            &mut output,
-            &mut input,
-        );
+        let result = handler
+            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
+            .await;
 
         assert!(result.is_ok());
         assert!(result.unwrap());
