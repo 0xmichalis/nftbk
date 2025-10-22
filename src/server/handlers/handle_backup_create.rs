@@ -235,7 +235,7 @@ async fn handle_backup_create_core<DB: Database + ?Sized>(
                     return (StatusCode::OK, Json(BackupCreateResponse { task_id }))
                         .into_response();
                 }
-                "error" | "expired" => {
+                "error" | "expired" | "unpaid" => {
                     let problem = ProblemJson::from_status(
                         StatusCode::CONFLICT,
                         Some(format!(

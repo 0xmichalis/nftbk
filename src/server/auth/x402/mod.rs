@@ -15,6 +15,13 @@ mod coinbase_facilitator;
 mod either_facilitator;
 mod error_handling;
 mod shared_facilitator;
+mod settlement_hook;
+mod settlement_handler;
+mod settlement_middleware;
+
+pub use settlement_hook::X402MiddlewareWithSettlementHook;
+pub use settlement_handler::handle_backup_create_with_settlement_hook;
+pub use settlement_middleware::SettlementFailureMiddleware;
 
 /// Raw configuration structure for x402 as it appears in the TOML file
 #[derive(Debug, Clone, Serialize, Deserialize)]

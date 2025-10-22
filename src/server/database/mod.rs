@@ -1572,6 +1572,39 @@ impl Db {
         let _ = sqlx::query(sql).bind(task_id).execute(&self.pool).await?;
         Ok(())
     }
+
+    /// Mark a backup as unpaid due to settlement failure
+    /// This sets the archive and IPFS statuses to "unpaid" to make the backup inaccessible
+    pub async fn mark_backup_as_unpaid(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        let mut tx = self.pool.begin().await?;
+
+        // Update archive_requests status to "unpaid" if it exists
+        sqlx::query(
+            r#"
+            UPDATE archive_requests
+            SET status = 'unpaid'
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
+
+        // Update pin_requests status to "unpaid" if it exists
+        sqlx::query(
+            r#"
+            UPDATE pin_requests
+            SET status = 'unpaid'
+            WHERE task_id = $1
+            "#,
+        )
+        .bind(task_id)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
 }
 
 // Implement the unified Database trait for the real Db struct
@@ -1801,5 +1834,10 @@ impl Database for Db {
         token_id: &str,
     ) -> Result<Option<TokenWithPins>, sqlx::Error> {
         Db::get_pinned_token_by_requestor(self, requestor, chain, contract_address, token_id).await
+    }
+
+    // Settlement failure operations
+    async fn mark_backup_as_unpaid(&self, task_id: &str) -> Result<(), sqlx::Error> {
+        Db::mark_backup_as_unpaid(self, task_id).await
     }
 }

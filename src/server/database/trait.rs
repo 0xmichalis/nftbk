@@ -163,6 +163,9 @@ pub trait Database {
         contract_address: &str,
         token_id: &str,
     ) -> Result<Option<TokenWithPins>, sqlx::Error>;
+
+    // Settlement failure operations
+    async fn mark_backup_as_unpaid(&self, task_id: &str) -> Result<(), sqlx::Error>;
 }
 
 /// Configurable mock database implementation for testing
@@ -222,6 +225,9 @@ pub struct MockDatabase {
     pub get_pinned_tokens_by_requestor_error: Option<String>,
     pub get_pinned_token_by_requestor_result: Option<TokenWithPins>,
     pub get_pinned_token_by_requestor_error: Option<String>,
+
+    // Settlement failure operations
+    pub mark_backup_as_unpaid_error: Option<String>,
 
     // Call counters for verifying interactions in tests
     pub get_active_pins_calls: std::sync::Mutex<u32>,
@@ -392,6 +398,11 @@ impl MockDatabase {
 
     pub fn set_get_pinned_token_by_requestor_error(&mut self, error: Option<String>) {
         self.get_pinned_token_by_requestor_error = error;
+    }
+
+    // Configuration methods for settlement failure operations
+    pub fn set_mark_backup_as_unpaid_error(&mut self, error: Option<String>) {
+        self.mark_backup_as_unpaid_error = error;
     }
 
     // Call counter getters
@@ -778,6 +789,15 @@ impl Database for MockDatabase {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
             Ok(self.get_pinned_token_by_requestor_result.clone())
+        }
+    }
+
+    // Settlement failure operations
+    async fn mark_backup_as_unpaid(&self, _task_id: &str) -> Result<(), sqlx::Error> {
+        if let Some(error) = &self.mark_backup_as_unpaid_error {
+            Err(sqlx::Error::Configuration(error.clone().into()))
+        } else {
+            Ok(())
         }
     }
 }

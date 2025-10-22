@@ -17,7 +17,7 @@ use crate::server::api::{
     ApiProblem, BackupCreateResponse, BackupRequest, BackupResponse, ProblemJson, Tokens,
 };
 use crate::server::auth::jwt::verify_jwt;
-use crate::server::auth::x402::X402Config;
+use crate::server::auth::x402::{X402Config, SettlementFailureMiddleware};
 use crate::server::database::{PinInfo, TokenWithPins};
 use crate::server::handlers::handle_archive_download::{DownloadQuery, DownloadTokenResponse};
 use crate::server::handlers::handle_archive_download::{
@@ -230,9 +230,15 @@ pub fn build_router(
                 .usdc_price_tag_for_amount("0.1")
                 .expect("invalid x402 price");
 
+            // Wrap the x402 middleware with settlement failure handling
+            let x402_with_settlement = SettlementFailureMiddleware::new(
+                x402.with_price_tag(price_tag),
+                state.db.clone(),
+            );
+
             Router::new()
                 .route("/v1/backups", post(handle_backup_create))
-                .layer(x402.with_price_tag(price_tag))
+                .layer(tower::ServiceBuilder::new().service(x402_with_settlement))
                 .with_state(state.clone())
         }
     };
