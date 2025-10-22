@@ -161,7 +161,7 @@ mod dynamic_facilitator_tests {
         let facilitator = make_facilitator(&server.uri());
         let resp = facilitator.supported().await.expect("supported OK");
         assert!(!resp.kinds.is_empty());
-        assert!(resp.kinds.iter().any(|k| k.network == Network::Base));
+        assert!(resp.kinds.iter().any(|k| k.network == "base"));
     }
 
     #[tokio::test]
@@ -240,8 +240,8 @@ mod dynamic_facilitator_tests {
 
         let facilitator = make_facilitator(&server.uri());
         let resp = facilitator.supported().await.expect("supported OK");
-        assert!(resp.kinds.iter().any(|k| k.network == Network::Base));
-        assert!(resp.kinds.iter().any(|k| k.network == Network::Solana));
+        assert!(resp.kinds.iter().any(|k| k.network == "base"));
+        assert!(resp.kinds.iter().any(|k| k.network == "solana"));
     }
 
     #[tokio::test]

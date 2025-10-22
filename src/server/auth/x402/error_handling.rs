@@ -84,7 +84,7 @@ where
     }
 }
 
-/// Tolerant parsing for GET /supported: drop empty extra objects and filter unsupported networks
+/// Tolerant parsing for GET /supported: drop empty extra objects
 pub fn tolerant_parse_supported(body: &str) -> Option<SupportedPaymentKindsResponse> {
     let mut value: serde_json::Value = serde_json::from_str(body).ok()?;
     if let Some(kinds) = value.get_mut("kinds").and_then(|k| k.as_array_mut()) {
@@ -100,34 +100,6 @@ pub fn tolerant_parse_supported(body: &str) -> Option<SupportedPaymentKindsRespo
                 }
             }
         }
-
-        // Then filter out kinds with unsupported networks
-        kinds.retain(|kind| {
-            if let Some(obj) = kind.as_object() {
-                // Check if the network is supported
-                if let Some(network_str) = obj.get("network").and_then(|n| n.as_str()) {
-                    // List of supported networks based on the error message and codebase
-                    let supported_networks = [
-                        "base-sepolia",
-                        "base",
-                        "xdc",
-                        "avalanche-fuji",
-                        "avalanche",
-                        "solana",
-                        "solana-devnet",
-                        "polygon-amoy",
-                        "polygon",
-                        "sei",
-                        "sei-testnet",
-                    ];
-
-                    return supported_networks.contains(&network_str);
-                }
-                false
-            } else {
-                false
-            }
-        });
     }
     let cleaned = serde_json::to_string(&value).ok()?;
     serde_json::from_str::<SupportedPaymentKindsResponse>(&cleaned).ok()
@@ -198,33 +170,38 @@ pub fn tolerant_recover_payment_required<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use x402_rs::network::Network;
 
     #[test]
     fn test_tolerant_parse_supported_with_empty_extra_objects() {
         // This is the exact JSON response that was causing the error
         let json_response = r#"{"kinds":[{"x402Version":1,"scheme":"exact","network":"base-sepolia"},{"x402Version":1,"scheme":"exact","network":"base"},{"x402Version":1,"scheme":"exact","network":"avalanche-fuji"},{"x402Version":1,"scheme":"exact","network":"avalanche"},{"x402Version":1,"scheme":"exact","network":"iotex"},{"x402Version":1,"scheme":"exact","network":"sei-testnet"},{"x402Version":1,"scheme":"exact","network":"sei"},{"x402Version":1,"scheme":"exact","network":"polygon"},{"x402Version":1,"scheme":"exact","network":"polygon-amoy"},{"x402Version":1,"scheme":"exact","network":"peaq"},{"x402Version":1,"scheme":"exact","network":"solana-devnet","extra":{"feePayer":"2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"}},{"x402Version":1,"scheme":"exact","network":"solana","extra":{"feePayer":"2wKupLR9q6wXYppw8Gr2NvWxKBUqm4PPJKkQfoxHDBg4"}}]}"#;
 
-        // This should now successfully parse the response after filtering out unsupported networks
+        // This should now successfully parse the response
         let result = tolerant_parse_supported(json_response);
 
         // Verify that the parsing succeeded
         assert!(
             result.is_some(),
-            "tolerant_parse_supported should successfully parse the response after filtering"
+            "tolerant_parse_supported should successfully parse the response"
         );
 
         let supported_response = result.unwrap();
 
-        // Verify that we have the expected number of kinds (unsupported networks filtered out)
-        // The original response had 12 kinds, but "iotex" and "peaq" are unsupported, so we expect 10
-        assert_eq!(supported_response.kinds.len(), 10);
+        // Verify that we have all the kinds (no filtering since Network->String change)
+        // The original response had 12 kinds, all should be preserved
+        assert_eq!(supported_response.kinds.len(), 12);
 
-        // Verify that some networks are present
-        let networks: Vec<Network> = supported_response.kinds.iter().map(|k| k.network).collect();
-        assert!(networks.contains(&Network::Base));
-        assert!(networks.contains(&Network::BaseSepolia));
-        assert!(networks.contains(&Network::Solana));
+        // Verify that all networks are present (including previously filtered ones)
+        let networks: Vec<String> = supported_response
+            .kinds
+            .iter()
+            .map(|k| k.network.clone())
+            .collect();
+        assert!(networks.contains(&"base".to_string()));
+        assert!(networks.contains(&"base-sepolia".to_string()));
+        assert!(networks.contains(&"solana".to_string()));
+        assert!(networks.contains(&"iotex".to_string()));
+        assert!(networks.contains(&"peaq".to_string()));
     }
 
     #[test]
@@ -242,7 +219,7 @@ mod tests {
         let base_kind = supported_response
             .kinds
             .iter()
-            .find(|k| k.network == Network::Base)
+            .find(|k| k.network == "base")
             .unwrap();
         assert!(
             base_kind.extra.is_none(),
@@ -253,7 +230,7 @@ mod tests {
         let solana_kind = supported_response
             .kinds
             .iter()
-            .find(|k| k.network == Network::Solana)
+            .find(|k| k.network == "solana")
             .unwrap();
         assert!(
             solana_kind.extra.is_some(),
@@ -280,27 +257,33 @@ mod tests {
     }
 
     #[test]
-    fn test_tolerant_parse_supported_with_unsupported_networks() {
-        // Test case for responses with unsupported networks
+    fn test_tolerant_parse_supported_with_all_networks() {
+        // Test case for responses with all networks (no filtering)
         let json_with_unsupported = r#"{"kinds":[{"x402Version":1,"scheme":"exact","network":"base"},{"x402Version":1,"scheme":"exact","network":"iotex"},{"x402Version":1,"scheme":"exact","network":"peaq"},{"x402Version":1,"scheme":"exact","network":"solana"}]}"#;
 
         let result = tolerant_parse_supported(json_with_unsupported);
-        // The function should now successfully parse after filtering out unsupported networks
+        // The function should now successfully parse all networks
         assert!(
             result.is_some(),
-            "Should parse successfully after filtering out unsupported networks"
+            "Should parse successfully with all networks"
         );
 
         let supported_response = result.unwrap();
         assert_eq!(
             supported_response.kinds.len(),
-            2,
-            "Should filter out unsupported networks"
+            4,
+            "Should preserve all networks"
         );
 
-        // Verify only supported networks remain
-        let networks: Vec<Network> = supported_response.kinds.iter().map(|k| k.network).collect();
-        assert!(networks.contains(&Network::Base));
-        assert!(networks.contains(&Network::Solana));
+        // Verify all networks remain (no filtering)
+        let networks: Vec<String> = supported_response
+            .kinds
+            .iter()
+            .map(|k| k.network.clone())
+            .collect();
+        assert!(networks.contains(&"base".to_string()));
+        assert!(networks.contains(&"solana".to_string()));
+        assert!(networks.contains(&"iotex".to_string()));
+        assert!(networks.contains(&"peaq".to_string()));
     }
 }
