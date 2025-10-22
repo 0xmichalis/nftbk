@@ -8,8 +8,8 @@ use x402_axum::{price::PriceTag, IntoPriceTag, X402Middleware};
 use x402_rs::network::{Network, USDCDeployment};
 use x402_rs::types::MixedAddress;
 
-use crate::server::auth::x402::coinbase_facilitator::CoinbaseFacilitator;
-use crate::server::auth::x402::either_facilitator::EitherFacilitator;
+use crate::server::x402::coinbase_facilitator::CoinbaseFacilitator;
+use crate::server::x402::either_facilitator::EitherFacilitator;
 
 mod coinbase_facilitator;
 mod either_facilitator;

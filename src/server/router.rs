@@ -17,7 +17,6 @@ use crate::server::api::{
     ApiProblem, BackupCreateResponse, BackupRequest, BackupResponse, ProblemJson, Tokens,
 };
 use crate::server::auth::jwt::verify_jwt;
-use crate::server::auth::x402::X402Config;
 use crate::server::database::{PinInfo, TokenWithPins};
 use crate::server::handlers::handle_archive_download::{DownloadQuery, DownloadTokenResponse};
 use crate::server::handlers::handle_archive_download::{
@@ -42,6 +41,7 @@ use crate::server::handlers::handle_backup_retries::{
 use crate::server::handlers::handle_backups::BackupsQuery;
 use crate::server::handlers::handle_backups::{__path_handle_backups, handle_backups};
 use crate::server::handlers::handle_pins::{__path_handle_pins, handle_pins, PinsResponse};
+use crate::server::x402::X402Config;
 use crate::server::AppState;
 
 #[derive(OpenApi)]

@@ -14,9 +14,9 @@ use tracing::{error, info};
 use crate::backup::ChainConfig;
 use crate::ipfs::{IpfsPinningConfig, IpfsPinningProvider};
 use crate::server::api::{BackupRequest, Tokens};
-use crate::server::auth::x402::X402Config;
 use crate::server::auth::JwtCredential;
 use crate::server::database::Db;
+use crate::server::x402::X402Config;
 
 pub mod api;
 pub mod archive;
@@ -29,6 +29,7 @@ pub mod pruner;
 pub mod recovery;
 pub mod router;
 pub mod workers;
+pub mod x402;
 pub use handlers::handle_archive_download::handle_archive_download as handle_download;
 pub use handlers::handle_archive_download::handle_archive_download_token as handle_download_token;
 pub use handlers::handle_backup::handle_backup;

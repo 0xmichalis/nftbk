@@ -1,11 +1,10 @@
 pub mod jwt;
-pub mod x402;
 
 use std::path::Path;
 use toml;
 use tracing::info;
 
-use crate::server::auth::x402::{X402Config, X402ConfigRaw};
+use crate::server::x402::{X402Config, X402ConfigRaw};
 
 #[derive(serde::Deserialize, Clone, Debug)]
 pub struct JwtCredential {
