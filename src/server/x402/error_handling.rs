@@ -1,6 +1,6 @@
 use axum::http::StatusCode;
 use serde_json;
-use tracing::error;
+use tracing::{error, warn};
 use x402_axum::facilitator_client::{FacilitatorClient, FacilitatorClientError};
 use x402_rs::types::{
     FacilitatorErrorReason, MixedAddress, SupportedPaymentKindsResponse, VerifyResponse,
@@ -32,6 +32,77 @@ async fn log_raw_error_body(method: &str, path: &str, body: &str) {
     error!("{} {} raw body (truncated): {}", method, path, snippet);
 }
 
+/// Execute a single HTTP request with error handling and recovery
+async fn execute_http_request<T, FBuild, FRecover>(
+    client: &FacilitatorClient,
+    context: &'static str,
+    build_req: FBuild,
+    recover: FRecover,
+) -> (anyhow::Result<T>, Option<reqwest::StatusCode>)
+where
+    T: serde::de::DeserializeOwned,
+    FBuild: Fn() -> reqwest::RequestBuilder + Send + Sync + Clone + 'static,
+    FRecover: Fn(&str) -> Option<Result<T, FacilitatorClientError>> + Send + Sync + Clone + 'static,
+{
+    let req = build_req();
+    let req = add_headers_from_client(client, req).await;
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            match resp.text().await {
+                Ok(body) => {
+                    // Derive method and path generically from context like "METHOD /path"
+                    let mut parts = context.splitn(2, ' ');
+                    let method = parts.next().unwrap_or("?");
+                    let path = parts.next().unwrap_or("?");
+                    log_raw_error_body(method, path, &body).await;
+
+                    // If it's a successful response, try to parse it directly
+                    if status.is_success() {
+                        // For successful responses, we need to parse them directly
+                        // The recovery function is for error cases only
+                        match serde_json::from_str::<T>(&body) {
+                            Ok(value) => return (Ok(value), Some(status)),
+                            Err(e) => {
+                                return (
+                                    Err(anyhow::anyhow!(
+                                        "Failed to parse successful response: {}",
+                                        e
+                                    )),
+                                    Some(status),
+                                )
+                            }
+                        }
+                    }
+
+                    // For error responses, try recovery
+                    if let Some(recovered) = recover(&body) {
+                        return (
+                            recovered.map_err(|e| anyhow::anyhow!("{}", e)),
+                            Some(status),
+                        );
+                    }
+
+                    // If no recovery, check if it's a retriable error
+                    if status.is_server_error() || status.as_u16() == 429 {
+                        (Err(anyhow::anyhow!("Server error: {}", body)), Some(status))
+                    } else {
+                        (
+                            Err(anyhow::anyhow!("Non-recoverable error: {}", body)),
+                            Some(status),
+                        )
+                    }
+                }
+                Err(e) => (
+                    Err(anyhow::anyhow!("Failed to read response body: {}", e)),
+                    Some(status),
+                ),
+            }
+        }
+        Err(e) => (Err(anyhow::anyhow!("Request failed: {}", e)), None),
+    }
+}
+
 /// Retry logic for server errors (5xx) and network issues
 async fn retry_on_http_error<T, FBuild, FRecover>(
     client: &FacilitatorClient,
@@ -45,7 +116,7 @@ where
     FBuild: Fn() -> reqwest::RequestBuilder + Send + Sync + Clone + 'static,
     FRecover: Fn(&str) -> Option<Result<T, FacilitatorClientError>> + Send + Sync + Clone + 'static,
 {
-    error!("Request failed with server error, retrying with backoff");
+    warn!("Request failed with server error or ratelimiting, retrying with backoff");
 
     // Use the retry mechanism for server errors
     let (retry_result, status_code) = retry_operation(
@@ -57,68 +128,9 @@ where
                 let client = client.clone();
                 let build_req = build_req.clone();
                 let recover = recover.clone();
-                Box::pin(async move {
-                    let req = build_req();
-                    let req = add_headers_from_client(&client, req).await;
-                    match req.send().await {
-                        Ok(resp) => {
-                            let status = resp.status();
-                            match resp.text().await {
-                                Ok(body) => {
-                                    // Derive method and path generically from context like "METHOD /path"
-                                    let mut parts = context.splitn(2, ' ');
-                                    let method = parts.next().unwrap_or("?");
-                                    let path = parts.next().unwrap_or("?");
-                                    log_raw_error_body(method, path, &body).await;
-
-                                    // If it's a successful response, try to parse it directly
-                                    if status.is_success() {
-                                        // For successful responses, we need to parse them directly
-                                        // The recovery function is for error cases only
-                                        match serde_json::from_str::<T>(&body) {
-                                            Ok(value) => return (Ok(value), Some(status)),
-                                            Err(e) => {
-                                                return (
-                                                    Err(anyhow::anyhow!(
-                                                        "Failed to parse successful response: {}",
-                                                        e
-                                                    )),
-                                                    Some(status),
-                                                )
-                                            }
-                                        }
-                                    }
-
-                                    // For error responses, try recovery
-                                    if let Some(recovered) = recover(&body) {
-                                        return (
-                                            recovered.map_err(|e| anyhow::anyhow!("{}", e)),
-                                            Some(status),
-                                        );
-                                    }
-
-                                    // If no recovery, check if it's a retriable error
-                                    if status.is_server_error() || status.as_u16() == 429 {
-                                        (
-                                            Err(anyhow::anyhow!("Server error: {}", body)),
-                                            Some(status),
-                                        )
-                                    } else {
-                                        (
-                                            Err(anyhow::anyhow!("Non-recoverable error: {}", body)),
-                                            Some(status),
-                                        )
-                                    }
-                                }
-                                Err(e) => (
-                                    Err(anyhow::anyhow!("Failed to read response body: {}", e)),
-                                    Some(status),
-                                ),
-                            }
-                        }
-                        Err(e) => (Err(anyhow::anyhow!("Request failed: {}", e)), None),
-                    }
-                })
+                Box::pin(
+                    async move { execute_http_request(&client, context, build_req, recover).await },
+                )
             }
         },
         max_retries,
