@@ -106,10 +106,6 @@ pub enum ServerCommands {
         /// The task ID of the backup to delete
         #[arg(short = 't', long)]
         task_id: String,
-
-        /// Show what would be deleted without actually deleting
-        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
-        dry_run: bool,
     },
 }
 
@@ -160,8 +156,7 @@ impl Cli {
                 ServerCommands::Delete {
                     server_address,
                     task_id,
-                    dry_run,
-                } => commands::server::delete::run(server_address, task_id, dry_run).await,
+                } => commands::server::delete::run(server_address, task_id).await,
             },
         }
     }
@@ -400,11 +395,9 @@ mod tests {
                     ServerCommands::Delete {
                         server_address,
                         task_id,
-                        dry_run,
                     } => {
                         assert_eq!(server_address, "http://127.0.0.1:8080");
                         assert_eq!(task_id, "test-task-123");
-                        assert!(dry_run);
                     }
                     _ => panic!("Expected Server Delete command"),
                 },
@@ -422,8 +415,6 @@ mod tests {
                 "https://api.example.com",
                 "--task-id",
                 "custom-task-456",
-                "--dry-run",
-                "true",
             ];
             let cli = Cli::try_parse_from(args).unwrap();
 
@@ -432,11 +423,9 @@ mod tests {
                     ServerCommands::Delete {
                         server_address,
                         task_id,
-                        dry_run,
                     } => {
                         assert_eq!(server_address, "https://api.example.com");
                         assert_eq!(task_id, "custom-task-456");
-                        assert!(dry_run);
                     }
                     _ => panic!("Expected Server Delete command"),
                 },

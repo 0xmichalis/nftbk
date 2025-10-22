@@ -5,15 +5,9 @@ use reqwest::Client;
 
 use super::common::delete_backup;
 
-pub async fn run(server_address: String, task_id: String, dry_run: bool) -> Result<()> {
+pub async fn run(server_address: String, task_id: String) -> Result<()> {
     let auth_token = env::var("NFTBK_AUTH_TOKEN").ok();
     let client = Client::new();
-
-    if dry_run {
-        println!("Dry run: Would delete backup with task ID: {}", task_id);
-        println!("Remove --dry-run to actually delete the backup");
-        return Ok(());
-    }
 
     delete_backup(&client, &server_address, &task_id, auth_token.as_deref()).await
 }
@@ -63,7 +57,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = run(server_address, task_id.to_string(), false).await;
+        let result = run(server_address, task_id.to_string()).await;
         assert!(result.is_ok());
     }
 
@@ -80,7 +74,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = run(server_address, task_id.to_string(), false).await;
+        let result = run(server_address, task_id.to_string()).await;
         assert!(result.is_ok());
     }
 
@@ -123,7 +117,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = run(server_address, task_id.to_string(), false).await;
+        let result = run(server_address, task_id.to_string()).await;
         assert!(result.is_ok());
     }
 
@@ -170,7 +164,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = run(server_address, task_id.to_string(), false).await;
+        let result = run(server_address, task_id.to_string()).await;
         assert!(result.is_ok());
 
         std::env::remove_var("NFTBK_AUTH_TOKEN");
@@ -218,18 +212,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = run(server_address, task_id.to_string(), false).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn dry_run_mode() {
-        let mock_server = MockServer::start().await;
-        let server_address = mock_server.uri();
-        let task_id = "test-task-dry-run";
-
-        // Should not make any HTTP requests when dry_run is true
-        let result = run(server_address, task_id.to_string(), true).await;
+        let result = run(server_address, task_id.to_string()).await;
         assert!(result.is_ok());
     }
 
@@ -272,7 +255,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = run(server_address, task_id.to_string(), false).await;
+        let result = run(server_address, task_id.to_string()).await;
         assert!(result.is_ok()); // The shared function returns Ok(()) for server errors with a warning
     }
 
@@ -315,7 +298,7 @@ mod tests {
             .mount(&mock_server)
             .await;
 
-        let result = run(server_address, task_id.to_string(), false).await;
+        let result = run(server_address, task_id.to_string()).await;
         assert!(result.is_ok());
     }
 }
