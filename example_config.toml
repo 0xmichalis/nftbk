@@ -34,10 +34,24 @@ max_timeout_seconds = 300
 # Price for backup creation in USDC (e.g., "0.1" for 0.1 USDC)
 price = "0.1"
 
-[x402.facilitator]
 # Check https://www.x402.org/ecosystem?category=facilitators for more facilitator options
+[x402.facilitator]
 url = "https://x402.org/facilitator"
 network = "base-sepolia"
+
+# [x402.facilitator]
+# url = "https://api.cdp.coinbase.com/platform/v2/x402"
+# network = "base"
+# api_key_id_env = "COINBASE_API_KEY_ID"
+# api_key_secret_env = "COINBASE_API_KEY_SECRET"
+
+# [x402.facilitator]
+# url = "https://facilitator.payai.network"
+# network = "base"
+
+# [x402.facilitator]
+# url = "https://facilitator.x402.rs"
+# network = "base"
 
 # IPFS pinning providers
 [[ipfs_pinning_provider]]
