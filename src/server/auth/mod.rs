@@ -175,6 +175,7 @@ asset_symbol = "USDC"
 base_url = "http://localhost:8080/"
 recipient_address = "0x1234567890123456789012345678901234567890"
 max_timeout_seconds = 300
+price = "0.1"
 
 [x402.facilitator]
 url = "https://x402.org/facilitator"
@@ -213,6 +214,7 @@ asset_symbol = "USDC"
 base_url = "http://localhost:8080/"
 recipient_address = "0x1234567890123456789012345678901234567890"
 max_timeout_seconds = 300
+price = "0.1"
 
 [x402.facilitator]
 url = "https://x402.org/facilitator"
@@ -277,6 +279,7 @@ asset_symbol = "USDC"
 base_url = "http://localhost:8080/"
 recipient_address = "0x1234567890123456789012345678901234567890"
 max_timeout_seconds = 300
+price = "0.1"
 
 [x402.facilitator]
 url = "https://x402.org/facilitator"

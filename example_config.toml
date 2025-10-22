@@ -31,6 +31,8 @@ base_url = "https://localhost:8080/"
 recipient_address = "0xYourRecipientAddress"
 # Maximum time allowed for payment completion
 max_timeout_seconds = 300
+# Price for backup creation in USDC (e.g., "0.1" for 0.1 USDC)
+price = "0.1"
 
 [x402.facilitator]
 # Check https://www.x402.org/ecosystem?category=facilitators for more facilitator options

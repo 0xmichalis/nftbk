@@ -225,9 +225,8 @@ pub fn build_router(
                 .expect("invalid x402 middleware config")
                 .with_description("Backup creation API");
 
-            // TODO: make this configurable
             let price_tag = config
-                .usdc_price_tag_for_amount("0.1")
+                .usdc_price_tag_for_amount(&config.price)
                 .expect("invalid x402 price");
 
             Router::new()

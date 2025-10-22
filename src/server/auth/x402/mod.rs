@@ -23,6 +23,7 @@ pub struct X402ConfigRaw {
     pub base_url: String,
     pub recipient_address: String,
     pub max_timeout_seconds: u64,
+    pub price: String,
     pub facilitator: X402FacilitatorConfigRaw,
 }
 
@@ -53,6 +54,7 @@ pub struct X402Config {
     pub base_url: String,
     pub recipient: MixedAddress,
     pub max_timeout_seconds: u64,
+    pub price: String,
     pub facilitator: X402FacilitatorConfig,
 }
 
@@ -76,6 +78,9 @@ impl X402Config {
         if raw.facilitator.network.is_empty() {
             return Err(anyhow::anyhow!("facilitator.network cannot be empty"));
         }
+        if raw.price.is_empty() {
+            return Err(anyhow::anyhow!("price cannot be empty"));
+        }
         // Only Base and Base Sepolia supported for now
         let network = parse_network(&raw.facilitator.network)?;
         match network {
@@ -92,6 +97,7 @@ impl X402Config {
             base_url: normalized_base_url,
             recipient,
             max_timeout_seconds: raw.max_timeout_seconds,
+            price: raw.price,
             facilitator: X402FacilitatorConfig {
                 url: raw.facilitator.url,
                 network,
@@ -592,6 +598,7 @@ mod tests {
             base_url: "http://localhost:8080/".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 300,
+            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -609,8 +616,33 @@ mod tests {
         );
         assert_eq!(config.recipient, expected_recipient);
         assert_eq!(config.max_timeout_seconds, 300);
+        assert_eq!(config.price, "0.1");
         assert_eq!(config.facilitator.url, "https://x402.org/facilitator");
         assert_eq!(config.facilitator.network, Network::BaseSepolia);
+    }
+
+    #[test]
+    fn test_x402_config_compile_empty_price() {
+        let raw = X402ConfigRaw {
+            base_url: "https://example.com".to_string(),
+            recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
+            max_timeout_seconds: 300,
+            price: "".to_string(),
+            facilitator: X402FacilitatorConfigRaw {
+                url: "https://x402.org/facilitator".to_string(),
+                network: "base-sepolia".to_string(),
+                api_key_id_env: None,
+                api_key_secret_env: None,
+            },
+            asset_symbol: "USDC".into(),
+        };
+
+        let result = X402Config::compile(raw);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("price cannot be empty"));
     }
 
     #[test]
@@ -619,6 +651,7 @@ mod tests {
             base_url: "https://example.com".to_string(),
             recipient_address: "".to_string(),
             max_timeout_seconds: 300,
+            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -643,6 +676,7 @@ mod tests {
             base_url: "https://example.com".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
+            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -659,6 +693,7 @@ mod tests {
             base_url: "https://example.com/api".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
+            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -675,6 +710,7 @@ mod tests {
             base_url: "  https://example.com  ".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
+            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -691,6 +727,7 @@ mod tests {
             base_url: "".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
+            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -706,6 +743,7 @@ mod tests {
             base_url: "example.com".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
+            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -721,6 +759,7 @@ mod tests {
             base_url: "ftp://example.com".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
+            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -736,6 +775,7 @@ mod tests {
             base_url: "https://example.com?x=1".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
+            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -751,6 +791,7 @@ mod tests {
             base_url: "https://example.com#frag".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
+            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
