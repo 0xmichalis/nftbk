@@ -84,6 +84,7 @@ impl Facilitator for CoinbaseFacilitator {
                 },
                 tolerant_recover_verify,
                 client.verify(&req).await,
+                3, // Default max retries
             )
             .await
         }
@@ -112,6 +113,7 @@ impl Facilitator for CoinbaseFacilitator {
                 },
                 |body| tolerant_recover_payment_required::<SettleResponse>("POST /settle", body),
                 client.settle(&req).await,
+                3, // Default max retries
             )
             .await
         }
@@ -133,6 +135,7 @@ impl Facilitator for CoinbaseFacilitator {
                 },
                 |body| tolerant_parse_supported(body).map(Ok),
                 client.supported().await,
+                3, // Default max retries
             )
             .await
         }

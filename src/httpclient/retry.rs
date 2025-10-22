@@ -19,21 +19,21 @@ pub(crate) async fn retry_operation<T>(
     max_retries: u32,
     should_retry: impl Fn(&anyhow::Error, Option<reqwest::StatusCode>) -> bool,
     context: &str,
-) -> anyhow::Result<T> {
+) -> (anyhow::Result<T>, Option<reqwest::StatusCode>) {
     let mut attempt = 0;
     loop {
         let (result, status) = operation().await;
         if result.is_ok() {
-            return result;
+            return (result, status);
         }
 
         let error = result.as_ref().err().unwrap();
         if !should_retry(error, status) {
-            return result;
+            return (result, status);
         }
 
         if attempt >= max_retries {
-            return result;
+            return (result, status);
         }
         attempt += 1;
         let delay = calculate_retry_delay(attempt);
@@ -134,7 +134,8 @@ mod tests {
                 "ctx",
             );
 
-            let res = fut.await.unwrap();
+            let (res, _status) = fut.await;
+            let res = res.unwrap();
             assert_eq!(res, 42);
             assert_eq!(attempts.load(Ordering::SeqCst), 1);
         }
@@ -159,7 +160,8 @@ mod tests {
                 "ctx",
             );
 
-            let err = fut.await.expect_err("should error");
+            let (result, _status) = fut.await;
+            let err = result.expect_err("should error");
             assert!(format!("{err}").contains("bad request"));
             assert_eq!(attempts.load(Ordering::SeqCst), 1);
         }
@@ -187,7 +189,8 @@ mod tests {
             // Two sleeps expected before giving up (max_retries = 2)
             advance_n(2).await;
             let res = handle.await.unwrap();
-            assert!(res.is_err());
+            let (result, _status) = res;
+            assert!(result.is_err());
             assert_eq!(attempts.load(Ordering::SeqCst), 3);
         }
 
@@ -218,7 +221,8 @@ mod tests {
 
             // Expect two sleeps before success
             advance_n(2).await;
-            let res = handle.await.unwrap().unwrap();
+            let (result, _status) = handle.await.unwrap();
+            let res = result.unwrap();
             assert_eq!(res, "ok");
             assert_eq!(attempts.load(Ordering::SeqCst), 3);
         }
@@ -248,7 +252,8 @@ mod tests {
             ));
 
             advance_n(1).await;
-            let res = handle.await.unwrap().unwrap();
+            let (result, _status) = handle.await.unwrap();
+            let res = result.unwrap();
             assert_eq!(res, 7);
             assert_eq!(attempts.load(Ordering::SeqCst), 2);
         }
@@ -278,9 +283,93 @@ mod tests {
             ));
 
             advance_n(1).await;
-            let res = handle.await.unwrap().unwrap();
+            let (result, _status) = handle.await.unwrap();
+            let res = result.unwrap();
             assert_eq!(res, "done");
             assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        }
+
+        #[tokio::test(start_paused = true, flavor = "current_thread")]
+        async fn preserves_status_code_on_success() {
+            let attempts = Arc::new(AtomicU32::new(0));
+            let op_attempts = attempts.clone();
+            let fut = retry_operation(
+                move || {
+                    let op_attempts = op_attempts.clone();
+                    Box::pin(async move {
+                        op_attempts.fetch_add(1, Ordering::SeqCst);
+                        (Ok::<_, anyhow::Error>(42u32), Some(reqwest::StatusCode::OK))
+                    })
+                },
+                3,
+                should_retry,
+                "ctx",
+            );
+
+            let (result, status) = fut.await;
+            let res = result.unwrap();
+            assert_eq!(res, 42);
+            assert_eq!(status, Some(reqwest::StatusCode::OK));
+            assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        }
+
+        #[tokio::test(start_paused = true, flavor = "current_thread")]
+        async fn preserves_status_code_on_error() {
+            let attempts = Arc::new(AtomicU32::new(0));
+            let op_attempts = attempts.clone();
+            let fut = retry_operation(
+                move || {
+                    let op_attempts = op_attempts.clone();
+                    Box::pin(async move {
+                        op_attempts.fetch_add(1, Ordering::SeqCst);
+                        (
+                            Err::<u32, anyhow::Error>(anyhow::anyhow!("bad request")),
+                            Some(reqwest::StatusCode::BAD_REQUEST),
+                        )
+                    })
+                },
+                3,
+                should_retry,
+                "ctx",
+            );
+
+            let (result, status) = fut.await;
+            let err = result.expect_err("should error");
+            assert!(format!("{err}").contains("bad request"));
+            assert_eq!(status, Some(reqwest::StatusCode::BAD_REQUEST));
+            assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        }
+
+        #[tokio::test(start_paused = true, flavor = "current_thread")]
+        async fn preserves_status_code_after_retries_exhausted() {
+            let attempts = Arc::new(AtomicU32::new(0));
+            let op_attempts = attempts.clone();
+            let handle = tokio::spawn(async move {
+                retry_operation(
+                    move || {
+                        let op_attempts = op_attempts.clone();
+                        Box::pin(async move {
+                            op_attempts.fetch_add(1, Ordering::SeqCst);
+                            (
+                                Err::<u32, anyhow::Error>(anyhow::anyhow!("server error")),
+                                Some(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
+                            )
+                        })
+                    },
+                    2, // Max 2 retries
+                    should_retry,
+                    "ctx",
+                )
+                .await
+            });
+
+            // Two sleeps expected before giving up (max_retries = 2)
+            advance_n(2).await;
+            let (result, status) = handle.await.unwrap();
+            let err = result.expect_err("should error");
+            assert!(format!("{err}").contains("server error"));
+            assert_eq!(status, Some(reqwest::StatusCode::INTERNAL_SERVER_ERROR));
+            assert_eq!(attempts.load(Ordering::SeqCst), 3);
         }
     }
 }

@@ -54,7 +54,7 @@ impl HttpClient {
         let resolved_url = resolve_url_with_gateways(url, &self.ipfs_gateways);
         let gateways = self.ipfs_gateways.clone();
 
-        retry_operation(
+        let (result, _status) = retry_operation(
             || {
                 let url = resolved_url.clone();
                 let gateways = gateways.clone();
@@ -72,7 +72,8 @@ impl HttpClient {
             should_retry,
             &resolved_url,
         )
-        .await
+        .await;
+        result
     }
 
     pub async fn fetch_and_write(
@@ -171,7 +172,7 @@ async fn fetch_and_stream_to_file(
     max_retries: u32,
     gateways: &[IpfsGatewayConfig],
 ) -> anyhow::Result<PathBuf> {
-    retry_operation(
+    let (result, _status) = retry_operation(
         || {
             let url = url.to_string();
             let file_path = file_path.to_path_buf();
@@ -189,7 +190,8 @@ async fn fetch_and_stream_to_file(
         should_retry,
         url,
     )
-    .await
+    .await;
+    result
 }
 
 impl Default for HttpClient {

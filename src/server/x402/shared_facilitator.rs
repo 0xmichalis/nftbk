@@ -47,6 +47,7 @@ impl Facilitator for SharedFacilitator {
                 },
                 tolerant_recover_verify,
                 this.client.verify(&req).await,
+                3, // Default max retries
             )
             .await
         }
@@ -73,6 +74,7 @@ impl Facilitator for SharedFacilitator {
                 },
                 |body| tolerant_recover_payment_required::<SettleResponse>("POST /settle", body),
                 this.client.settle(&req).await,
+                3, // Default max retries
             )
             .await
         }
@@ -92,6 +94,7 @@ impl Facilitator for SharedFacilitator {
                 },
                 |body| tolerant_parse_supported(body).map(Ok),
                 this.client.supported().await,
+                3, // Default max retries
             )
             .await
         }

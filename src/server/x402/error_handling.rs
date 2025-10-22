@@ -38,6 +38,7 @@ async fn retry_on_http_error<T, FBuild, FRecover>(
     context: &'static str,
     build_req: FBuild,
     recover: FRecover,
+    max_retries: u32,
 ) -> Result<T, FacilitatorClientError>
 where
     T: serde::de::DeserializeOwned,
@@ -47,7 +48,7 @@ where
     error!("Request failed with server error, retrying with backoff");
 
     // Use the retry mechanism for server errors
-    let retry_result = retry_operation(
+    let (retry_result, status_code) = retry_operation(
         {
             let client = client.clone();
             let build_req = build_req.clone();
@@ -96,8 +97,8 @@ where
                                         );
                                     }
 
-                                    // If no recovery, check if it's a server error
-                                    if status.is_server_error() {
+                                    // If no recovery, check if it's a retriable error
+                                    if status.is_server_error() || status.as_u16() == 429 {
                                         (
                                             Err(anyhow::anyhow!("Server error: {}", body)),
                                             Some(status),
@@ -120,7 +121,7 @@ where
                 })
             }
         },
-        3, // Max 3 retries
+        max_retries,
         should_retry,
         context,
     )
@@ -129,11 +130,21 @@ where
     // Convert back to FacilitatorClientError
     match retry_result {
         Ok(value) => Ok(value),
-        Err(e) => Err(FacilitatorClientError::HttpStatus {
-            context,
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-            body: e.to_string(),
-        }),
+        Err(e) => {
+            let status = if let Some(reqwest_status) = status_code {
+                // Convert reqwest::StatusCode to axum::http::StatusCode
+                StatusCode::from_u16(reqwest_status.as_u16())
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+
+            Err(FacilitatorClientError::HttpStatus {
+                context,
+                status,
+                body: e.to_string(),
+            })
+        }
     }
 }
 
@@ -178,13 +189,14 @@ where
 
 /// Generic error handling that attempts to recover from JSON deserialization errors
 /// by fetching the raw response body and applying recovery logic.
-/// Also includes retry logic for server errors (5xx) and network issues.
+/// Also includes retry logic for server errors (5xx), ratelimiting, and network issues.
 pub async fn handle_result<T, FBuild, FRecover>(
     client: &FacilitatorClient,
     context: &'static str,
     build_req: FBuild,
     recover: FRecover,
     result: Result<T, FacilitatorClientError>,
+    max_retries: u32,
 ) -> Result<T, FacilitatorClientError>
 where
     T: serde::de::DeserializeOwned,
@@ -199,7 +211,8 @@ where
             // Check if this is a server error (5xx) or rate limit error (429) that should be retried
             if let FacilitatorClientError::HttpStatus { status, .. } = &err {
                 if status.is_server_error() || status.as_u16() == 429 {
-                    return retry_on_http_error(client, context, build_req, recover).await;
+                    return retry_on_http_error(client, context, build_req, recover, max_retries)
+                        .await;
                 }
             }
 
@@ -526,6 +539,7 @@ mod tests {
             },
             |body| tolerant_recover_payment_required::<SettleResponse>("POST /settle", body),
             client.settle(&settle_request).await,
+            3, // Default max retries
         )
         .await;
 
@@ -534,5 +548,207 @@ mod tests {
         let settle_response = result.unwrap();
         assert!(settle_response.success);
         assert_eq!(settle_response.network, Network::BaseSepolia);
+    }
+
+    // TODO: A bit slow because of the delay in the retry logic (calculate_retry_delay)
+    #[tokio::test]
+    async fn test_retry_on_http_error_preserves_status_code_on_exhaustion() {
+        let server = MockServer::start().await;
+
+        // Mock server that always returns 429 (rate limit) error
+        Mock::given(method("POST"))
+            .and(path("/settle"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .set_body_string(r#"{"error":"rate_limit_exceeded"}"#)
+                    .insert_header("content-type", "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        // Create a test settle request
+        let payment_payload = PaymentPayload {
+            x402_version: X402Version::V1,
+            scheme: Scheme::Exact,
+            network: Network::BaseSepolia,
+            payload: ExactPaymentPayload::Evm(ExactEvmPayload {
+                signature: x402_rs::types::EvmSignature::from([0x12u8; 65]),
+                authorization: ExactEvmPayloadAuthorization {
+                    from: EvmAddress::from(address!("0x0000000000000000000000000000000000000001")),
+                    to: EvmAddress::from(address!("0x0000000000000000000000000000000000000002")),
+                    value: TokenAmount::from(1000000u64),
+                    valid_after: UnixTimestamp::try_now().unwrap(),
+                    valid_before: UnixTimestamp::try_now().unwrap() + 3600,
+                    nonce: x402_rs::types::HexEncodedNonce([0x12u8; 32]),
+                },
+            }),
+        };
+
+        let payment_requirements = PaymentRequirements {
+            scheme: Scheme::Exact,
+            network: Network::BaseSepolia,
+            max_amount_required: TokenAmount::from(1000000u64),
+            resource: Url::parse("https://example.com").unwrap(),
+            description: "test".to_string(),
+            mime_type: "application/json".to_string(),
+            output_schema: None,
+            pay_to: x402_rs::types::MixedAddress::Evm(EvmAddress::from(address!(
+                "0x0000000000000000000000000000000000000002"
+            ))),
+            max_timeout_seconds: 3600,
+            asset: x402_rs::types::MixedAddress::Evm(EvmAddress::from(address!(
+                "0x0000000000000000000000000000000000000003"
+            ))),
+            extra: None,
+        };
+
+        let settle_request = SettleRequest {
+            x402_version: X402Version::V1,
+            payment_payload,
+            payment_requirements,
+        };
+
+        // Create a facilitator client
+        let client = FacilitatorClient::try_new(server.uri().parse().unwrap()).unwrap();
+
+        // Test the retry logic - should fail after exhausting retries
+        let result = handle_result(
+            &client,
+            "POST /settle",
+            {
+                let settle_request = settle_request.clone();
+                let server_uri = server
+                    .uri()
+                    .parse::<url::Url>()
+                    .unwrap()
+                    .join("/settle")
+                    .unwrap();
+                move || {
+                    let settle_request = settle_request.clone();
+                    reqwest::Client::new()
+                        .post(server_uri.clone())
+                        .json(&settle_request)
+                }
+            },
+            |_body| None, // No recovery function
+            client.settle(&settle_request).await,
+            1, // Use 1 retry for faster test
+        )
+        .await;
+
+        // Should fail after retries are exhausted
+        assert!(result.is_err());
+
+        // The error should preserve the original 429 status code, not return 500
+        if let FacilitatorClientError::HttpStatus { status, .. } = result.unwrap_err() {
+            assert_eq!(
+                status.as_u16(),
+                429,
+                "Should preserve original 429 status code"
+            );
+        } else {
+            panic!("Expected HttpStatus error");
+        }
+    }
+
+    // TODO: A bit slow because of the delay in the retry logic (calculate_retry_delay)
+    #[tokio::test]
+    async fn test_retry_on_http_error_preserves_5xx_status_code_on_exhaustion() {
+        let server = MockServer::start().await;
+
+        // Mock server that always returns 503 (service unavailable) error
+        Mock::given(method("POST"))
+            .and(path("/settle"))
+            .respond_with(
+                ResponseTemplate::new(503)
+                    .set_body_string(r#"{"error":"service_unavailable"}"#)
+                    .insert_header("content-type", "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        // Create a test settle request
+        let payment_payload = PaymentPayload {
+            x402_version: X402Version::V1,
+            scheme: Scheme::Exact,
+            network: Network::BaseSepolia,
+            payload: ExactPaymentPayload::Evm(ExactEvmPayload {
+                signature: x402_rs::types::EvmSignature::from([0x12u8; 65]),
+                authorization: ExactEvmPayloadAuthorization {
+                    from: EvmAddress::from(address!("0x0000000000000000000000000000000000000001")),
+                    to: EvmAddress::from(address!("0x0000000000000000000000000000000000000002")),
+                    value: TokenAmount::from(1000000u64),
+                    valid_after: UnixTimestamp::try_now().unwrap(),
+                    valid_before: UnixTimestamp::try_now().unwrap() + 3600,
+                    nonce: x402_rs::types::HexEncodedNonce([0x12u8; 32]),
+                },
+            }),
+        };
+
+        let payment_requirements = PaymentRequirements {
+            scheme: Scheme::Exact,
+            network: Network::BaseSepolia,
+            max_amount_required: TokenAmount::from(1000000u64),
+            resource: Url::parse("https://example.com").unwrap(),
+            description: "test".to_string(),
+            mime_type: "application/json".to_string(),
+            output_schema: None,
+            pay_to: x402_rs::types::MixedAddress::Evm(EvmAddress::from(address!(
+                "0x0000000000000000000000000000000000000002"
+            ))),
+            max_timeout_seconds: 3600,
+            asset: x402_rs::types::MixedAddress::Evm(EvmAddress::from(address!(
+                "0x0000000000000000000000000000000000000003"
+            ))),
+            extra: None,
+        };
+
+        let settle_request = SettleRequest {
+            x402_version: X402Version::V1,
+            payment_payload,
+            payment_requirements,
+        };
+
+        // Create a facilitator client
+        let client = FacilitatorClient::try_new(server.uri().parse().unwrap()).unwrap();
+
+        // Test the retry logic - should fail after exhausting retries
+        let result = handle_result(
+            &client,
+            "POST /settle",
+            {
+                let settle_request = settle_request.clone();
+                let server_uri = server
+                    .uri()
+                    .parse::<url::Url>()
+                    .unwrap()
+                    .join("/settle")
+                    .unwrap();
+                move || {
+                    let settle_request = settle_request.clone();
+                    reqwest::Client::new()
+                        .post(server_uri.clone())
+                        .json(&settle_request)
+                }
+            },
+            |_body| None, // No recovery function
+            client.settle(&settle_request).await,
+            1, // Use 1 retry for faster test
+        )
+        .await;
+
+        // Should fail after retries are exhausted
+        assert!(result.is_err());
+
+        // The error should preserve the original 503 status code, not return 500
+        if let FacilitatorClientError::HttpStatus { status, .. } = result.unwrap_err() {
+            assert_eq!(
+                status.as_u16(),
+                503,
+                "Should preserve original 503 status code"
+            );
+        } else {
+            panic!("Expected HttpStatus error");
+        }
     }
 }
