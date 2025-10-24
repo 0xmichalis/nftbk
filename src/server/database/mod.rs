@@ -1012,10 +1012,6 @@ impl Db {
         task_id: &str,
         token_pin_mappings: &[crate::TokenPinMapping],
     ) -> Result<(), sqlx::Error> {
-        if token_pin_mappings.is_empty() {
-            return Ok(());
-        }
-
         // Collect all pin responses and prepare token data
         let mut all_pin_responses = Vec::new();
         let mut all_token_data = Vec::new(); // (index_in_pin_responses, chain, contract_address, token_id)
@@ -1033,16 +1029,18 @@ impl Db {
             }
         }
 
+        // If no pin responses to insert, that's an error condition
         if all_pin_responses.is_empty() {
-            return Ok(());
+            return Err(sqlx::Error::RowNotFound);
         }
 
         // Start a transaction for atomicity
         let mut tx = self.pool.begin().await?;
 
-        // Insert pins one by one and collect generated IDs
-        let mut pin_ids: Vec<i64> = Vec::new();
-        for pin_response in &all_pin_responses {
+        // Insert pins with token_id from the start
+        for (index, chain, contract_address, token_id) in &all_token_data {
+            let pin_response = all_pin_responses[*index];
+
             // Map status enum to lowercase string to satisfy CHECK constraint
             let status = match pin_response.status {
                 crate::ipfs::PinResponseStatus::Queued => "queued",
@@ -1051,23 +1049,6 @@ impl Db {
                 crate::ipfs::PinResponseStatus::Failed => "failed",
             };
 
-            let row = sqlx::query(
-                "INSERT INTO pins (task_id, provider_type, provider_url, cid, request_id, pin_status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id"
-            )
-            .bind(task_id)
-            .bind(&pin_response.provider_type)
-            .bind(&pin_response.provider_url)
-            .bind(&pin_response.cid)
-            .bind(&pin_response.id)
-            .bind(status)
-            .fetch_one(&mut *tx)
-            .await?;
-
-            pin_ids.push(row.get("id"));
-        }
-
-        // Resolve token_ids and update pins rows with token_id
-        for (index, chain, contract_address, token_id) in &all_token_data {
             // Ensure token row exists and fetch its id
             let inserted = sqlx::query(
                 r#"INSERT INTO tokens (task_id, chain, contract_address, token_id)
@@ -1095,11 +1076,19 @@ impl Db {
                     .get("id")
             };
 
-            sqlx::query("UPDATE pins SET token_id = $2 WHERE id = $1")
-                .bind(pin_ids[*index])
-                .bind(tok_id)
-                .execute(&mut *tx)
-                .await?;
+            // Insert pin with token_id from the start
+            sqlx::query(
+                "INSERT INTO pins (task_id, token_id, provider_type, provider_url, cid, request_id, pin_status) VALUES ($1, $2, $3, $4, $5, $6, $7)"
+            )
+            .bind(task_id)
+            .bind(tok_id)
+            .bind(&pin_response.provider_type)
+            .bind(&pin_response.provider_url)
+            .bind(&pin_response.cid)
+            .bind(&pin_response.id)
+            .bind(status)
+            .execute(&mut *tx)
+            .await?;
         }
 
         // Commit the transaction
