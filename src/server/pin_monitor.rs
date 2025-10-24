@@ -224,6 +224,7 @@ mod tests {
             provider_type: "test-provider".to_string(),
             provider_url: "test-provider".to_string(),
             metadata: None,
+            size: None,
         }
     }
 

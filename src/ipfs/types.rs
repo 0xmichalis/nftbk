@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 
 // Types adapted from the IPFS Pinning Service OpenAPI spec
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum PinStatus {
     Queued,
@@ -38,6 +38,22 @@ pub struct PinStatusResponse {
     pub delegates: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub info: Option<serde_json::Value>,
+}
+
+impl PinStatusResponse {
+    /// Extract size from the info field if present
+    pub fn extract_size(&self) -> Option<u64> {
+        self.info.as_ref().and_then(|info| {
+            info.get("size").and_then(|size_value| {
+                // Handle both string and number formats
+                match size_value {
+                    serde_json::Value::String(s) => s.parse::<u64>().ok(),
+                    serde_json::Value::Number(n) => n.as_u64(),
+                    _ => None,
+                }
+            })
+        })
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

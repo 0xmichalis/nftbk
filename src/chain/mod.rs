@@ -1609,6 +1609,7 @@ mod pin_cid_tests {
                 provider_type: self.provider_type().to_string(),
                 provider_url: self.provider_url().to_string(),
                 metadata: None,
+                size: None,
             })
         }
 

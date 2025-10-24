@@ -134,6 +134,7 @@ impl IpfsPinningProvider for IpfsPinningClient {
         let parsed: PinStatusResponse = serde_json::from_str(&text)
             .with_context(|| format!("decoding PinStatusResponse: {text}"))?;
 
+        let size = parsed.extract_size();
         Ok(PinResponse {
             id: parsed.requestid,
             cid: parsed.pin.cid,
@@ -141,6 +142,7 @@ impl IpfsPinningProvider for IpfsPinningClient {
             provider_type: self.provider_type().to_string(),
             provider_url: self.provider_url().to_string(),
             metadata: parsed.pin.meta.map(|m| m.0),
+            size,
         })
     }
 
@@ -161,6 +163,7 @@ impl IpfsPinningProvider for IpfsPinningClient {
         let parsed: PinStatusResponse = serde_json::from_str(&text)
             .with_context(|| format!("decoding PinStatusResponse: {text}"))?;
 
+        let size = parsed.extract_size();
         Ok(PinResponse {
             id: parsed.requestid,
             cid: parsed.pin.cid,
@@ -168,6 +171,7 @@ impl IpfsPinningProvider for IpfsPinningClient {
             provider_type: self.provider_type().to_string(),
             provider_url: self.provider_url().to_string(),
             metadata: parsed.pin.meta.map(|m| m.0),
+            size,
         })
     }
 
@@ -180,13 +184,17 @@ impl IpfsPinningProvider for IpfsPinningClient {
         let pins = response
             .results
             .into_iter()
-            .map(|pin_status| PinResponse {
-                id: pin_status.requestid,
-                cid: pin_status.pin.cid,
-                status: Self::convert_status(pin_status.status),
-                provider_type: self.provider_type().to_string(),
-                provider_url: self.provider_url().to_string(),
-                metadata: pin_status.pin.meta.map(|m| m.0),
+            .map(|pin_status| {
+                let size = pin_status.extract_size();
+                PinResponse {
+                    id: pin_status.requestid,
+                    cid: pin_status.pin.cid,
+                    status: Self::convert_status(pin_status.status),
+                    provider_type: self.provider_type().to_string(),
+                    provider_url: self.provider_url().to_string(),
+                    metadata: pin_status.pin.meta.map(|m| m.0),
+                    size,
+                }
             })
             .collect();
 
@@ -242,7 +250,9 @@ mod tests {
                 "meta": {"app": "nftbk"}
             },
             "delegates": ["/ip4/203.0.113.1/tcp/4001/p2p/12D3KooW"],
-            "info": null
+            "info": {
+                "size": "1024"
+            }
         })
     }
 
@@ -278,6 +288,7 @@ mod tests {
         assert_eq!(res.cid, "bafybeigdyrzt5v276s3jvq7j4q6vti7"); // CID from server response
         assert!(matches!(res.status, PinResponseStatus::Pinned));
         assert_eq!(res.provider_url, base);
+        assert_eq!(res.size, Some(1024));
     }
 
     #[tokio::test]
@@ -299,6 +310,7 @@ mod tests {
         assert_eq!(res.cid, "bafybeigdyrzt5v276s3jvq7j4q6vti7");
         assert!(matches!(res.status, PinResponseStatus::Pinned));
         assert_eq!(res.provider_url, base);
+        assert_eq!(res.size, Some(1024));
     }
 
     #[tokio::test]

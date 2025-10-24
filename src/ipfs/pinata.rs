@@ -170,9 +170,11 @@ impl IpfsPinningProvider for PinataClient {
                 serde_json::Value::Object(map) => Some(map),
                 _ => None,
             },
+            size: None, //TODO: Pinata doesn't provide size information via the pin_by_cid API
         })
     }
 
+    // TODO: This is currently broken for me and Pinata are not smart enough to provide a timely fix.
     async fn get_pin(&self, pin_id: &str) -> Result<PinResponse> {
         // Use list_pins and filter by ID
         let pins = self.list_pins().await?;
@@ -182,6 +184,7 @@ impl IpfsPinningProvider for PinataClient {
             .ok_or_else(|| anyhow::anyhow!("Pin with ID '{}' not found in Pinata", pin_id))
     }
 
+    // TODO: This is currently broken for me and Pinata are not smart enough to provide a timely fix.
     async fn list_pins(&self) -> Result<Vec<PinResponse>> {
         let url = format!("{}/v3/files/public/pin_by_cid", self.base_url);
 
@@ -221,6 +224,7 @@ impl IpfsPinningProvider for PinataClient {
                         serde_json::Value::Object(map) => Some(map),
                         _ => None,
                     },
+                    size: None, // Pinata doesn't provide size information
                 }
             })
             .collect();
@@ -228,6 +232,7 @@ impl IpfsPinningProvider for PinataClient {
         Ok(pins)
     }
 
+    // TODO: This is currently broken for me and Pinata are not smart enough to provide a timely fix.
     async fn delete_pin(&self, request_id: &str) -> Result<()> {
         let url = format!(
             "{}/v3/files/public/pin_by_cid/{}",

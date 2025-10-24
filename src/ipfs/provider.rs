@@ -26,6 +26,9 @@ pub struct PinResponse {
     /// Optional user-defined metadata associated with the pin
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Size of the pinned content in bytes (if available)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
