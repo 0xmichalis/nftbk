@@ -203,13 +203,79 @@ pub struct ServerConfig {
     pub ipfs_pinning_configs: Vec<IpfsPinningConfig>,
 }
 
+/// Start the HTTP server with the given configuration
+async fn start_http_server(
+    config: ServerConfig,
+    state: AppState,
+    shutdown_signal: impl std::future::Future<Output = ()> + Send + 'static,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    use crate::server::router::build_router;
+
+    let addr: SocketAddr = config
+        .listen_address
+        .parse()
+        .expect("Invalid listen address");
+    let listener = tokio::net::TcpListener::bind(addr).await?;
+    let app = build_router(
+        state.clone(),
+        config
+            .jwt_credentials
+            .into_iter()
+            .map(|c| (c.issuer, c.audience, c.verification_key))
+            .collect(),
+        config.x402_config.clone(),
+    );
+    info!("Listening on {}", addr);
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal)
+        .await?;
+
+    Ok(())
+}
+
+/// Wait for graceful shutdown of all server components
+async fn wait_for_graceful_shutdown(
+    pruner_handle: Option<tokio::task::JoinHandle<()>>,
+    pin_monitor_handle: Option<tokio::task::JoinHandle<()>>,
+    backup_parallelism: usize,
+    backup_task_sender: mpsc::Sender<BackupTaskOrShutdown>,
+    worker_handles: Vec<tokio::task::JoinHandle<()>>,
+) {
+    // Graceful shutdown
+    if let Some(handle) = pruner_handle {
+        let _ = handle.await;
+    }
+    info!("Pruner has exited");
+
+    if let Some(handle) = pin_monitor_handle {
+        let _ = handle.await;
+    }
+    info!("Pin monitor has exited");
+
+    for _ in 0..backup_parallelism {
+        let _ = backup_task_sender
+            .send(BackupTaskOrShutdown::Shutdown)
+            .await;
+    }
+    drop(backup_task_sender);
+    info!("Backup task sender has exited");
+
+    for handle in worker_handles {
+        let _ = handle.await;
+    }
+    info!("Backup workers have exited");
+
+    // Give time for final logs to flush
+    let _ = std::io::stdout().flush();
+    std::thread::sleep(std::time::Duration::from_millis(200));
+}
+
 /// Run the server with the given configuration
 pub async fn run_server(
     config: ServerConfig,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use crate::server::pin_monitor::spawn_pin_monitor;
     use crate::server::pruner::spawn_pruner;
-    use crate::server::router::build_router;
     let (backup_task_sender, backup_task_receiver) =
         mpsc::channel::<BackupTaskOrShutdown>(config.backup_queue_size);
     let db_url =
@@ -217,7 +283,7 @@ pub async fn run_server(
     let shutdown_flag = Arc::new(AtomicBool::new(false));
 
     let state = AppState::new(
-        config.chain_config,
+        config.chain_config.clone(),
         &config.base_dir,
         config.unsafe_skip_checksum_check,
         config.auth_token.clone(),
@@ -226,7 +292,7 @@ pub async fn run_server(
         &db_url,
         (config.backup_queue_size + 1) as u32,
         shutdown_flag.clone(),
-        config.ipfs_pinning_configs,
+        config.ipfs_pinning_configs.clone(),
     )
     .await;
 
@@ -283,54 +349,18 @@ pub async fn run_server(
     };
 
     // Start the server
-    let addr: SocketAddr = config
-        .listen_address
-        .parse()
-        .expect("Invalid listen address");
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    let app = build_router(
-        state.clone(),
-        config
-            .jwt_credentials
-            .into_iter()
-            .map(|c| (c.issuer, c.audience, c.verification_key))
-            .collect(),
-        config.x402_config.clone(),
-    );
-    info!("Listening on {}", addr);
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal)
-        .await?;
+    start_http_server(config.clone(), state.clone(), shutdown_signal).await?;
     info!("Server has exited");
 
-    // Graceful shutdown
-    if let Some(handle) = pruner_handle {
-        let _ = handle.await;
-    }
-    info!("Pruner has exited");
-
-    if let Some(handle) = pin_monitor_handle {
-        let _ = handle.await;
-    }
-    info!("Pin monitor has exited");
-
-    for _ in 0..config.backup_parallelism {
-        let _ = state
-            .backup_task_sender
-            .send(BackupTaskOrShutdown::Shutdown)
-            .await;
-    }
-    drop(state.backup_task_sender);
-    info!("Backup task sender has exited");
-
-    for handle in worker_handles {
-        let _ = handle.await;
-    }
-    info!("Backup workers have exited");
-
-    // Give time for final logs to flush
-    let _ = std::io::stdout().flush();
-    std::thread::sleep(std::time::Duration::from_millis(200));
+    // Wait for graceful shutdown of all components
+    wait_for_graceful_shutdown(
+        pruner_handle,
+        pin_monitor_handle,
+        config.backup_parallelism,
+        state.backup_task_sender.clone(),
+        worker_handles,
+    )
+    .await;
 
     Ok(())
 }
