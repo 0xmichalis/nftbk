@@ -219,11 +219,7 @@ async fn start_http_server(
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let app = build_router(
         state.clone(),
-        config
-            .jwt_credentials
-            .into_iter()
-            .map(|c| (c.issuer, c.audience, c.verification_key))
-            .collect(),
+        config.jwt_credentials,
         config.x402_config.clone(),
     );
     info!("Listening on {}", addr);

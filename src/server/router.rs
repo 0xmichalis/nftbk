@@ -16,7 +16,7 @@ use crate::envvar::is_defined;
 use crate::server::api::{
     ApiProblem, BackupCreateResponse, BackupRequest, BackupResponse, ProblemJson, Tokens,
 };
-use crate::server::auth::jwt::verify_jwt;
+use crate::server::auth::jwt::{verify_jwt, JwtCredential};
 use crate::server::database::{PinInfo, TokenWithPins};
 use crate::server::handlers::handle_archive_download::{DownloadQuery, DownloadTokenResponse};
 use crate::server::handlers::handle_archive_download::{
@@ -116,7 +116,7 @@ impl utoipa::Modify for SecurityAddon {
 #[derive(Clone)]
 pub struct AuthState {
     pub app_state: AppState,
-    pub jwt_credentials: Vec<(String, String, String)>, // (issuer, audience, verification_key)
+    pub jwt_credentials: Vec<JwtCredential>,
 }
 
 async fn auth_middleware(
@@ -155,14 +155,16 @@ async fn auth_middleware(
             .and_then(|v| v.to_str().ok());
         if let Some(header_value) = auth_header {
             if let Some(jwt) = header_value.strip_prefix("Bearer ") {
-                for (issuer, audience, verification_key) in jwt_credentials.iter() {
-                    match verify_jwt(jwt, verification_key, issuer, audience).await {
+                for cred in jwt_credentials.iter() {
+                    match verify_jwt(jwt, &cred.verification_key, &cred.issuer, &cred.audience)
+                        .await
+                    {
                         Ok(claims) => {
                             req.extensions_mut().insert(Some(claims.sub.clone()));
                             return next.run(req).await;
                         }
                         Err(e) => {
-                            debug!("JWT verification failed for issuer {issuer}: {e}");
+                            debug!("JWT verification failed for issuer {}: {e}", cred.issuer);
                         }
                     }
                 }
@@ -185,7 +187,7 @@ async fn auth_middleware(
 
 pub fn build_router(
     state: AppState,
-    jwt_credentials: Vec<(String, String, String)>,
+    jwt_credentials: Vec<JwtCredential>,
     x402_config: Option<X402Config>,
 ) -> Router {
     // Public router (no auth middleware)
