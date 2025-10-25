@@ -77,7 +77,7 @@ run-cli:
 
 .PHONY: run-cli-test
 run-cli-test:
-	@SQLX_OFFLINE=true cargo run --bin nftbk-cli -- create --tokens-config-path config_tokens_test.toml --output-path nft_backup_test --force true $(filter-out $@,$(MAKECMDGOALS))
+	@SQLX_OFFLINE=true cargo run --bin nftbk-cli -- create --tokens-config-path config_tokens_test.toml --output-path nft_backup_test $(filter-out $@,$(MAKECMDGOALS))
 
 .PHONY: run-cli-server-test
 run-cli-server-test:
