@@ -21,6 +21,7 @@ use crate::server::x402::X402Config;
 pub mod api;
 pub mod archive;
 pub mod auth;
+pub mod config;
 pub mod database;
 pub mod handlers;
 pub mod hashing;

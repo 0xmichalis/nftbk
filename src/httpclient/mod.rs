@@ -401,7 +401,9 @@ mod fetch_tests {
 
         Mock::given(method("GET"))
             .and(path("/default-test"))
-            .respond_with(ResponseTemplate::new(200).set_body_string("Default Implementation Works"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("Default Implementation Works"),
+            )
             .mount(&mock_server)
             .await;
 

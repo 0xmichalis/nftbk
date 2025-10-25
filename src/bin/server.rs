@@ -4,10 +4,10 @@ use clap::Parser;
 use dotenv::dotenv;
 use tracing::{error, info};
 
-use nftbk::config::{load_and_validate_config, Config};
 use nftbk::envvar::{is_defined, should_enable_color};
 use nftbk::logging;
 use nftbk::logging::LogLevel;
+use nftbk::server::config::{load_and_validate_config, Config};
 use nftbk::server::{run_server, ServerConfig};
 
 #[derive(Parser, Debug)]

@@ -4,8 +4,8 @@ use anyhow::{Context, Result};
 use tokio::fs;
 
 use crate::backup::{BackupConfig, ChainConfig, TokenConfig};
-use crate::config::ConfigRaw;
 use crate::ipfs::IpfsPinningConfig;
+use crate::server::config::ConfigRaw;
 use crate::{ProcessManagementConfig, StorageConfig};
 
 #[derive(serde::Deserialize)]
