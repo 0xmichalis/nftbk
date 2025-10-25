@@ -12,6 +12,7 @@ use crate::chain::tezos::TezosChainProcessor;
 
 pub mod chain;
 pub mod cli;
+pub mod consts;
 pub mod content;
 pub mod envvar;
 pub mod httpclient;
@@ -22,10 +23,9 @@ pub mod server;
 pub mod types;
 pub mod url;
 
-// Re-export types for convenience
+// Re-export types and constants for convenience
+pub use consts::*;
 pub use types::*;
-
-pub const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
 
 pub mod backup {
     use super::*;
