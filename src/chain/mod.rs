@@ -283,12 +283,8 @@ pub trait NFTChainProcessor {
     /// Get the token URI for a contract using the chain's RPC client.
     async fn get_uri(&self, token: &Self::ContractTokenId) -> anyhow::Result<String>;
 
-    /// Fetch the metadata JSON for a given contract/token and return it in-memory
-    /// along with the resolved token URI.
-    async fn fetch_metadata(
-        &self,
-        token: &Self::ContractTokenId,
-    ) -> anyhow::Result<(Self::Metadata, String)>;
+    /// Fetch the metadata JSON for a given token URI and return it in-memory.
+    async fn fetch_metadata(&self, token_uri: &str) -> anyhow::Result<Self::Metadata>;
 
     /// Collect all URLs to download from the metadata.
     fn collect_urls(metadata: &Self::Metadata) -> Vec<(String, Options)>;
@@ -325,13 +321,34 @@ where
         check_shutdown_signal(&config)?;
 
         debug!("Processing {}", token);
-        let (metadata, token_uri) = match process(
-            processor.fetch_metadata(&token).await,
+
+        // Get token URI first
+        let token_uri = match process(
+            processor.get_uri(&token).await,
+            format!("Failed to get token URI for {token}"),
+            config.exit_on_error,
+            &mut archive_errors,
+        )? {
+            Some(uri) => uri,
+            None => {
+                // Token URI fetch failure affects both archive and IPFS operations
+                // The error was already added to archive_errors by the process function
+                // Add the same error to ipfs_errors as well
+                if let Some(last_error) = archive_errors.last() {
+                    ipfs_errors.push(last_error.clone());
+                }
+                continue;
+            }
+        };
+
+        // Fetch metadata using the token URI
+        let metadata = match process(
+            processor.fetch_metadata(&token_uri).await,
             format!("Failed to fetch metadata for {token}"),
             config.exit_on_error,
             &mut archive_errors,
         )? {
-            Some(pair) => pair,
+            Some(metadata) => metadata,
             None => {
                 // Metadata fetch failure affects both archive and IPFS operations
                 // The error was already added to archive_errors by the process function
@@ -606,7 +623,7 @@ mod process_nfts_tests {
     struct MockProcessor {
         output_path: Option<std::path::PathBuf>,
         ipfs_pinning_providers: Vec<Box<dyn IpfsPinningProvider>>,
-        fetch_metadata_result: Result<(MockMetadata, String), anyhow::Error>,
+        fetch_metadata_result: Result<MockMetadata, anyhow::Error>,
         get_uri_result: Result<String, anyhow::Error>,
         http_client: crate::httpclient::HttpClient,
     }
@@ -616,14 +633,11 @@ mod process_nfts_tests {
             Self {
                 output_path: None,
                 ipfs_pinning_providers: Vec::new(),
-                fetch_metadata_result: Ok((
-                    MockMetadata {
-                        name: "Test NFT".to_string(),
-                        image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==".to_string(),
-                        animation_url: Some("data:text/plain;base64,SGVsbG8gV29ybGQ=".to_string()),
-                    },
-                    "data:application/json;base64,eyJuYW1lIjoiVGVzdCJ9".to_string(),
-                )),
+                fetch_metadata_result: Ok(MockMetadata {
+                    name: "Test NFT".to_string(),
+                    image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==".to_string(),
+                    animation_url: Some("data:text/plain;base64,SGVsbG8gV29ybGQ=".to_string()),
+                }),
                 get_uri_result: Ok("data:application/json;base64,eyJuYW1lIjoiVGVzdCJ9".to_string()),
                 http_client: crate::httpclient::HttpClient::new(),
             }
@@ -653,12 +667,9 @@ mod process_nfts_tests {
             }
         }
 
-        async fn fetch_metadata(
-            &self,
-            _token: &Self::ContractTokenId,
-        ) -> anyhow::Result<(Self::Metadata, String)> {
+        async fn fetch_metadata(&self, _token_uri: &str) -> anyhow::Result<Self::Metadata> {
             match &self.fetch_metadata_result {
-                Ok((metadata, uri)) => Ok((metadata.clone(), uri.clone())),
+                Ok(metadata) => Ok(metadata.clone()),
                 Err(e) => Err(anyhow!(e.to_string())),
             }
         }
@@ -964,14 +975,11 @@ mod process_nfts_tests {
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
             ipfs_pinning_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
-            fetch_metadata_result: Ok((
-                MockMetadata {
-                    name: "Test NFT".to_string(),
-                    image: "ipfs://QmTestImageHash".to_string(),
-                    animation_url: None,
-                },
-                "ipfs://QmTestMetadataHash".to_string(),
-            )),
+            fetch_metadata_result: Ok(MockMetadata {
+                name: "Test NFT".to_string(),
+                image: "ipfs://QmTestImageHash".to_string(),
+                animation_url: None,
+            }),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
             http_client: crate::httpclient::HttpClient::new()
                 .with_gateways(vec![(
@@ -1038,14 +1046,11 @@ mod process_nfts_tests {
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
             ipfs_pinning_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
-            fetch_metadata_result: Ok((
-                MockMetadata {
-                    name: "Test NFT".to_string(),
-                    image: "ipfs://QmTestImageHash".to_string(),
-                    animation_url: None,
-                },
-                "ipfs://QmTestMetadataHash".to_string(),
-            )),
+            fetch_metadata_result: Ok(MockMetadata {
+                name: "Test NFT".to_string(),
+                image: "ipfs://QmTestImageHash".to_string(),
+                animation_url: None,
+            }),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
             http_client: crate::httpclient::HttpClient::new()
                 .with_gateways(vec![(
@@ -1082,14 +1087,11 @@ mod process_nfts_tests {
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
             ipfs_pinning_providers: vec![], // No IPFS providers
-            fetch_metadata_result: Ok((
-                MockMetadata {
-                    name: "Test NFT".to_string(),
-                    image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==".to_string(),
-                    animation_url: None,
-                },
-                "data:application/json;base64,eyJuYW1lIjoiVGVzdCJ9".to_string(),
-            )),
+            fetch_metadata_result: Ok(MockMetadata {
+                name: "Test NFT".to_string(),
+                image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==".to_string(),
+                animation_url: None,
+            }),
             get_uri_result: Ok("data:application/json;base64,eyJuYW1lIjoiVGVzdCJ9".to_string()),
             http_client: crate::httpclient::HttpClient::new()
                 .with_gateways(vec![])
@@ -1138,14 +1140,11 @@ mod process_nfts_tests {
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
             ipfs_pinning_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
-            fetch_metadata_result: Ok((
-                MockMetadata {
-                    name: "Test NFT".to_string(),
-                    image: "ipfs://QmTestImageHash".to_string(),
-                    animation_url: None,
-                },
-                "ipfs://QmTestMetadataHash".to_string(),
-            )),
+            fetch_metadata_result: Ok(MockMetadata {
+                name: "Test NFT".to_string(),
+                image: "ipfs://QmTestImageHash".to_string(),
+                animation_url: None,
+            }),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
             http_client: crate::httpclient::HttpClient::new()
                 .with_gateways(vec![(
@@ -1202,14 +1201,11 @@ mod process_nfts_tests {
         let processor = Arc::new(MockProcessor {
             output_path: None, // No local storage - only IPFS operations
             ipfs_pinning_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
-            fetch_metadata_result: Ok((
-                MockMetadata {
-                    name: "Test NFT".to_string(),
-                    image: "ipfs://QmTestImageHash".to_string(),
-                    animation_url: None,
-                },
-                "ipfs://QmTestMetadataHash".to_string(),
-            )),
+            fetch_metadata_result: Ok(MockMetadata {
+                name: "Test NFT".to_string(),
+                image: "ipfs://QmTestImageHash".to_string(),
+                animation_url: None,
+            }),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
             http_client: crate::httpclient::HttpClient::new()
                 .with_gateways(vec![])
@@ -1352,14 +1348,11 @@ mod process_nfts_tests {
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
             ipfs_pinning_providers: vec![], // No IPFS providers
-            fetch_metadata_result: Ok((
-                MockMetadata {
-                    name: "Test NFT".to_string(),
-                    image: format!("{}/image.png", mock_server.uri()),
-                    animation_url: None,
-                },
-                format!("{}/metadata.json", mock_server.uri()),
-            )),
+            fetch_metadata_result: Ok(MockMetadata {
+                name: "Test NFT".to_string(),
+                image: format!("{}/image.png", mock_server.uri()),
+                animation_url: None,
+            }),
             get_uri_result: Ok(format!("{}/metadata.json", mock_server.uri())),
             http_client: crate::httpclient::HttpClient::new()
                 .with_gateways(vec![(
@@ -1427,14 +1420,11 @@ mod process_nfts_tests {
         let processor = Arc::new(MockProcessor {
             output_path: Some(temp_dir.path().to_path_buf()),
             ipfs_pinning_providers: vec![Box::new(ipfs_client) as Box<dyn IpfsPinningProvider>],
-            fetch_metadata_result: Ok((
-                MockMetadata {
-                    name: "Test NFT".to_string(),
-                    image: "ipfs://QmTestImageHash".to_string(),
-                    animation_url: Some("ipfs://QmTestAnimationHash".to_string()),
-                },
-                "ipfs://QmTestMetadataHash".to_string(),
-            )),
+            fetch_metadata_result: Ok(MockMetadata {
+                name: "Test NFT".to_string(),
+                image: "ipfs://QmTestImageHash".to_string(),
+                animation_url: Some("ipfs://QmTestAnimationHash".to_string()),
+            }),
             get_uri_result: Ok("ipfs://QmTestMetadataHash".to_string()),
             http_client: crate::httpclient::HttpClient::new()
                 .with_gateways(vec![(
@@ -1649,10 +1639,7 @@ mod pin_cid_tests {
             unimplemented!()
         }
 
-        async fn fetch_metadata(
-            &self,
-            _token: &Self::ContractTokenId,
-        ) -> anyhow::Result<(Self::Metadata, String)> {
+        async fn fetch_metadata(&self, _token_uri: &str) -> anyhow::Result<Self::Metadata> {
             unimplemented!()
         }
 

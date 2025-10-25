@@ -66,15 +66,11 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
     type ContractTokenId = ContractTokenId;
     type RpcClient = tezos_rpc::client::TezosRpc<TezosHttpClient>;
 
-    async fn fetch_metadata(
-        &self,
-        token: &Self::ContractTokenId,
-    ) -> anyhow::Result<(Self::Metadata, String)> {
-        let token_uri = self.get_uri(token).await?;
-        debug!("Fetching metadata from {} for {}", token_uri, token);
-        let bytes = self.http_client.fetch(&token_uri).await?;
+    async fn fetch_metadata(&self, token_uri: &str) -> anyhow::Result<Self::Metadata> {
+        debug!("Fetching metadata from {}", token_uri);
+        let bytes = self.http_client.fetch(token_uri).await?;
         let metadata: NFTMetadata = serde_json::from_slice(&bytes)?;
-        Ok((metadata, token_uri))
+        Ok(metadata)
     }
 
     fn collect_urls(metadata: &Self::Metadata) -> Vec<(String, Options)> {
