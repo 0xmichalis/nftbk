@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+
 use tracing::info;
 
 use crate::content::get_filename;
@@ -197,5 +198,222 @@ async fn fetch_and_stream_to_file(
 impl Default for HttpClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod fetch_tests {
+    use super::*;
+    use crate::ipfs::config::IpfsGatewayType;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    #[tokio::test]
+    async fn test_fetch_data_url() {
+        let client = HttpClient::new();
+        let data_url = "data:text/plain;base64,SGVsbG8gV29ybGQ="; // "Hello World" in base64
+
+        let result = client.fetch(data_url).await;
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert_eq!(content, b"Hello World");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_data_url_invalid() {
+        let client = HttpClient::new();
+        let invalid_data_url = "data:invalid";
+
+        let result = client.fetch(invalid_data_url).await;
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(err.contains("Failed to parse data URL"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_http_url_success() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/test", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("HTTP Success"))
+            .mount(&mock_server)
+            .await;
+
+        let client = HttpClient::new();
+        let result = client.fetch(&url).await;
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert_eq!(content, b"HTTP Success");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_ipfs_url_success() {
+        let mock_server = MockServer::start().await;
+        let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+        let ipfs_url = format!("{}/ipfs/{}", mock_server.uri(), cid);
+
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", cid)))
+            .respond_with(ResponseTemplate::new(200).set_body_string("IPFS Content"))
+            .mount(&mock_server)
+            .await;
+
+        let client =
+            HttpClient::new().with_gateways(vec![(mock_server.uri(), IpfsGatewayType::Path)]);
+        let result = client.fetch(&ipfs_url).await;
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert_eq!(content, b"IPFS Content");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_http_url_404() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/not-found", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/not-found"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
+            .mount(&mock_server)
+            .await;
+
+        let client = HttpClient::new();
+        let result = client.fetch(&url).await;
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(err.contains("HTTP error: status 404"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_http_url_500_with_retries() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/server-error", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/server-error"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("Server Error"))
+            .mount(&mock_server)
+            .await;
+
+        let client = HttpClient::new().with_max_retries(2);
+        let result = client.fetch(&url).await;
+        assert!(result.is_err());
+        let err = result.err().unwrap().to_string();
+        assert!(err.contains("HTTP error: status 500"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_network_error() {
+        // Use a URL that will cause a connection error quickly
+        // Port 1 is typically not in use and will fail fast
+        let invalid_url = "http://127.0.0.1:1/invalid";
+        let client = HttpClient::new().with_max_retries(0); // No retries to make it faster
+
+        let result = client.fetch(invalid_url).await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_with_custom_retries() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/test", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("Success"))
+            .mount(&mock_server)
+            .await;
+
+        let client = HttpClient::new().with_max_retries(3);
+        let result = client.fetch(&url).await;
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert_eq!(content, b"Success");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_with_custom_gateways() {
+        let mock_server = MockServer::start().await;
+        let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+        let ipfs_url = format!("{}/ipfs/{}", mock_server.uri(), cid);
+
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", cid)))
+            .respond_with(ResponseTemplate::new(200).set_body_string("Custom Gateway"))
+            .mount(&mock_server)
+            .await;
+
+        let client =
+            HttpClient::new().with_gateways(vec![(mock_server.uri(), IpfsGatewayType::Path)]);
+        let result = client.fetch(&ipfs_url).await;
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert_eq!(content, b"Custom Gateway");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_large_response() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/large", mock_server.uri());
+        let large_content = "x".repeat(1024 * 1024); // 1MB
+
+        Mock::given(method("GET"))
+            .and(path("/large"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(large_content.clone()))
+            .mount(&mock_server)
+            .await;
+
+        let client = HttpClient::new();
+        let result = client.fetch(&url).await;
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert_eq!(content.len(), 1024 * 1024);
+        assert_eq!(content, large_content.as_bytes());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_binary_content() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/binary", mock_server.uri());
+        let binary_content = vec![0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]; // PNG header
+
+        Mock::given(method("GET"))
+            .and(path("/binary"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(binary_content.clone()))
+            .mount(&mock_server)
+            .await;
+
+        let client = HttpClient::new();
+        let result = client.fetch(&url).await;
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert_eq!(content, binary_content);
+    }
+
+    #[tokio::test]
+    async fn test_httpclient_default_implementation() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/default-test", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/default-test"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("Default Implementation Works"))
+            .mount(&mock_server)
+            .await;
+
+        // Test that Default::default() creates a working HttpClient
+        let client = HttpClient::default();
+        let result = client.fetch(&url).await;
+        assert!(result.is_ok());
+        let content = result.unwrap();
+        assert_eq!(content, b"Default Implementation Works");
+
+        // Verify that default has the expected configuration
+        assert_eq!(client.max_retries, 5);
+        assert!(!client.ipfs_gateways.is_empty()); // Should have default IPFS gateways
     }
 }

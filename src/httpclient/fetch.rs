@@ -142,10 +142,11 @@ mod try_fetch_response_tests {
     #[tokio::test]
     async fn test_http_200_success() {
         let mock_server = MockServer::start().await;
-        let url = format!("{}/success", mock_server.uri());
+        let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+        let url = format!("{}/ipfs/{}", mock_server.uri(), cid);
 
         Mock::given(method("GET"))
-            .and(path("/success"))
+            .and(path(format!("/ipfs/{}", cid)))
             .respond_with(ResponseTemplate::new(200).set_body_string("Hello, World!"))
             .mount(&mock_server)
             .await;
@@ -161,10 +162,11 @@ mod try_fetch_response_tests {
     #[tokio::test]
     async fn test_http_404_no_retry() {
         let mock_server = MockServer::start().await;
-        let url = format!("{}/not-found", mock_server.uri());
+        let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+        let url = format!("{}/ipfs/{}", mock_server.uri(), cid);
 
         Mock::given(method("GET"))
-            .and(path("/not-found"))
+            .and(path(format!("/ipfs/{}", cid)))
             .respond_with(ResponseTemplate::new(404).set_body_string("Not Found"))
             .expect(1)
             .mount(&mock_server)
@@ -181,10 +183,11 @@ mod try_fetch_response_tests {
     #[tokio::test]
     async fn test_http_500_retry_and_fail() {
         let mock_server = MockServer::start().await;
-        let url = format!("{}/server-error", mock_server.uri());
+        let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+        let url = format!("{}/ipfs/{}", mock_server.uri(), cid);
 
         Mock::given(method("GET"))
-            .and(path("/server-error"))
+            .and(path(format!("/ipfs/{}", cid)))
             .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
             .expect(1)
             .mount(&mock_server)
@@ -200,17 +203,53 @@ mod try_fetch_response_tests {
 
     #[tokio::test]
     async fn test_initial_error_then_alternative_gateway_succeeds() {
-        // Arrange: original gateway is a dead socket, alternative returns 200
+        // Arrange: original gateway fails, alternative returns 200
+        let server_a = MockServer::start().await;
         let server_b = MockServer::start().await;
-        let dead_gateway_base = "http://127.0.0.1:9"; // simulate connect error
+        let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+        let content_path = format!("{}/ok", cid);
+        let original_url = format!("{}/ipfs/{}", server_a.uri(), content_path);
 
-        let content_path = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/ok";
-        let original_url = format!("{}/ipfs/{}", dead_gateway_base, content_path);
+        // A returns 500 (server error)
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", content_path)))
+            .respond_with(ResponseTemplate::new(500).set_body_string("Server Error"))
+            .mount(&server_a)
+            .await;
 
         // B returns 200 for the same IPFS path
         Mock::given(method("GET"))
             .and(path(format!("/ipfs/{}", content_path)))
             .respond_with(ResponseTemplate::new(200).set_body_string("ALT OK"))
+            .mount(&server_b)
+            .await;
+
+        // Gateways: first the failing one (A), then the working mock (B)
+        let gateways = vec![gw(&server_a.uri()), gw(&server_b.uri())];
+
+        // Act
+        let (res, status) = super::try_fetch_response(&original_url, &gateways).await;
+
+        // Assert
+        assert!(res.is_ok());
+        assert_eq!(status, Some(reqwest::StatusCode::OK));
+        let body = res.unwrap().bytes().await.unwrap();
+        assert_eq!(body.as_ref(), b"ALT OK");
+    }
+
+    #[tokio::test]
+    async fn test_initial_network_error_then_alternative_gateway_succeeds() {
+        // Arrange: original gateway has network error, alternative returns 200
+        let server_b = MockServer::start().await;
+        let dead_gateway_base = "http://127.0.0.1:9"; // simulate connect error
+        let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+        let content_path = format!("{}/network_test", cid);
+        let original_url = format!("{}/ipfs/{}", dead_gateway_base, content_path);
+
+        // B returns 200 for the same IPFS path
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", content_path)))
+            .respond_with(ResponseTemplate::new(200).set_body_string("NETWORK RETRY OK"))
             .mount(&server_b)
             .await;
 
@@ -224,7 +263,7 @@ mod try_fetch_response_tests {
         assert!(res.is_ok());
         assert_eq!(status, Some(reqwest::StatusCode::OK));
         let body = res.unwrap().bytes().await.unwrap();
-        assert_eq!(body.as_ref(), b"ALT OK");
+        assert_eq!(body.as_ref(), b"NETWORK RETRY OK");
     }
 }
 
@@ -415,5 +454,80 @@ mod retry_with_gateways_tests {
         assert!(res.is_err());
         let err = res.err().unwrap();
         assert_eq!(err.to_string(), original_error_msg);
+    }
+}
+
+#[cfg(test)]
+mod fetch_url_tests {
+    use wiremock::{
+        matchers::{header, method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    #[tokio::test]
+    async fn test_fetch_url_without_bearer_token() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/test", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .and(header("User-Agent", crate::USER_AGENT))
+            .respond_with(ResponseTemplate::new(200).set_body_string("OK"))
+            .mount(&mock_server)
+            .await;
+
+        let result = super::fetch_url(&url, None).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_url_with_bearer_token() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/protected", mock_server.uri());
+        let token = "test-bearer-token-123";
+        let auth_header = format!("Bearer {}", token);
+
+        Mock::given(method("GET"))
+            .and(path("/protected"))
+            .and(header("User-Agent", crate::USER_AGENT))
+            .and(header("Authorization", auth_header.as_str()))
+            .respond_with(ResponseTemplate::new(200).set_body_string("Protected OK"))
+            .mount(&mock_server)
+            .await;
+
+        let result = super::fetch_url(&url, Some(token.to_string())).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_url_with_empty_bearer_token() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/test", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/test"))
+            .and(header("User-Agent", crate::USER_AGENT))
+            .respond_with(ResponseTemplate::new(200).set_body_string("OK"))
+            .mount(&mock_server)
+            .await;
+
+        // Empty string should not add Authorization header
+        let result = super::fetch_url(&url, Some("".to_string())).await;
+        assert!(result.is_ok());
+        let response = result.unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_url_network_error() {
+        // Use a non-existent URL to test network error handling
+        let url = "http://127.0.0.1:9/nonexistent";
+
+        let result = super::fetch_url(url, None).await;
+        assert!(result.is_err());
     }
 }
