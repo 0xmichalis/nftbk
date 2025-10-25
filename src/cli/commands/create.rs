@@ -14,9 +14,9 @@ pub async fn run(
     exit_on_error: bool,
 ) -> Result<()> {
     let token_config = load_token_config(&tokens_config_path).await?;
-    let unified_config = load_config(config_path.as_path())?;
-    let chain_config = unified_config.chain_config();
-    let ipfs_pinning_configs = unified_config.ipfs_pinning_providers().to_vec();
+    let config = load_config(config_path.as_path())?;
+    let chain_config = config.chain_config()?;
+    let ipfs_pinning_configs = config.ipfs_pinning_providers().to_vec();
 
     let backup_config = create_backup_config(
         chain_config,

@@ -65,8 +65,10 @@ impl ConfigRaw {
     }
 
     /// Get chain configuration
-    pub fn chain_config(&self) -> ChainConfig {
-        ChainConfig(self.chains.clone())
+    pub fn chain_config(&self) -> anyhow::Result<ChainConfig> {
+        let mut chain_config = ChainConfig(self.chains.clone());
+        chain_config.resolve_env_vars()?;
+        Ok(chain_config)
     }
 
     /// Get JWT credentials
@@ -153,9 +155,8 @@ pub fn load_and_validate_config(config_path: &str) -> Result<Config> {
     }
 
     // Extract and resolve chain configuration
-    let mut chain_config = config.chain_config();
-    chain_config
-        .resolve_env_vars()
+    let chain_config = config
+        .chain_config()
         .with_context(|| "Failed to resolve environment variables in chain config")?;
 
     Ok(Config {
