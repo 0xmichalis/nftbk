@@ -7,7 +7,7 @@ use tracing::{error, info};
 use crate::ipfs::IpfsPinningConfig;
 use crate::server::auth::JwtCredential;
 use crate::server::x402::{X402Config, X402ConfigRaw};
-use crate::ChainConfig;
+use crate::types::ChainConfig;
 
 /// Raw configuration structure that combines chains, auth, and IPFS providers
 #[derive(Debug, Deserialize)]

@@ -18,7 +18,7 @@ use crate::chain::ContractTokenInfo;
 use crate::content::Options;
 use crate::httpclient::HttpClient;
 use crate::ipfs::IpfsPinningProvider;
-use crate::StorageConfig;
+use crate::types::StorageConfig;
 
 // Type alias for the provider returned by alloy::providers::ProviderBuilder::new().connect()
 type EvmProvider = alloy::providers::fillers::FillProvider<

@@ -12,7 +12,7 @@ use tracing::debug;
 use crate::chain::common::ContractTokenId;
 use crate::content::Options;
 use crate::ipfs::IpfsPinningProvider;
-use crate::StorageConfig;
+use crate::types::StorageConfig;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {

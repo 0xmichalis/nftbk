@@ -454,8 +454,8 @@ mod ensure_backup_exists_unit_tests {
 #[cfg(test)]
 mod validate_backup_request_impl_tests {
     use super::validate_backup_request_impl;
-    use crate::backup::ChainConfig;
     use crate::server::api::{BackupRequest, Tokens};
+    use crate::types::ChainConfig;
 
     fn make_chain_config(chains: &[&str]) -> ChainConfig {
         let mut map = std::collections::HashMap::new();

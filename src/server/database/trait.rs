@@ -3,7 +3,7 @@ use serde_json;
 use sqlx;
 
 use crate::server::database::{BackupTask, ExpiredBackup, PinRow, TokenWithPins};
-use crate::TokenPinMapping;
+use crate::types::TokenPinMapping;
 
 /// Unified database trait that consolidates all database operations
 #[async_trait]

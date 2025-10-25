@@ -529,7 +529,7 @@ async fn download_backup(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backup::TokenConfig;
+    use crate::types::TokenConfig;
     use std::collections::HashMap;
     use tempfile::TempDir;
     use wiremock::matchers::{header, method, path, query_param};

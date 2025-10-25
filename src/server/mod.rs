@@ -11,12 +11,12 @@ use tokio::sync::mpsc;
 use tokio::sync::Mutex;
 use tracing::{error, info};
 
-use crate::backup::ChainConfig;
 use crate::ipfs::{IpfsPinningConfig, IpfsPinningProvider};
 use crate::server::api::{BackupRequest, Tokens};
 use crate::server::auth::JwtCredential;
 use crate::server::database::Db;
 use crate::server::x402::X402Config;
+use crate::types::ChainConfig;
 
 pub mod api;
 pub mod archive;

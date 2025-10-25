@@ -4,7 +4,7 @@ use std::path::Path;
 use tokio::fs;
 use tracing::info;
 
-use crate::TokenConfig;
+use crate::types::TokenConfig;
 
 /// Prune directories in the backup folder that are not part of the config or contain redundant files
 pub async fn prune_redundant_files(

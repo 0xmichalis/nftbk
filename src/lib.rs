@@ -1,10 +1,7 @@
-use anyhow::{Context, Result};
-use serde::Deserialize;
-use std::collections::HashMap;
-use std::path::PathBuf;
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use std::time::Instant;
+
+use anyhow::{Context, Result};
 use tokio::fs;
 use tracing::{info, warn, Instrument};
 
@@ -12,7 +9,6 @@ use crate::chain::common::ContractTokenId;
 use crate::chain::evm::EvmChainProcessor;
 use crate::chain::process_nfts;
 use crate::chain::tezos::TezosChainProcessor;
-use crate::envvar::resolve_env_placeholders;
 
 pub mod chain;
 pub mod cli;
@@ -23,77 +19,13 @@ pub mod ipfs;
 pub mod logging;
 pub mod prune;
 pub mod server;
+pub mod types;
 pub mod url;
 
+// Re-export types for convenience
+pub use types::*;
+
 pub const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
-
-/// Represents a token with its associated pin responses
-#[derive(Debug, Clone)]
-pub struct TokenPinMapping {
-    pub chain: String,
-    pub contract_address: String,
-    pub token_id: String,
-    pub pin_responses: Vec<crate::ipfs::PinResponse>,
-}
-
-#[derive(Debug)]
-pub struct ArchiveOutcome {
-    pub files: Vec<PathBuf>,
-    pub errors: Vec<String>,
-}
-
-#[derive(Debug)]
-pub struct IpfsOutcome {
-    pub pin_requests: Vec<TokenPinMapping>,
-    pub errors: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct ChainConfig(pub HashMap<String, String>);
-
-impl ChainConfig {
-    /// Resolves environment variable references in the form ${VAR_NAME} in all values.
-    /// Returns an error if any referenced environment variable is not set.
-    pub fn resolve_env_vars(&mut self) -> Result<()> {
-        for (key, value) in self.0.iter_mut() {
-            let resolved = resolve_env_placeholders(value).with_context(|| {
-                format!("Failed resolving env vars referenced in '{value}' for chain '{key}'")
-            })?;
-            *value = resolved;
-        }
-        Ok(())
-    }
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct TokenConfig {
-    #[serde(flatten)]
-    pub chains: HashMap<String, Vec<String>>,
-}
-
-/// Configuration for process management with shutdown and error handling options
-#[derive(Clone)]
-pub struct ProcessManagementConfig {
-    pub exit_on_error: bool,
-    pub shutdown_flag: Option<Arc<AtomicBool>>,
-}
-
-#[derive(Clone)]
-pub struct StorageConfig {
-    /// If Some, store content locally under this path
-    pub output_path: Option<PathBuf>,
-    pub prune_redundant: bool,
-    /// IPFS pinning providers - content will be pinned to all configured providers
-    pub ipfs_pinning_configs: Vec<ipfs::IpfsPinningConfig>,
-}
-
-pub struct BackupConfig {
-    pub chain_config: ChainConfig,
-    pub token_config: TokenConfig,
-    pub storage_config: StorageConfig,
-    pub process_config: ProcessManagementConfig,
-    pub task_id: Option<String>,
-}
 
 pub mod backup {
     use super::*;
@@ -231,12 +163,14 @@ pub mod backup {
             None => inner(cfg).await,
         }
     }
-    pub use super::{BackupConfig, ChainConfig, TokenConfig};
+    pub use super::types::{BackupConfig, ChainConfig, TokenConfig};
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
+    use std::sync::atomic::AtomicBool;
     use std::sync::atomic::Ordering;
     use std::time::Duration;
     use tokio::time::timeout;

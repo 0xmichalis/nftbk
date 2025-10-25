@@ -3,9 +3,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use tokio::fs;
 
-use crate::backup::{BackupConfig, ChainConfig, TokenConfig};
 use crate::ipfs::IpfsPinningConfig;
 use crate::server::config::ConfigRaw;
+use crate::types::{BackupConfig, ChainConfig, TokenConfig};
 use crate::{ProcessManagementConfig, StorageConfig};
 
 #[derive(serde::Deserialize)]
