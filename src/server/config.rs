@@ -5,7 +5,7 @@ use std::path::Path;
 use tracing::{error, info};
 
 use crate::ipfs::IpfsPinningConfig;
-use crate::server::auth::JwtCredential;
+use crate::server::auth::jwt::JwtCredential;
 use crate::server::x402::{X402Config, X402ConfigRaw};
 use crate::types::ChainConfig;
 

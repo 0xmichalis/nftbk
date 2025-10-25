@@ -8,6 +8,13 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[derive(serde::Deserialize, Clone, Debug)]
+pub struct JwtCredential {
+    pub issuer: String,
+    pub audience: String,
+    pub verification_key: String,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct JwtClaims {
     pub sub: String, // subject (e.g., user DID)
