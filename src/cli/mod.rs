@@ -47,6 +47,10 @@ pub enum Commands {
         /// Exit on the first error encountered
         #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
         exit_on_error: bool,
+
+        /// Pin content to IPFS using configured providers
+        #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
+        pin_on_ipfs: bool,
     },
     /// Server-related operations
     Server {
@@ -118,6 +122,7 @@ impl Cli {
                 output_path,
                 prune_redundant,
                 exit_on_error,
+                pin_on_ipfs,
             } => {
                 commands::create::run(
                     config_path,
@@ -125,6 +130,7 @@ impl Cli {
                     output_path,
                     prune_redundant,
                     exit_on_error,
+                    pin_on_ipfs,
                 )
                 .await
             }
@@ -184,12 +190,14 @@ mod tests {
                     output_path,
                     prune_redundant,
                     exit_on_error,
+                    pin_on_ipfs,
                 } => {
                     assert_eq!(config_path, PathBuf::from("config.toml"));
                     assert_eq!(tokens_config_path, PathBuf::from("config_tokens.toml"));
                     assert_eq!(output_path, Some(PathBuf::from("nft_backup")));
                     assert!(!prune_redundant);
                     assert!(!exit_on_error);
+                    assert!(!pin_on_ipfs);
                 }
                 _ => panic!("Expected Create command"),
             }
@@ -226,12 +234,14 @@ mod tests {
                     output_path,
                     prune_redundant,
                     exit_on_error,
+                    pin_on_ipfs,
                 } => {
                     assert_eq!(config_path, PathBuf::from("custom_config.toml"));
                     assert_eq!(tokens_config_path, PathBuf::from("custom_tokens.toml"));
                     assert_eq!(output_path, Some(PathBuf::from("/tmp/backup")));
                     assert!(prune_redundant);
                     assert!(exit_on_error);
+                    assert!(!pin_on_ipfs);
                 }
                 _ => panic!("Expected Create command"),
             }

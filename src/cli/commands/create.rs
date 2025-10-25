@@ -12,11 +12,19 @@ pub async fn run(
     output_path: Option<PathBuf>,
     prune_redundant: bool,
     exit_on_error: bool,
+    pin_on_ipfs: bool,
 ) -> Result<()> {
     let token_config = load_token_config(&tokens_config_path).await?;
     let config = load_config(config_path.as_path())?;
     let chain_config = config.chain_config()?;
     let ipfs_pinning_configs = config.ipfs_pinning_providers().to_vec();
+
+    // Validate IPFS pinning configuration
+    if pin_on_ipfs && ipfs_pinning_configs.is_empty() {
+        return Err(anyhow::anyhow!(
+            "IPFS pinning requested (--pin-on-ipfs) but no IPFS pinning providers configured in config file"
+        ));
+    }
 
     let backup_config = create_backup_config(
         chain_config,
@@ -24,7 +32,11 @@ pub async fn run(
         output_path.clone(),
         prune_redundant,
         exit_on_error,
-        ipfs_pinning_configs,
+        if pin_on_ipfs {
+            ipfs_pinning_configs
+        } else {
+            Vec::new()
+        },
     );
 
     let (archive_out, ipfs_out) = backup_from_config(backup_config, None).await?;
@@ -92,6 +104,7 @@ ethereum = []
                 output_path,
                 false,
                 false,
+                false,
             )
             .await;
 
@@ -114,6 +127,7 @@ ethereum = []
                 None,
                 false,
                 false,
+                false,
             )
             .await;
 
@@ -133,6 +147,7 @@ ethereum = []
                 config_file.path().to_path_buf(),
                 non_existent_path,
                 None,
+                false,
                 false,
                 false,
             )
@@ -168,6 +183,7 @@ ethereum = ["0x123:1"]
                 config_file.path().to_path_buf(),
                 tokens_file.path().to_path_buf(),
                 Some(output_path.clone()),
+                false,
                 false,
                 false,
             )
@@ -210,6 +226,7 @@ base_url = "https://api.pinata.cloud"
                 output_path,
                 false,
                 false,
+                false,
             )
             .await;
 
@@ -229,6 +246,7 @@ base_url = "https://api.pinata.cloud"
                 output_path,
                 true,
                 true,
+                false,
             )
             .await;
 
@@ -257,12 +275,68 @@ base_url = "https://api.pinata.cloud"
                 None, // No output path
                 false,
                 false,
+                true, // pin_on_ipfs = true to use IPFS providers
             )
             .await;
 
             if let Err(e) = &result {
                 println!("Error: {}", e);
             }
+            assert!(result.is_ok());
+        }
+
+        #[tokio::test]
+        async fn fails_when_pin_on_ipfs_requested_but_no_providers_configured() {
+            let (config_file, tokens_file) = create_test_configs().await;
+            let temp_dir = TempDir::new().unwrap();
+            let output_path = Some(temp_dir.path().to_path_buf());
+
+            // Test with pin_on_ipfs = true but no IPFS providers in config
+            let result = run(
+                config_file.path().to_path_buf(),
+                tokens_file.path().to_path_buf(),
+                output_path,
+                false,
+                false,
+                true, // pin_on_ipfs = true
+            )
+            .await;
+
+            assert!(result.is_err());
+            let error_msg = result.unwrap_err().to_string();
+            assert!(error_msg.contains(
+                "IPFS pinning requested (--pin-on-ipfs) but no IPFS pinning providers configured"
+            ));
+        }
+
+        #[tokio::test]
+        async fn succeeds_when_pin_on_ipfs_requested_and_providers_configured() {
+            let (_config_file, tokens_file) = create_test_configs().await;
+            let temp_dir = TempDir::new().unwrap();
+            let output_path = Some(temp_dir.path().to_path_buf());
+
+            // Create unified config with IPFS providers
+            let config_with_ipfs = tempfile::NamedTempFile::new().unwrap();
+            let config_content = r#"
+[chains]
+ethereum = "https://ethereum.publicnode.com"
+
+[[ipfs_pinning_provider]]
+type = "pinata"
+base_url = "https://api.pinata.cloud"
+"#;
+            std::fs::write(config_with_ipfs.path(), config_content).unwrap();
+
+            let result = run(
+                config_with_ipfs.path().to_path_buf(),
+                tokens_file.path().to_path_buf(),
+                output_path,
+                false,
+                false,
+                true, // pin_on_ipfs = true
+            )
+            .await;
+
             assert!(result.is_ok());
         }
     }
