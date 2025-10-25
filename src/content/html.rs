@@ -1,8 +1,9 @@
+use std::collections::HashSet;
+use std::path::Path;
+
 use anyhow::Result;
 use regex::Regex;
 use scraper::{Html, Selector};
-use std::collections::HashSet;
-use std::path::Path;
 use tokio::fs;
 use tracing::{debug, info, warn};
 use url::Url;
@@ -246,4 +247,600 @@ pub async fn download_html_resources(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod add_resource_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn adds_relative_resource() {
+        let mut resources = Vec::new();
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        add_resource(
+            &mut resources,
+            "style.css",
+            "https://example.com/",
+            dir_path,
+        );
+
+        assert_eq!(resources.len(), 1);
+        let (absolute_url, resource_url, resource_path) = &resources[0];
+        assert_eq!(absolute_url, "https://example.com/style.css");
+        assert_eq!(resource_url, "style.css");
+        assert_eq!(resource_path, &dir_path.join("style.css"));
+    }
+
+    #[test]
+    fn rejects_protocol_relative_urls() {
+        let mut resources = Vec::new();
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        add_resource(
+            &mut resources,
+            "//cdn.example.com/script.js",
+            "https://example.com/",
+            dir_path,
+        );
+
+        // Protocol-relative URLs should be rejected as unsafe (they start with '/')
+        assert_eq!(resources.len(), 0);
+    }
+
+    #[test]
+    fn skips_unsafe_paths() {
+        let mut resources = Vec::new();
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        add_resource(
+            &mut resources,
+            "../style.css",
+            "https://example.com/",
+            dir_path,
+        );
+        add_resource(
+            &mut resources,
+            "/absolute/path.css",
+            "https://example.com/",
+            dir_path,
+        );
+
+        assert_eq!(resources.len(), 0);
+    }
+
+    #[test]
+    fn skips_data_urls() {
+        let mut resources = Vec::new();
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        add_resource(
+            &mut resources,
+            "data:image/png;base64,iVBORw0KGgo=",
+            "https://example.com/",
+            dir_path,
+        );
+        add_resource(
+            &mut resources,
+            "javascript:alert('x')",
+            "https://example.com/",
+            dir_path,
+        );
+        add_resource(&mut resources, "#anchor", "https://example.com/", dir_path);
+
+        assert_eq!(resources.len(), 0);
+    }
+
+    #[test]
+    fn handles_ipfs_urls() {
+        let mut resources = Vec::new();
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        add_resource(
+            &mut resources,
+            "ipfs://QmHash",
+            "https://example.com/",
+            dir_path,
+        );
+
+        assert_eq!(resources.len(), 1);
+        let (absolute_url, _, _) = &resources[0];
+        // The resolve_url function should convert ipfs:// to a proper URL
+        assert!(absolute_url.starts_with("http"));
+    }
+
+    #[test]
+    fn strips_query_parameters() {
+        let mut resources = Vec::new();
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        add_resource(
+            &mut resources,
+            "style.css?v=1.0",
+            "https://example.com/",
+            dir_path,
+        );
+
+        assert_eq!(resources.len(), 1);
+        let (_, _, resource_path) = &resources[0];
+        assert_eq!(resource_path, &dir_path.join("style.css"));
+    }
+}
+
+#[cfg(test)]
+mod is_locale_file_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn identifies_locale_txt_file() {
+        let path = PathBuf::from("locale/en.txt");
+        assert!(is_locale_file(&path));
+    }
+
+    #[test]
+    fn identifies_locale_file_with_subdir() {
+        let path = PathBuf::from("some/path/locale/fr.txt");
+        assert!(is_locale_file(&path));
+    }
+
+    #[test]
+    fn rejects_non_txt_extension() {
+        let path = PathBuf::from("locale/en.json");
+        assert!(!is_locale_file(&path));
+    }
+
+    #[test]
+    fn rejects_non_locale_parent() {
+        let path = PathBuf::from("other/en.txt");
+        assert!(!is_locale_file(&path));
+    }
+
+    #[test]
+    fn rejects_file_without_extension() {
+        let path = PathBuf::from("locale/en");
+        assert!(!is_locale_file(&path));
+    }
+
+    #[test]
+    fn rejects_root_file() {
+        let path = PathBuf::from("locale.txt");
+        assert!(!is_locale_file(&path));
+    }
+}
+
+#[cfg(test)]
+mod is_script_js_file_tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn identifies_script_js_file() {
+        let path = PathBuf::from("script.js");
+        assert!(is_script_js_file(&path));
+    }
+
+    #[test]
+    fn identifies_script_with_numbers() {
+        let path = PathBuf::from("script123.js");
+        assert!(is_script_js_file(&path));
+    }
+
+    #[test]
+    fn identifies_script_with_dashes() {
+        let path = PathBuf::from("script-main.js");
+        assert!(is_script_js_file(&path));
+    }
+
+    #[test]
+    fn identifies_script_with_path() {
+        let path = PathBuf::from("path/to/script.js");
+        assert!(is_script_js_file(&path));
+    }
+
+    #[test]
+    fn rejects_non_script_file() {
+        let path = PathBuf::from("other.js");
+        assert!(!is_script_js_file(&path));
+    }
+
+    #[test]
+    fn rejects_script_without_js_extension() {
+        let path = PathBuf::from("script.txt");
+        assert!(!is_script_js_file(&path));
+    }
+
+    #[test]
+    fn rejects_script_that_doesnt_start_with_script() {
+        let path = PathBuf::from("myscript.js");
+        assert!(!is_script_js_file(&path));
+    }
+}
+
+#[cfg(test)]
+mod is_safe_resource_path_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_safe_relative_paths() {
+        assert!(is_safe_resource_path("style.css"));
+        assert!(is_safe_resource_path("images/logo.png"));
+        assert!(is_safe_resource_path("js/app.js"));
+    }
+
+    #[test]
+    fn rejects_path_traversal() {
+        assert!(!is_safe_resource_path("../style.css"));
+        assert!(!is_safe_resource_path("../../etc/passwd"));
+        assert!(!is_safe_resource_path("folder/../style.css"));
+    }
+
+    #[test]
+    fn rejects_absolute_paths() {
+        assert!(!is_safe_resource_path("/style.css"));
+        assert!(!is_safe_resource_path("/etc/passwd"));
+    }
+
+    #[test]
+    fn rejects_data_urls() {
+        assert!(!is_safe_resource_path("data:image/png;base64,iVBORw0KGgo="));
+    }
+
+    #[test]
+    fn rejects_javascript_urls() {
+        assert!(!is_safe_resource_path("javascript:alert('x')"));
+    }
+
+    #[test]
+    fn rejects_anchors() {
+        assert!(!is_safe_resource_path("#section"));
+    }
+}
+
+#[cfg(test)]
+mod extract_resource_paths_from_file_tests {
+    use super::*;
+    use tempfile::TempDir;
+    use tokio::fs;
+
+    #[tokio::test]
+    async fn extracts_from_locale_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let locale_dir = temp_dir.path().join("locale");
+        fs::create_dir_all(&locale_dir).await.unwrap();
+
+        let locale_file = locale_dir.join("en.txt");
+        let content = r#"
+# This is a comment
+key1=image.png
+key2=video.mp4
+key3=not-a-file
+key4=document.pdf
+"#;
+        fs::write(&locale_file, content).await.unwrap();
+
+        let found_urls = extract_resource_paths_from_file(&locale_file)
+            .await
+            .unwrap();
+        assert_eq!(found_urls.len(), 3);
+        assert!(found_urls.contains(&"image.png".to_string()));
+        assert!(found_urls.contains(&"video.mp4".to_string()));
+        assert!(found_urls.contains(&"document.pdf".to_string()));
+    }
+
+    #[tokio::test]
+    async fn extracts_from_script_js_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let script_file = temp_dir.path().join("script.js");
+        let content = r#"
+var config = {
+    image: "logo.png",
+    video: "intro.mp4",
+    audio: "sound.mp3"
+};
+loadResource("data.json");
+fetch("api.xml");
+"#;
+        fs::write(&script_file, content).await.unwrap();
+
+        let found_urls = extract_resource_paths_from_file(&script_file)
+            .await
+            .unwrap();
+        assert_eq!(found_urls.len(), 5);
+        assert!(found_urls.contains(&"logo.png".to_string()));
+        assert!(found_urls.contains(&"intro.mp4".to_string()));
+        assert!(found_urls.contains(&"sound.mp3".to_string()));
+        assert!(found_urls.contains(&"data.json".to_string()));
+        assert!(found_urls.contains(&"api.xml".to_string()));
+    }
+
+    #[tokio::test]
+    async fn handles_empty_locale_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let locale_dir = temp_dir.path().join("locale");
+        fs::create_dir_all(&locale_dir).await.unwrap();
+
+        let locale_file = locale_dir.join("en.txt");
+        fs::write(&locale_file, "").await.unwrap();
+
+        let found_urls = extract_resource_paths_from_file(&locale_file)
+            .await
+            .unwrap();
+        assert_eq!(found_urls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn handles_empty_script_file() {
+        let temp_dir = TempDir::new().unwrap();
+        let script_file = temp_dir.path().join("script.js");
+        fs::write(&script_file, "").await.unwrap();
+
+        let found_urls = extract_resource_paths_from_file(&script_file)
+            .await
+            .unwrap();
+        assert_eq!(found_urls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn ignores_non_locale_non_script_files() {
+        let temp_dir = TempDir::new().unwrap();
+        let other_file = temp_dir.path().join("other.txt");
+        let content = "image.png video.mp4";
+        fs::write(&other_file, content).await.unwrap();
+
+        let found_urls = extract_resource_paths_from_file(&other_file).await.unwrap();
+        assert_eq!(found_urls.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn handles_locale_file_with_comments_and_empty_lines() {
+        let temp_dir = TempDir::new().unwrap();
+        let locale_dir = temp_dir.path().join("locale");
+        fs::create_dir_all(&locale_dir).await.unwrap();
+
+        let locale_file = locale_dir.join("en.txt");
+        let content = r#"
+# Comment line
+key1=image.png
+
+# Another comment
+key2=video.mp4
+
+key3=not-a-file
+"#;
+        fs::write(&locale_file, content).await.unwrap();
+
+        let found_urls = extract_resource_paths_from_file(&locale_file)
+            .await
+            .unwrap();
+        assert_eq!(found_urls.len(), 2);
+        assert!(found_urls.contains(&"image.png".to_string()));
+        assert!(found_urls.contains(&"video.mp4".to_string()));
+    }
+}
+
+#[cfg(test)]
+mod download_html_resources_tests {
+    use super::*;
+    use tempfile::TempDir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn downloads_html_resources() {
+        let mock_server = MockServer::start().await;
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        // Mock the main HTML page
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"
+                <html>
+                    <head>
+                        <link rel="stylesheet" href="style.css">
+                        <script src="script.js"></script>
+                    </head>
+                    <body>
+                        <img src="image.png" alt="test">
+                    </body>
+                </html>
+            "#,
+            ))
+            .mount(&mock_server)
+            .await;
+
+        // Mock the resources
+        Mock::given(method("GET"))
+            .and(path("/style.css"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("body { color: red; }"))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/script.js"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("console.log('hello');"))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/image.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"fake-png-data"))
+            .mount(&mock_server)
+            .await;
+
+        let html_content = r#"
+            <html>
+                <head>
+                    <link rel="stylesheet" href="style.css">
+                    <script src="script.js"></script>
+                </head>
+                <body>
+                    <img src="image.png" alt="test">
+                </body>
+            </html>
+        "#;
+
+        let result = download_html_resources(html_content, &mock_server.uri(), dir_path).await;
+        assert!(result.is_ok());
+
+        // Check that files were downloaded
+        assert!(dir_path.join("style.css").exists());
+        assert!(dir_path.join("script.js").exists());
+        assert!(dir_path.join("image.png").exists());
+    }
+
+    #[tokio::test]
+    async fn skips_unsafe_resources() {
+        let mock_server = MockServer::start().await;
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        // Mock the safe resource
+        Mock::given(method("GET"))
+            .and(path("/safe-image.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"fake-png-data"))
+            .mount(&mock_server)
+            .await;
+
+        let html_content = "
+            <html>
+                <head>
+                    <link rel=\"stylesheet\" href=\"../style.css\">
+                    <script src=\"/absolute/script.js\"></script>
+                    <img src=\"data:image/png;base64,iVBORw0KGgo=\" alt=\"data\">
+                    <img src=\"javascript:alert('x')\" alt=\"js\">
+                    <img src=\"#anchor\" alt=\"anchor\">
+                </head>
+                <body>
+                    <img src=\"safe-image.png\" alt=\"safe\">
+                </body>
+            </html>
+        ";
+
+        let result = download_html_resources(html_content, &mock_server.uri(), dir_path).await;
+        assert!(result.is_ok());
+
+        // Only the safe image should be downloaded
+        assert!(dir_path.join("safe-image.png").exists());
+    }
+
+    #[tokio::test]
+    async fn handles_inline_script_resources() {
+        let mock_server = MockServer::start().await;
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        // Mock the resources that would be extracted from inline script
+        Mock::given(method("GET"))
+            .and(path("/dynamic.js"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("console.log('dynamic');"))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/api.json"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(r#"{"data": "test"}"#))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/config.xml"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("<config>test</config>"))
+            .mount(&mock_server)
+            .await;
+
+        let html_content = r#"
+            <html>
+                <head>
+                    <script>
+                        loadScript("dynamic.js");
+                        fetchData("api.json");
+                        loadConfig("config.xml");
+                    </script>
+                </head>
+                <body></body>
+            </html>
+        "#;
+
+        let result = download_html_resources(html_content, &mock_server.uri(), dir_path).await;
+        assert!(result.is_ok());
+
+        // Check that files were downloaded
+        assert!(dir_path.join("dynamic.js").exists());
+        assert!(dir_path.join("api.json").exists());
+        assert!(dir_path.join("config.xml").exists());
+    }
+
+    #[tokio::test]
+    async fn handles_protocol_relative_urls() {
+        // Test that protocol-relative URLs are correctly rejected as unsafe
+        let mut resources = Vec::new();
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        add_resource(
+            &mut resources,
+            "//cdn.example.com/style.css",
+            "https://example.com/",
+            dir_path,
+        );
+
+        // Protocol-relative URLs should be rejected as unsafe (they start with '/')
+        assert_eq!(resources.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn handles_malformed_html() {
+        let mock_server = MockServer::start().await;
+        let temp_dir = TempDir::new().unwrap();
+        let dir_path = temp_dir.path();
+
+        // Mock the resources that might be extracted from malformed HTML
+        Mock::given(method("GET"))
+            .and(path("/style.css"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("body { color: red; }"))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/script.js"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("console.log('hello');"))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/image.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"fake-png-data"))
+            .mount(&mock_server)
+            .await;
+
+        let html_content = r#"
+            <html>
+                <head>
+                    <link rel="stylesheet" href="style.css"
+                    <script src="script.js"
+                </head>
+                <body>
+                    <img src="image.png"
+                </body>
+            </html>
+        "#;
+
+        let result = download_html_resources(html_content, &mock_server.uri(), dir_path).await;
+        assert!(result.is_ok());
+
+        // Should handle malformed HTML gracefully and still download resources
+        assert!(dir_path.join("style.css").exists());
+        assert!(dir_path.join("script.js").exists());
+        assert!(dir_path.join("image.png").exists());
+    }
 }
