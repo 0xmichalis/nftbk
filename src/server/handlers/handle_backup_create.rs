@@ -45,7 +45,7 @@ fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), 
 }
 
 fn validate_backup_request_impl(
-    chain_config: &crate::backup::ChainConfig,
+    chain_config: &crate::ChainConfig,
     ipfs_pinning_configs_len: usize,
     req: &BackupRequest,
 ) -> Result<(), String> {
@@ -568,7 +568,7 @@ mod handle_backup_endpoint_tests {
     fn make_state(ipfs_pinning_configs: Vec<IpfsPinningConfig>) -> AppState {
         let mut chains = HashMap::new();
         chains.insert("ethereum".to_string(), "rpc://dummy".to_string());
-        let chain_config = crate::backup::ChainConfig(chains);
+        let chain_config = crate::ChainConfig(chains);
         let (tx, _rx) = mpsc::channel(1);
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://user:pass@localhost/db")

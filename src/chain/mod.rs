@@ -597,7 +597,7 @@ mod process_nfts_tests {
     use super::*;
     use crate::content::Options;
     use crate::ipfs::IpfsPinningClient;
-    use crate::{ContractTokenId, ProcessManagementConfig};
+    use crate::{chain::common::ContractTokenId, ProcessManagementConfig};
     use anyhow::anyhow;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;

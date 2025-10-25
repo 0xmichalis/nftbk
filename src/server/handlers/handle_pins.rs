@@ -421,7 +421,7 @@ mod handle_pins_endpoint_tests {
     fn make_state(ipfs_pinning_configs: Vec<IpfsPinningConfig>) -> AppState {
         let mut chains = HashMap::new();
         chains.insert("ethereum".to_string(), "rpc://dummy".to_string());
-        let chain_config = crate::backup::ChainConfig(chains);
+        let chain_config = crate::ChainConfig(chains);
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://user:pass@localhost/db")

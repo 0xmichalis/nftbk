@@ -276,7 +276,7 @@ mod handle_download_tests {
     fn make_state() -> AppState {
         let mut chains = HashMap::new();
         chains.insert("ethereum".to_string(), "rpc://dummy".to_string());
-        let chain_config = crate::backup::ChainConfig(chains);
+        let chain_config = crate::ChainConfig(chains);
         // Lazy pool does not actually connect
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://user:pass@localhost/db")

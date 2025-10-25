@@ -150,7 +150,7 @@ pub async fn run(
 }
 
 async fn request_backup(
-    token_config: &crate::backup::TokenConfig,
+    token_config: &crate::TokenConfig,
     server_address: &str,
     client: &Client,
     auth_token: Option<&str>,

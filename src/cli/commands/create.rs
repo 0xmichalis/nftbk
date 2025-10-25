@@ -3,7 +3,6 @@ use std::path::PathBuf;
 use anyhow::Result;
 use tracing::error;
 
-use crate::backup::backup_from_config;
 use crate::cli::config::{create_backup_config, load_config, load_token_config};
 
 pub async fn run(
@@ -39,7 +38,7 @@ pub async fn run(
         },
     );
 
-    let (archive_out, ipfs_out) = backup_from_config(backup_config, None).await?;
+    let (archive_out, ipfs_out) = backup_config.backup(None).await?;
 
     // Write combined error log to file if present
     let mut merged = Vec::new();

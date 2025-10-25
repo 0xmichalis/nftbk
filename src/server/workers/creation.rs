@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{error, info};
 
-use crate::backup::backup_from_config;
 use crate::server::archive::{
     get_zipped_backup_paths, sync_files, zip_backup, ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
 };
@@ -240,7 +239,7 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
     let span = tracing::info_span!("backup_task", task_id = %task_id);
 
     // Run backup
-    let backup_result = backup_from_config(backup_cfg, Some(span)).await;
+    let backup_result = backup_cfg.backup(Some(span)).await;
 
     // Check backup result
     let (archive_outcome, ipfs_outcome) = match backup_result {
