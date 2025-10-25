@@ -32,7 +32,7 @@ impl BackupConfig {
         // Validate backup configuration
         self.validate()?;
 
-        async fn inner(cfg: BackupConfig) -> Result<(ArchiveOutcome, IpfsOutcome)> {
+        async fn backup_inner(cfg: BackupConfig) -> Result<(ArchiveOutcome, IpfsOutcome)> {
             info!(
                 "Protection requested: download to disk={}, pin to IPFS={}",
                 cfg.storage_config.output_path.is_some(),
@@ -140,8 +140,8 @@ impl BackupConfig {
         }
 
         match span {
-            Some(span) => inner(self).instrument(span).await,
-            None => inner(self).await,
+            Some(span) => backup_inner(self).instrument(span).await,
+            None => backup_inner(self).await,
         }
     }
 }
