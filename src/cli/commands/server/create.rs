@@ -24,7 +24,73 @@ const BACKUPS_API_PATH: &str = "/v1/backups";
 enum BackupStart {
     Created(BackupCreateResponse),
     Exists(BackupCreateResponse),
-    Conflict { retry_url: String, message: String },
+    Conflict {
+        retry_url: String,
+        message: String,
+        instance: Option<String>,
+    },
+}
+
+fn extract_task_id_from_retry_url(retry_url: &str) -> Option<String> {
+    // Expected format: {BACKUPS_API_PATH}/{task_id}/retry
+    let prefix = format!("{}/", BACKUPS_API_PATH);
+    if !retry_url.starts_with(&prefix) {
+        return None;
+    }
+    let tail = &retry_url[prefix.len()..];
+    let parts: Vec<&str> = tail.split('/').collect();
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts[0].to_string())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn force_delete_and_retry(
+    client: &Client,
+    server_address: &str,
+    auth_token: Option<&str>,
+    retry_url: &str,
+    instance_url: Option<&str>,
+    token_config: &crate::TokenConfig,
+    user_agent: &str,
+    pin_on_ipfs: bool,
+    x402_private_key: Option<&str>,
+) -> Result<String> {
+    let source = if !retry_url.is_empty() {
+        Some(retry_url)
+    } else {
+        instance_url
+    };
+    if let Some(src) = source {
+        if let Some(conflict_task_id) = extract_task_id_from_retry_url(src) {
+            let _ = delete_backup(client, server_address, &conflict_task_id, auth_token).await;
+            let start2 = request_backup(
+                token_config,
+                server_address,
+                client,
+                auth_token,
+                user_agent,
+                pin_on_ipfs,
+                x402_private_key,
+            )
+            .await?;
+            return match start2 {
+                BackupStart::Created(r) | BackupStart::Exists(r) => Ok(r.task_id.clone()),
+                BackupStart::Conflict {
+                    message, retry_url, ..
+                } => anyhow::bail!(
+                    "{}\nCould not create new task after force delete. Try POST to {}{}",
+                    message,
+                    server_address.trim_end_matches('/'),
+                    retry_url
+                ),
+            };
+        }
+    }
+    anyhow::bail!(
+        "Could not parse conflict task id from server response (missing retry/instance URL)"
+    )
 }
 
 pub async fn run(
@@ -82,13 +148,25 @@ pub async fn run(
                     println!("Task ID (after delete): {task_id2}");
                     task_id2
                 }
-                BackupStart::Conflict { message, retry_url } => {
-                    anyhow::bail!(
-                        "{}\nCould not create new task after delete. Try POST to {}{}",
-                        message,
-                        server_address.trim_end_matches('/'),
-                        retry_url
-                    );
+                BackupStart::Conflict {
+                    message: _,
+                    retry_url,
+                    instance,
+                } => {
+                    let task_id2 = force_delete_and_retry(
+                        &client,
+                        &server_address,
+                        auth_token.as_deref(),
+                        &retry_url,
+                        instance.as_deref(),
+                        &token_config,
+                        &user_agent,
+                        pin_on_ipfs,
+                        x402_private_key.as_deref(),
+                    )
+                    .await?;
+                    println!("Task ID (after force delete): {task_id2}");
+                    task_id2
                 }
             }
         } else {
@@ -117,13 +195,33 @@ pub async fn run(
                 println!("Task ID (exists): {task_id}");
                 task_id
             }
-            BackupStart::Conflict { retry_url, message } => {
-                anyhow::bail!(
-                    "{}\nRun the CLI with --force true, or POST to {}{}",
-                    message,
-                    server_address.trim_end_matches('/'),
-                    retry_url
-                );
+            BackupStart::Conflict {
+                retry_url,
+                message: _,
+                instance,
+            } => {
+                if force {
+                    let task_id = force_delete_and_retry(
+                        &client,
+                        &server_address,
+                        auth_token.as_deref(),
+                        &retry_url,
+                        instance.as_deref(),
+                        &token_config,
+                        &user_agent,
+                        pin_on_ipfs,
+                        x402_private_key.as_deref(),
+                    )
+                    .await?;
+                    println!("Task ID (after force delete): {task_id}");
+                    task_id
+                } else {
+                    anyhow::bail!(
+                        "Conflict creating backup. Re-run with --force true, or POST to {}{}",
+                        server_address.trim_end_matches('/'),
+                        retry_url
+                    );
+                }
             }
         }
     };
@@ -217,7 +315,15 @@ async fn request_backup(
             .and_then(|v| v.as_str())
             .unwrap_or(&format!("Server returned conflict for {BACKUPS_API_PATH}"))
             .to_string();
-        return Ok(BackupStart::Conflict { retry_url, message });
+        let instance = body
+            .get("instance")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        return Ok(BackupStart::Conflict {
+            retry_url,
+            message,
+            instance,
+        });
     }
     let text = resp.text().await.unwrap_or_default();
     anyhow::bail!("Server error: {}", text);
@@ -682,7 +788,9 @@ mod tests {
 
             assert!(result.is_ok());
             match result.unwrap() {
-                BackupStart::Conflict { retry_url, message } => {
+                BackupStart::Conflict {
+                    retry_url, message, ..
+                } => {
                     assert_eq!(retry_url, "/v1/backups/conflict-task-456/retry");
                     assert_eq!(message, "Task already in progress");
                 }
