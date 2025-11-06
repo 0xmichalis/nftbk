@@ -88,9 +88,7 @@ run: start-db migrate-db run-server
 
 .PHONY: run-server
 run-server:
-	@if [ -f config_auth.toml ]; then AUTH_ARG="--auth-config config_auth.toml"; else AUTH_ARG=""; fi; \
-	    if [ -f config_ipfs.toml ]; then IPFS_ARG="--ipfs-config config_ipfs.toml"; else IPFS_ARG=""; fi; \
-		cargo run --bin nftbk-server -- --unsafe-skip-checksum-check true --backup-parallelism 2 $$AUTH_ARG $$IPFS_ARG
+	cargo run --bin nftbk-server -- --unsafe-skip-checksum-check true --backup-parallelism 2
 
 .PHONY: start-db
 start-db:
