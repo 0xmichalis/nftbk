@@ -225,6 +225,7 @@ pub fn build_router(
             let x402 = config
                 .to_middleware()
                 .expect("invalid x402 middleware config")
+                .settle_before_execution()
                 .with_description("Backup creation API");
 
             let price_tag = config

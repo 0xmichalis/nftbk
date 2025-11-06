@@ -11109,9 +11109,9 @@ dependencies = [
 
 [[package]]
 name = "x402-axum"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d98f62e1f299143052ad80db4726c585751a13ca80825de5421fd0e88fde24d"
+checksum = "99320795584c2a5fe4fed86bdaf59a2a83338082ecdaa6bc631775938a1a4c01"
 dependencies = [
  "axum-core",
  "http 1.3.1",
