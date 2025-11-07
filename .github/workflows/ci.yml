@@ -14,19 +14,19 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-test:
-    name: Build and Test
+  fmt:
+    name: Check Format
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
       with:
-        fetch-depth: 0  # Full clone to ensure git history is available
+        fetch-depth: 0
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
-        components: rustfmt, clippy
+        components: rustfmt
 
     - name: Cache Dependencies
       uses: actions/cache@v3
@@ -41,11 +41,54 @@ jobs:
     - name: Check Format
       run: cargo fmt --all -- --check
 
+  clippy:
+    name: Clippy
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: clippy
+
+    - name: Cache Dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.cargo/bin
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-bin-${{ hashFiles('.github/workflows/ci.yml') }}
+
     - name: Clippy
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-    - name: Check
-      run: cargo check --verbose --workspace --frozen
+  sort:
+    name: Check Cargo Sort
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.cargo/bin
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-bin-${{ hashFiles('.github/workflows/ci.yml') }}
 
     - name: Check cargo sort
       run: |
@@ -54,12 +97,56 @@ jobs:
         fi
         cargo sort --check
 
+  sqlx:
+    name: Check SQLx Cache
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.cargo/bin
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-bin-${{ hashFiles('.github/workflows/ci.yml') }}
+
     - name: Check SQLx cache
       run: |
         if ! command -v sqlx > /dev/null; then
           cargo install sqlx-cli
         fi
         cargo sqlx prepare --check
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          ~/.cargo/bin
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-bin-${{ hashFiles('.github/workflows/ci.yml') }}
 
     - name: Install cargo-tarpaulin
       run: |
@@ -86,7 +173,7 @@ jobs:
   docker-publish:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: build-test # Only run after successful build and test
+    needs: [fmt, clippy, sort, sqlx, test]
     if: github.ref == 'refs/heads/main' # Only run on main branch
 
     permissions:
