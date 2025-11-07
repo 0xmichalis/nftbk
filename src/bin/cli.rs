@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use tracing::debug;
 
 use nftbk::cli::Cli;

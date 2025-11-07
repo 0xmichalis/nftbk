@@ -1,7 +1,7 @@
 use std::env;
 
 use clap::Parser;
-use dotenv::dotenv;
+use dotenvy::dotenv;
 use tracing::{error, info};
 
 use nftbk::envvar::{is_defined, should_enable_color};

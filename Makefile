@@ -3,6 +3,13 @@
 .PHONY: all
 all: fmt sort clippy test
 
+.PHONY: audit
+audit:
+	@if ! cargo audit --version >/dev/null 2>&1; then \
+		cargo install cargo-audit; \
+	fi
+	cargo audit
+
 .PHONY: fmt
 fmt:
 	cargo fmt --all
