@@ -1,17 +1,20 @@
+use std::collections::HashSet;
+
 use axum::{
     extract::{Extension, Json, State},
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
 use serde_json;
-use std::collections::HashSet;
 use tracing::{debug, error, info};
 
 use crate::server::api::{ApiProblem, BackupCreateResponse, BackupRequest, ProblemJson};
 use crate::server::archive::negotiate_archive_format;
 use crate::server::database::r#trait::Database;
 use crate::server::hashing::compute_task_id;
-use crate::server::{AppState, BackupTask, BackupTaskOrShutdown, StorageMode, TaskType};
+use crate::server::{
+    AppState, BackupTask, BackupTaskOrShutdown, QuoteCache, StorageMode, TaskType,
+};
 
 fn get_status(meta: &crate::server::database::BackupTask, scope: &StorageMode) -> Option<String> {
     match scope {
@@ -40,7 +43,7 @@ pub(crate) fn validate_scope(
     }
 }
 
-fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), String> {
+pub fn validate_backup_request(state: &AppState, req: &BackupRequest) -> Result<(), String> {
     validate_backup_request_impl(&state.chain_config, state.ipfs_pinning_configs.len(), req)
 }
 
@@ -151,6 +154,7 @@ pub async fn handle_backup_create(
     let response = handle_backup_create_core(
         &*state.db,
         &state.backup_task_sender,
+        &state.quote_cache,
         requestor,
         &headers,
         req,
@@ -160,9 +164,60 @@ pub async fn handle_backup_create(
     response
 }
 
+async fn validate_quote_if_present(
+    headers: &HeaderMap,
+    quote_cache: &QuoteCache,
+    task_id: &str,
+) -> Option<axum::response::Response> {
+    if let Some(quote_id_header) = headers.get("X-Quote-Id") {
+        if let Ok(quote_id) = quote_id_header.to_str() {
+            // Only hold the lock while accessing the cache
+            let cache_result = {
+                let mut cache = quote_cache.lock().await;
+                cache
+                    .get(quote_id)
+                    .map(|(price_opt, quote_task_id)| (price_opt.clone(), quote_task_id.clone()))
+            };
+            match cache_result {
+                None => {
+                    let problem = ProblemJson::from_status(
+                        StatusCode::BAD_REQUEST,
+                        Some("Invalid or expired quote_id".to_string()),
+                        Some("/v1/backups".to_string()),
+                    );
+                    return Some(problem.into_response());
+                }
+                Some((price_opt, quote_task_id)) => {
+                    if quote_task_id != task_id {
+                        let problem = ProblemJson::from_status(
+                            StatusCode::BAD_REQUEST,
+                            Some(format!(
+                                "Quote task_id mismatch: quote is for task {}, but request is for task {}",
+                                quote_task_id, task_id
+                            )),
+                            Some("/v1/backups".to_string()),
+                        );
+                        return Some(problem.into_response());
+                    }
+                    if price_opt.is_none() {
+                        let problem = ProblemJson::from_status(
+                            StatusCode::BAD_REQUEST,
+                            Some("Quote is not ready yet".to_string()),
+                            Some("/v1/backups".to_string()),
+                        );
+                        return Some(problem.into_response());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 async fn handle_backup_create_core<DB: Database + ?Sized>(
     db: &DB,
     backup_task_sender: &tokio::sync::mpsc::Sender<BackupTaskOrShutdown>,
+    quote_cache: &QuoteCache,
     requestor: Option<String>,
     headers: &HeaderMap,
     req: BackupRequest,
@@ -199,6 +254,11 @@ async fn handle_backup_create_core<DB: Database + ?Sized>(
 
     // Determine task id
     let task_id = compute_task_id(&req.tokens, Some(&requestor_str));
+
+    // Validate quote if X-Quote-Id header is present
+    if let Some(error_response) = validate_quote_if_present(headers, quote_cache, &task_id).await {
+        return error_response;
+    }
 
     // Validate against existing tasks
     let existing_meta: Option<crate::server::database::BackupTask> =
@@ -552,11 +612,11 @@ mod validate_backup_request_impl_tests {
 #[cfg(test)]
 mod handle_backup_endpoint_tests {
     use super::handle_backup_create as handle_backup;
-    use axum::http::StatusCode;
+    use axum::http::{Request, StatusCode};
     use axum::{routing::post, Extension, Router};
-    use hyper::Request;
     use serde_json::json;
     use std::collections::HashMap;
+    use std::num::NonZeroUsize;
     use std::sync::Arc;
     use tokio::sync::{mpsc, Mutex};
     use tower::Service;
@@ -581,11 +641,15 @@ mod handle_backup_endpoint_tests {
             auth_token: None,
             pruner_retention_days: 7,
             download_tokens: Arc::new(Mutex::new(HashMap::new())),
+            quote_cache: Arc::new(Mutex::new(lru::LruCache::new(
+                NonZeroUsize::new(1000).unwrap(),
+            ))),
             backup_task_sender: tx,
             db,
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ipfs_pinning_configs,
             ipfs_pinning_instances: Arc::new(Vec::new()),
+            x402_config: None,
         }
     }
 
@@ -650,7 +714,9 @@ mod handle_backup_core_tests {
     use axum::body::to_bytes;
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
-    use tokio::sync::mpsc;
+    use std::num::NonZeroUsize;
+    use std::sync::Arc;
+    use tokio::sync::{mpsc, Mutex};
 
     #[tokio::test]
     async fn returns_400_when_missing_requestor() {
@@ -665,7 +731,10 @@ mod handle_backup_core_tests {
             create_archive: true,
         };
         let headers = HeaderMap::new();
-        let resp = super::handle_backup_create_core(&db, &tx, None, &headers, req, 7)
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
+        let resp = super::handle_backup_create_core(&db, &tx, &quote_cache, None, &headers, req, 7)
             .await
             .into_response();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
@@ -684,9 +753,13 @@ mod handle_backup_core_tests {
             create_archive: true,
         };
         let headers = HeaderMap::new();
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let resp = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:test".to_string()),
             &headers,
             req,
@@ -744,9 +817,13 @@ mod handle_backup_core_tests {
             create_archive: true,
         };
         let headers = HeaderMap::new();
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let resp = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:test".to_string()),
             &headers,
             req,
@@ -789,9 +866,13 @@ mod handle_backup_core_tests {
             create_archive: true,
         };
         let headers = HeaderMap::new();
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let resp = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:privy:alice".to_string()),
             &headers,
             req,
@@ -834,9 +915,13 @@ mod handle_backup_core_tests {
             create_archive: true,
         };
         let headers = HeaderMap::new();
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let resp = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:test".to_string()),
             &headers,
             req,
@@ -861,9 +946,13 @@ mod handle_backup_core_tests {
         };
         let mut headers = HeaderMap::new();
         headers.insert("accept", "application/zip".parse().unwrap());
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let _ = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:test".to_string()),
             &headers,
             req,
@@ -898,9 +987,13 @@ mod handle_backup_core_tests {
         };
         let mut headers = HeaderMap::new();
         headers.insert("accept", "application/gzip".parse().unwrap());
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let _ = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:test".to_string()),
             &headers,
             req,
@@ -935,9 +1028,13 @@ mod handle_backup_core_tests {
         };
         let mut headers = HeaderMap::new();
         headers.insert("accept", "application/json".parse().unwrap());
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let _ = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:test".to_string()),
             &headers,
             req,
@@ -972,9 +1069,13 @@ mod handle_backup_core_tests {
         };
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "Linux".parse().unwrap());
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let _ = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:test".to_string()),
             &headers,
             req,
@@ -1010,9 +1111,13 @@ mod handle_backup_core_tests {
         let mut headers = HeaderMap::new();
         headers.insert("user-agent", "Linux TarPreferred".parse().unwrap());
         headers.insert("accept", "application/zip".parse().unwrap());
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let _ = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:test".to_string()),
             &headers,
             req,
@@ -1046,9 +1151,13 @@ mod handle_backup_core_tests {
             create_archive: false,
         };
         let headers = HeaderMap::new();
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let resp = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:test".to_string()),
             &headers,
             req,
@@ -1103,9 +1212,13 @@ mod handle_backup_core_tests {
             create_archive: false,
         };
         let headers = HeaderMap::new();
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let resp = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:test".to_string()),
             &headers,
             req,
@@ -1161,9 +1274,13 @@ mod handle_backup_core_tests {
         };
         // No accept header -> default zip
         let headers = HeaderMap::new();
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
         let resp = super::handle_backup_create_core(
             &db,
             &tx,
+            &quote_cache,
             Some("did:test".to_string()),
             &headers,
             req,
@@ -1300,5 +1417,128 @@ mod get_status_unit_tests {
             get_status(&meta, &StorageMode::Ipfs),
             Some("in_progress".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod validate_quote_if_present_tests {
+    use super::validate_quote_if_present;
+    use axum::body::to_bytes;
+    use axum::http::{HeaderMap, StatusCode};
+    use axum::response::IntoResponse;
+    use std::num::NonZeroUsize;
+    use std::sync::Arc;
+    use tokio::sync::Mutex;
+
+    #[tokio::test]
+    async fn returns_none_when_no_quote_header() {
+        let headers = HeaderMap::new();
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
+        let task_id = "test_task_id";
+
+        let result = validate_quote_if_present(&headers, &quote_cache, task_id).await;
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn returns_error_when_quote_id_not_in_cache() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Quote-Id", "nonexistent_quote_id".parse().unwrap());
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
+        let task_id = "test_task_id";
+
+        let result = validate_quote_if_present(&headers, &quote_cache, task_id).await;
+
+        assert!(result.is_some());
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["detail"].as_str(), Some("Invalid or expired quote_id"));
+    }
+
+    #[tokio::test]
+    async fn returns_error_when_task_id_mismatch() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Quote-Id", "quote_123".parse().unwrap());
+        let mut cache = lru::LruCache::new(NonZeroUsize::new(1000).unwrap());
+        cache.put(
+            "quote_123".to_string(),
+            (Some("0.1".to_string()), "different_task_id".to_string()),
+        );
+        let quote_cache = Arc::new(Mutex::new(cache));
+        let task_id = "test_task_id";
+
+        let result = validate_quote_if_present(&headers, &quote_cache, task_id).await;
+
+        assert!(result.is_some());
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        let detail = body["detail"].as_str().unwrap();
+        assert!(detail.contains("Quote task_id mismatch"));
+        assert!(detail.contains("different_task_id"));
+        assert!(detail.contains("test_task_id"));
+    }
+
+    #[tokio::test]
+    async fn returns_error_when_price_is_none() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Quote-Id", "quote_123".parse().unwrap());
+        let mut cache = lru::LruCache::new(NonZeroUsize::new(1000).unwrap());
+        cache.put("quote_123".to_string(), (None, "test_task_id".to_string()));
+        let quote_cache = Arc::new(Mutex::new(cache));
+        let task_id = "test_task_id";
+
+        let result = validate_quote_if_present(&headers, &quote_cache, task_id).await;
+
+        assert!(result.is_some());
+        let response = result.unwrap().into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body_bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body["detail"].as_str(), Some("Quote is not ready yet"));
+    }
+
+    #[tokio::test]
+    async fn returns_none_when_quote_is_valid() {
+        let mut headers = HeaderMap::new();
+        headers.insert("X-Quote-Id", "quote_123".parse().unwrap());
+        let mut cache = lru::LruCache::new(NonZeroUsize::new(1000).unwrap());
+        cache.put(
+            "quote_123".to_string(),
+            (Some("0.1".to_string()), "test_task_id".to_string()),
+        );
+        let quote_cache = Arc::new(Mutex::new(cache));
+        let task_id = "test_task_id";
+
+        let result = validate_quote_if_present(&headers, &quote_cache, task_id).await;
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn returns_none_when_header_invalid_utf8_skips_validation() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "X-Quote-Id",
+            axum::http::HeaderValue::from_bytes(&[0xff, 0xfe, 0xfd]).unwrap(),
+        );
+        let quote_cache = Arc::new(Mutex::new(lru::LruCache::new(
+            NonZeroUsize::new(1000).unwrap(),
+        )));
+        let task_id = "test_task_id";
+
+        let result = validate_quote_if_present(&headers, &quote_cache, task_id).await;
+
+        // Invalid UTF-8 headers cannot be parsed, so validation is skipped (to_str() fails)
+        // This results in None (no error) since the header is effectively ignored
+        assert!(result.is_none());
     }
 }

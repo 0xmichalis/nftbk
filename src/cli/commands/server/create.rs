@@ -12,13 +12,17 @@ use zip::ZipArchive;
 use crate::cli::config::load_token_config;
 use crate::cli::x402::X402PaymentHandler;
 use crate::envvar::is_defined;
-use crate::server::api::{self, BackupCreateResponse, BackupRequest, BackupResponse, Tokens};
+use crate::server::api::{
+    self, BackupCreateResponse, BackupRequest, BackupResponse, QuoteCreateResponse, QuoteResponse,
+    Tokens,
+};
 use crate::server::archive::archive_format_from_user_agent;
 use crate::server::hashing::compute_task_id;
 
 use super::common::delete_backup;
 
 const BACKUPS_API_PATH: &str = "/v1/backups";
+const QUOTES_API_PATH: &str = "/v1/backups/quote";
 
 #[derive(Debug)]
 enum BackupStart {
@@ -56,6 +60,7 @@ async fn force_delete_and_retry(
     user_agent: &str,
     pin_on_ipfs: bool,
     x402_private_key: Option<&str>,
+    quote_id: Option<&str>,
 ) -> Result<String> {
     let source = if !retry_url.is_empty() {
         Some(retry_url)
@@ -73,6 +78,7 @@ async fn force_delete_and_retry(
                 user_agent,
                 pin_on_ipfs,
                 x402_private_key,
+                quote_id,
             )
             .await?;
             return match start2 {
@@ -127,6 +133,35 @@ pub async fn run(
     let backup_exists =
         check_backup_exists(&client, &server_address, &task_id, auth_token.as_deref()).await?;
 
+    // Request a quote only if we need to create a backup (for dynamic pricing)
+    // If quote endpoint is not available, continue without quote for backwards compatibility
+    let polling_interval = polling_interval_ms.unwrap_or(10000);
+    let quote_id = if backup_exists && !force {
+        // Backup exists and we're not forcing, no need for quote
+        None
+    } else {
+        // Need to create backup, request quote
+        match request_quote(
+            &token_config,
+            &server_address,
+            &client,
+            auth_token.as_deref(),
+            pin_on_ipfs,
+            polling_interval,
+        )
+        .await
+        {
+            Ok(quote_id) => Some(quote_id),
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to request quote (server may not support quotes): {}",
+                    e
+                );
+                None
+            }
+        }
+    };
+
     let final_task_id = if backup_exists {
         println!("Task ID (exists): {task_id}");
         if force {
@@ -140,6 +175,7 @@ pub async fn run(
                 &user_agent,
                 pin_on_ipfs,
                 x402_private_key.as_deref(),
+                quote_id.as_deref(),
             )
             .await?;
             match start {
@@ -163,6 +199,7 @@ pub async fn run(
                         &user_agent,
                         pin_on_ipfs,
                         x402_private_key.as_deref(),
+                        quote_id.as_deref(),
                     )
                     .await?;
                     println!("Task ID (after force delete): {task_id2}");
@@ -182,6 +219,7 @@ pub async fn run(
             &user_agent,
             pin_on_ipfs,
             x402_private_key.as_deref(),
+            quote_id.as_deref(),
         )
         .await?;
         match start {
@@ -211,6 +249,7 @@ pub async fn run(
                         &user_agent,
                         pin_on_ipfs,
                         x402_private_key.as_deref(),
+                        quote_id.as_deref(),
                     )
                     .await?;
                     println!("Task ID (after force delete): {task_id}");
@@ -247,6 +286,88 @@ pub async fn run(
     .await;
 }
 
+async fn request_quote(
+    token_config: &crate::TokenConfig,
+    server_address: &str,
+    client: &Client,
+    auth_token: Option<&str>,
+    pin_on_ipfs: bool,
+    polling_interval_ms: u64,
+) -> Result<String> {
+    let mut backup_req = BackupRequest {
+        tokens: Vec::new(),
+        pin_on_ipfs,
+        create_archive: true,
+    };
+    for (chain, tokens) in &token_config.chains {
+        backup_req.tokens.push(Tokens {
+            chain: chain.clone(),
+            tokens: tokens.clone(),
+        });
+    }
+
+    let server = server_address.trim_end_matches('/');
+    println!("Requesting quote from server at {server}{QUOTES_API_PATH} ...");
+    let mut req_builder = client
+        .post(format!("{server}{QUOTES_API_PATH}"))
+        .json(&backup_req);
+    if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
+        req_builder =
+            req_builder.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
+    }
+    let resp = req_builder
+        .send()
+        .await
+        .context("Failed to send quote request to server")?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        let text = resp.text().await.unwrap_or_default();
+        anyhow::bail!("Failed to request quote: {} - {}", status, text);
+    }
+
+    let quote_resp: QuoteCreateResponse = resp
+        .json()
+        .await
+        .context("Invalid quote response from server")?;
+    let quote_id = quote_resp.quote_id.clone();
+    println!("Quote ID: {quote_id}");
+
+    // Poll for quote to be ready
+    println!("Waiting for quote to be ready...");
+    let quote_url = format!("{server}{QUOTES_API_PATH}/{quote_id}");
+    loop {
+        tokio::time::sleep(tokio::time::Duration::from_millis(polling_interval_ms)).await;
+        let mut get_req = client.get(&quote_url);
+        if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
+            get_req = get_req.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
+        }
+        let get_resp = get_req
+            .send()
+            .await
+            .context("Failed to check quote status")?;
+
+        let get_status = get_resp.status();
+        if !get_status.is_success() {
+            let text = get_resp.text().await.unwrap_or_default();
+            anyhow::bail!("Failed to get quote: {} - {}", get_status, text);
+        }
+
+        let quote: QuoteResponse = get_resp.json().await.context("Invalid quote response")?;
+
+        if let Some(price) = &quote.price {
+            println!("\nQuote ready! Price: {} USDC", price);
+            return Ok(quote_id);
+        }
+
+        // Still processing, continue polling
+        print!(".");
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn request_backup(
     token_config: &crate::TokenConfig,
     server_address: &str,
@@ -255,6 +376,7 @@ async fn request_backup(
     user_agent: &str,
     pin_on_ipfs: bool,
     x402_private_key: Option<&str>,
+    quote_id: Option<&str>,
 ) -> Result<BackupStart> {
     let mut backup_req = BackupRequest {
         tokens: Vec::new(),
@@ -274,6 +396,10 @@ async fn request_backup(
         .post(format!("{server}{BACKUPS_API_PATH}"))
         .json(&backup_req);
     req_builder = req_builder.header("User-Agent", user_agent);
+    if let Some(quote_id) = quote_id {
+        req_builder = req_builder.header("X-Quote-Id", quote_id);
+        println!("Using quote ID: {quote_id}");
+    }
     if is_defined(&auth_token.as_ref().map(|s| s.to_string())) {
         req_builder =
             req_builder.header("Authorization", format!("Bearer {}", auth_token.unwrap()));
@@ -638,7 +764,7 @@ mod tests {
     use crate::types::TokenConfig;
     use std::collections::HashMap;
     use tempfile::TempDir;
-    use wiremock::matchers::{header, method, path, query_param};
+    use wiremock::matchers::{header, method, path, path_regex, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn create_test_token_config() -> TokenConfig {
@@ -683,6 +809,71 @@ mod tests {
         }
     }
 
+    fn create_test_quote_create_response(quote_id: &str) -> QuoteCreateResponse {
+        QuoteCreateResponse {
+            quote_id: quote_id.to_string(),
+        }
+    }
+
+    fn create_test_quote_response(quote_id: &str, price: Option<&str>) -> QuoteResponse {
+        QuoteResponse {
+            quote_id: quote_id.to_string(),
+            price: price.map(|p| p.to_string()),
+        }
+    }
+
+    mod request_quote_tests {
+        use super::*;
+
+        #[tokio::test]
+        async fn returns_quote_id_when_quote_ready() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let token_config = create_test_token_config();
+            let quote_id = "test-quote-123";
+
+            let quote_create_response = create_test_quote_create_response(quote_id);
+            Mock::given(method("POST"))
+                .and(path("/v1/backups/quote"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&quote_create_response))
+                .mount(&mock_server)
+                .await;
+
+            let quote_ready_response = create_test_quote_response(quote_id, Some("10.5"));
+            Mock::given(method("GET"))
+                .and(path_regex(format!(r"^/v1/backups/quote/{quote_id}$")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(&quote_ready_response))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result =
+                request_quote(&token_config, &server_address, &client, None, false, 5).await;
+
+            assert!(result.is_ok());
+            assert_eq!(result.unwrap(), quote_id);
+        }
+
+        #[tokio::test]
+        async fn errors_on_quote_creation_failure() {
+            let mock_server = MockServer::start().await;
+            let server_address = mock_server.uri();
+            let token_config = create_test_token_config();
+
+            Mock::given(method("POST"))
+                .and(path("/v1/backups/quote"))
+                .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+                .mount(&mock_server)
+                .await;
+
+            let client = Client::new();
+            let result =
+                request_quote(&token_config, &server_address, &client, None, false, 5).await;
+
+            assert!(result.is_err());
+        }
+    }
+
     mod request_backup_tests {
         use super::*;
 
@@ -708,6 +899,7 @@ mod tests {
                 None,
                 "TestAgent",
                 false,
+                None,
                 None,
             )
             .await;
@@ -743,6 +935,7 @@ mod tests {
                 None,
                 "TestAgent",
                 false,
+                None,
                 None,
             )
             .await;
@@ -783,6 +976,7 @@ mod tests {
                 "TestAgent",
                 false,
                 None,
+                None,
             )
             .await;
 
@@ -822,6 +1016,7 @@ mod tests {
                 "TestAgent",
                 false,
                 None,
+                None,
             )
             .await;
 
@@ -852,6 +1047,7 @@ mod tests {
                 "CustomAgent/1.0",
                 false,
                 None,
+                None,
             )
             .await;
 
@@ -878,6 +1074,7 @@ mod tests {
                 None,
                 "TestAgent",
                 false,
+                None,
                 None,
             )
             .await;

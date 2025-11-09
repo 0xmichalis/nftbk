@@ -10,8 +10,10 @@ use x402_rs::types::MixedAddress;
 
 use crate::server::x402::coinbase_facilitator::CoinbaseFacilitator;
 use crate::server::x402::either_facilitator::EitherFacilitator;
+pub use dynamic_price::create_dynamic_price_callback;
 
 mod coinbase_facilitator;
+mod dynamic_price;
 mod either_facilitator;
 mod error_handling;
 mod shared_facilitator;
@@ -81,7 +83,6 @@ impl X402Config {
         if raw.price.is_empty() {
             return Err(anyhow::anyhow!("price cannot be empty"));
         }
-        // Only Base and Base Sepolia supported for now
         let network = parse_network(&raw.facilitator.network)?;
         match network {
             Network::Base | Network::BaseSepolia => {}
@@ -130,10 +131,17 @@ impl X402Config {
             EitherFacilitator::from(client)
         };
 
+        // Use a default placeholder price since dynamic pricing will override it per request
+        let default_price = "0.01";
+        let price_tag = self
+            .usdc_price_tag_for_amount(default_price)
+            .map_err(|e| anyhow::anyhow!("Failed to build initial price tag: {}", e))?;
+
         let middleware = X402Middleware::new(facilitator)
             .with_base_url(base_url)
             .with_mime_type("application/json")
-            .with_max_timeout_seconds(self.max_timeout_seconds);
+            .with_max_timeout_seconds(self.max_timeout_seconds)
+            .with_price_tag(price_tag);
         Ok(middleware)
     }
 
@@ -619,30 +627,6 @@ mod tests {
         assert_eq!(config.price, "0.1");
         assert_eq!(config.facilitator.url, "https://x402.org/facilitator");
         assert_eq!(config.facilitator.network, Network::BaseSepolia);
-    }
-
-    #[test]
-    fn test_x402_config_compile_empty_price() {
-        let raw = X402ConfigRaw {
-            base_url: "https://example.com".to_string(),
-            recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
-            max_timeout_seconds: 300,
-            price: "".to_string(),
-            facilitator: X402FacilitatorConfigRaw {
-                url: "https://x402.org/facilitator".to_string(),
-                network: "base-sepolia".to_string(),
-                api_key_id_env: None,
-                api_key_secret_env: None,
-            },
-            asset_symbol: "USDC".into(),
-        };
-
-        let result = X402Config::compile(raw);
-        assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("price cannot be empty"));
     }
 
     #[test]

@@ -60,6 +60,17 @@ struct Args {
     /// Disable colored log output. NO_COLOR and FORCE_COLOR environment variables take precedence.
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     no_color: bool,
+
+    /// Maximum number of quotes to cache in memory for dynamic pricing.
+    /// When the cache is full, the least recently used quotes are evicted.
+    /// This cache stores quote IDs (UUID string, ~36 bytes) and their associated data
+    /// (price string ~10 bytes + task_id SHA256 hex string ~64 bytes) for x402 dynamic pricing.
+    /// Each entry uses approximately ~220 bytes including overhead, so:
+    /// - 100 entries ≈ 22 KB
+    /// - 1000 entries ≈ 220 KB (default)
+    /// - 10000 entries ≈ 2.2 MB
+    #[arg(long, default_value_t = 1000)]
+    quote_cache_size: usize,
 }
 
 #[tokio::main]
@@ -112,6 +123,7 @@ async fn main() {
         jwt_credentials,
         x402_config,
         ipfs_pinning_configs,
+        quote_cache_size: args.quote_cache_size,
     };
 
     if let Err(e) = run_server(config).await {

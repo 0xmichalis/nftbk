@@ -36,9 +36,9 @@ futures = "0.3"
 futures-util = "0.3"
 hex = "0.4.3"
 httpdate = "1.0"
-hyper = { version = "1.0", features = ["full"] }
 josekit = "0.10.3"
 libc = "0.2"
+lru = "0.12"
 prettytable = "0.10"
 rand = "0.8"
 regex = "1"
@@ -66,9 +66,8 @@ urlencoding = "2.1"
 utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 uuid = { version = "1.4", features = ["v4"] }
-# x402-axum = { git = "https://github.com/0xmichalis/x402-rs", branch = "main", package = "x402-axum" }
-x402-axum = { version = "0.6.1" }
-x402-rs = { version = "0.9.1" }
+x402-axum = { version = "0.6.2" }
+x402-rs = { version = "0.9.3" }
 zip = "0.6"
 
 [dev-dependencies]

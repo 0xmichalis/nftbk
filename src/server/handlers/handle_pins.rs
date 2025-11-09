@@ -406,10 +406,10 @@ mod handle_pins_core_mockdb_tests {
 #[cfg(test)]
 mod handle_pins_endpoint_tests {
     use super::handle_pins;
-    use axum::http::StatusCode;
+    use axum::http::{Request, StatusCode};
     use axum::{routing::get, Extension, Router};
-    use hyper::Request;
     use std::collections::HashMap;
+    use std::num::NonZeroUsize;
     use std::sync::Arc;
     use tokio::sync::Mutex;
     use tower::Service;
@@ -434,11 +434,15 @@ mod handle_pins_endpoint_tests {
             auth_token: None,
             pruner_retention_days: 7,
             download_tokens: Arc::new(Mutex::new(HashMap::new())),
+            quote_cache: Arc::new(Mutex::new(lru::LruCache::new(
+                NonZeroUsize::new(1000).unwrap(),
+            ))),
             backup_task_sender: tx,
             db,
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ipfs_pinning_configs,
             ipfs_pinning_instances: Arc::new(Vec::new()),
+            x402_config: None,
         }
     }
 
