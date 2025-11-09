@@ -14,7 +14,8 @@ use utoipa_swagger_ui::SwaggerUi;
 
 use crate::envvar::is_defined;
 use crate::server::api::{
-    ApiProblem, BackupCreateResponse, BackupRequest, BackupResponse, ProblemJson, Tokens,
+    ApiProblem, BackupCreateResponse, BackupRequest, BackupResponse, ProblemJson,
+    QuoteCreateResponse, QuoteResponse, Tokens,
 };
 use crate::server::auth::jwt::{verify_jwt, JwtCredential};
 use crate::server::database::{PinInfo, TokenWithPins};
@@ -35,19 +36,25 @@ use crate::server::handlers::handle_backup_delete_archive::{
 use crate::server::handlers::handle_backup_delete_pins::{
     __path_handle_backup_delete_pins, handle_backup_delete_pins,
 };
+use crate::server::handlers::handle_backup_quote::{
+    __path_handle_backup_quote, __path_handle_backup_quote_get, handle_backup_quote,
+    handle_backup_quote_get,
+};
 use crate::server::handlers::handle_backup_retries::{
     __path_handle_backup_retries, handle_backup_retries,
 };
 use crate::server::handlers::handle_backups::BackupsQuery;
 use crate::server::handlers::handle_backups::{__path_handle_backups, handle_backups};
 use crate::server::handlers::handle_pins::{__path_handle_pins, handle_pins, PinsResponse};
-use crate::server::x402::X402Config;
+use crate::server::x402::{create_dynamic_price_callback, X402Config};
 use crate::server::AppState;
 
 #[derive(OpenApi)]
 #[openapi(
     paths(
         handle_backup_create,
+        handle_backup_quote,
+        handle_backup_quote_get,
         handle_backup,
         handle_download_token,
         handle_download,
@@ -58,7 +65,7 @@ use crate::server::AppState;
         handle_pins,
     ),
     components(
-        schemas(BackupRequest, BackupCreateResponse, BackupResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinsResponse, TokenWithPins, PinInfo, ApiProblem)
+        schemas(BackupRequest, BackupCreateResponse, BackupResponse, QuoteCreateResponse, QuoteResponse, Tokens, DownloadQuery, DownloadTokenResponse, BackupsQuery, PinsResponse, TokenWithPins, PinInfo, ApiProblem)
     ),
     tags(
         (name = "backups", description = "General backup operations"),
@@ -199,6 +206,8 @@ pub fn build_router(
     // Authenticated router
     let mut authed_router = Router::new()
         .route("/v1/backups", get(handle_backups))
+        .route("/v1/backups/quote", post(handle_backup_quote))
+        .route("/v1/backups/quote/{quote_id}", get(handle_backup_quote_get))
         .route("/v1/backups/{task_id}", get(handle_backup))
         .route(
             "/v1/backups/{task_id}/download-tokens",
@@ -228,13 +237,11 @@ pub fn build_router(
                 .settle_before_execution()
                 .with_description("Backup creation API");
 
-            let price_tag = config
-                .usdc_price_tag_for_amount(&config.price)
-                .expect("invalid x402 price");
+            let price_callback = create_dynamic_price_callback(state.clone(), config.clone());
 
             Router::new()
                 .route("/v1/backups", post(handle_backup_create))
-                .layer(x402.with_price_tag(price_tag))
+                .layer(x402.with_dynamic_price(price_callback))
                 .with_state(state.clone())
         }
     };

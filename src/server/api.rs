@@ -38,6 +38,24 @@ pub struct BackupCreateResponse {
     pub task_id: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct QuoteCreateResponse {
+    /// Unique identifier for the quote
+    #[schema(example = "550e8400-e29b-41d4-a716-446655440000")]
+    pub quote_id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct QuoteResponse {
+    /// Unique identifier for the quote
+    #[schema(example = "550e8400-e29b-41d4-a716-446655440000")]
+    pub quote_id: String,
+    /// Price in USDC (human-readable format, e.g., "0.1")
+    /// None if the quote is still being computed
+    #[schema(example = "0.1")]
+    pub price: Option<String>,
+}
+
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]
 pub struct SubresourceStatus {
     /// Subresource status

@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use axum::response::Response;
 use axum::Json;
 use axum::{
@@ -9,7 +11,6 @@ use axum::{
 use base64::Engine;
 use rand::rngs::OsRng;
 use rand::RngCore;
-use std::path::PathBuf;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
 
@@ -263,6 +264,7 @@ mod handle_download_tests {
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use std::collections::HashMap;
+    use std::num::NonZeroUsize;
     use std::sync::Arc;
     use tokio::sync::{mpsc, Mutex};
 
@@ -289,11 +291,15 @@ mod handle_download_tests {
             auth_token: None,
             pruner_retention_days: 7,
             download_tokens: Arc::new(Mutex::new(HashMap::new())),
+            quote_cache: Arc::new(Mutex::new(lru::LruCache::new(
+                NonZeroUsize::new(1000).unwrap(),
+            ))),
             backup_task_sender: mpsc::channel(1).0,
             db,
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ipfs_pinning_configs: Vec::new(),
             ipfs_pinning_instances: Arc::new(Vec::new()),
+            x402_config: None,
         }
     }
 

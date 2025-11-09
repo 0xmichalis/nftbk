@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::Write;
 use std::net::SocketAddr;
+use std::num::NonZeroUsize;
 use std::str::FromStr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -117,6 +118,8 @@ impl FromStr for StorageMode {
     }
 }
 
+pub type QuoteCache = Arc<Mutex<lru::LruCache<String, (Option<String>, String)>>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub chain_config: Arc<ChainConfig>,
@@ -125,11 +128,13 @@ pub struct AppState {
     pub auth_token: Option<String>,
     pub pruner_retention_days: u64,
     pub download_tokens: Arc<Mutex<HashMap<String, (String, u64)>>>,
+    pub quote_cache: QuoteCache,
     pub backup_task_sender: mpsc::Sender<BackupTaskOrShutdown>,
     pub db: Arc<Db>,
     pub shutdown_flag: Arc<AtomicBool>,
     pub ipfs_pinning_configs: Vec<IpfsPinningConfig>,
     pub ipfs_pinning_instances: Arc<Vec<Arc<dyn IpfsPinningProvider>>>,
+    pub x402_config: Option<crate::server::x402::X402Config>,
 }
 
 impl Default for AppState {
@@ -151,6 +156,8 @@ impl AppState {
         max_connections: u32,
         shutdown_flag: Arc<AtomicBool>,
         ipfs_pinning_configs: Vec<IpfsPinningConfig>,
+        x402_config: Option<crate::server::x402::X402Config>,
+        quote_cache_size: usize,
     ) -> Self {
         let db = Arc::new(Db::new(db_url, max_connections).await);
 
@@ -170,6 +177,11 @@ impl AppState {
             }
         }
 
+        // Create quote cache with configurable size.
+        // This LRU cache stores quote IDs and their associated prices for x402 dynamic pricing.
+        // When the cache is full, the least recently used quotes are evicted.
+        let quote_cache_size = NonZeroUsize::new(quote_cache_size.max(100))
+            .expect("quote_cache_size should be at least 100");
         AppState {
             chain_config: Arc::new(chain_config),
             base_dir: Arc::new(base_dir.to_string()),
@@ -177,11 +189,15 @@ impl AppState {
             auth_token,
             pruner_retention_days,
             download_tokens: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+            quote_cache: Arc::new(tokio::sync::Mutex::new(lru::LruCache::new(
+                quote_cache_size,
+            ))),
             backup_task_sender,
             db,
             shutdown_flag,
             ipfs_pinning_configs,
             ipfs_pinning_instances: Arc::new(ipfs_pinning_instances),
+            x402_config,
         }
     }
 }
@@ -202,6 +218,7 @@ pub struct ServerConfig {
     pub jwt_credentials: Vec<JwtCredential>,
     pub x402_config: Option<X402Config>,
     pub ipfs_pinning_configs: Vec<IpfsPinningConfig>,
+    pub quote_cache_size: usize,
 }
 
 /// Start the HTTP server with the given configuration
@@ -290,6 +307,8 @@ pub async fn run_server(
         (config.backup_queue_size + 1) as u32,
         shutdown_flag.clone(),
         config.ipfs_pinning_configs.clone(),
+        config.x402_config.clone(),
+        config.quote_cache_size,
     )
     .await;
 
