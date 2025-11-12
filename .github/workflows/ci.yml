@@ -218,7 +218,8 @@ jobs:
       run: |
         IMAGE_NAME=ghcr.io/${{ github.repository_owner }}/nftbk-server
         GIT_COMMIT=$(git rev-parse --short HEAD)
-        docker build --build-arg GIT_COMMIT=$GIT_COMMIT -t $IMAGE_NAME:latest .
+        RUST_VERSION=$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)
+        docker build --build-arg GIT_COMMIT=$GIT_COMMIT --build-arg RUST_VERSION=$RUST_VERSION -t $IMAGE_NAME:latest .
 
     - name: Push to GHCR
       run: |

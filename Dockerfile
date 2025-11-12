@@ -1,5 +1,6 @@
 # Builder stage
-FROM docker.io/library/rust:1.86-slim-bookworm AS builder
+ARG RUST_VERSION=1.90.0
+FROM docker.io/library/rust:${RUST_VERSION}-slim-bookworm AS builder
 
 WORKDIR /usr/src/app
 
