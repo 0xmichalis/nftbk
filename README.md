@@ -2,7 +2,9 @@
 
 [![CI](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml/badge.svg)](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml)[![Coverage](https://coveralls.io/repos/github/0xmichalis/nftbk/badge.svg?branch=main)](https://coveralls.io/github/0xmichalis/nftbk?branch=main)
 
-A library, server, and CLI tool for protecting NFTs. The following networks are currently supported:
+A library, server, and CLI tool for protecting NFTs. The following networks are
+currently supported:
+
 - EVM (Ethereum, Base, Shape, Zora, etc)
 - Tezos
 
@@ -15,62 +17,27 @@ A library, server, and CLI tool for protecting NFTs. The following networks are 
 
 ## Configuration
 
-The application uses a unified configuration file that combines all settings:
+The server uses a configuration file that combines all settings.
+See `example_config.toml` for an example config. It contains:
 
-- `config.toml`: Unified configuration file containing:
-  - Chain RPC URLs
-  - JWT authentication credentials (optional)
-  - x402 payment configuration (optional)
-  - IPFS pinning providers (optional)
-- `config_tokens.toml`: Contains the NFT tokens to back up
+- Chain RPC URLs
+- JWT authentication credentials (optional)
+- x402 payment configuration (optional)
+- IPFS pinning providers (optional)
 
-The unified config includes prepopulated RPCs for various chains. Alchemy RPCs are used for EVM chains with an API key that can be configured as `ALCHEMY_API_KEY` inside an `.env` file. You can also choose to use different RPCs altogether. For `config_tokens.toml`, there is an `example_config_tokens.toml` that you can update as needed with the tokens to backup.
-
-### Unified Configuration Structure
-
-The `config.toml` file combines all configuration sections:
-
-```toml
-# Chain configurations (RPC endpoints)
-[chains]
-ethereum = "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-polygon = "https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-tezos = "https://mainnet.smartpy.io"
-
-# JWT authentication credentials (optional)
-[[jwt]]
-issuer = "privy.io"
-audience = "youraudience"
-verification_key = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----"
-
-# x402 payment configuration (optional)
-[x402]
-asset_symbol = "USDC"
-base_url = "https://localhost:8080/"
-recipient_address = "0xYourRecipientAddress"
-max_timeout_seconds = 300
-
-[x402.facilitator]
-url = "https://facilitator.payai.network"
-network = "base"
-
-# IPFS pinning providers (optional)
-[[ipfs_pinning_provider]]
-type = "pinning-service"
-base_url = "https://api.filebase.io/v1/ipfs"
-bearer_token_env = "FILEBASE_TOKEN"
-
-[[ipfs_pinning_provider]]
-type = "pinata"
-base_url = "https://api.pinata.cloud"
-bearer_token_env = "PINATA_TOKEN"
-```
+The CLI uses additionally a config file for the tokens to be backed up when
+running in standalone mode. See `example_config_tokens.toml` for an example.
 
 ### Generate config from gallery.so
 
-If you already have a [Gallery](https://gallery.so) account and gallery, you can easily create a backup of it by following these steps:
-1. Note down the username and gallery id you want to back up. The gallery id is the last part of the URL when viewing a gallery, eg, `2RgusW2IT1qkSPKE15S2xTnArN4`  from [`https://gallery.so/michalis/galleries/2RgusW2IT1qkSPKE15S2xTnArN4`](https://gallery.so/michalis/galleries/2RgusW2IT1qkSPKE15S2xTnArN4).
+If you already have a [Gallery](https://gallery.so) account and gallery, you can
+easily create a backup of it by following these steps:
+
+1. Note down the username and gallery id you want to back up. The gallery id is
+the last part of the URL when viewing a gallery, eg, `2RgusW2IT1qkSPKE15S2xTnArN4`
+from [`https://gallery.so/michalis/galleries/2RgusW2IT1qkSPKE15S2xTnArN4`](https://gallery.so/michalis/galleries/2RgusW2IT1qkSPKE15S2xTnArN4).
 2. Run the following command to generate a config file:
+
 ```sh
 GALLERY_ID=2RgusW2IT1qkSPKE15S2xTnArN4 \
 USERNAME=michalis \
@@ -79,9 +46,9 @@ USERNAME=michalis \
 
 ### JWT authentication support
 
-The server supports authenticating JWT tokens using the unified configuration file. Multiple JWT credential sets can be configured in the `[[jwt]]` section.
-
-Example JWT configuration in `config.toml`:
+The server supports authenticating JWT tokens. Multiple JWT credential sets can
+be configured in the `[[jwt]]` section of the server config. All credential sets
+in the config are considered valid and tried during authentication.
 
 ```toml
 [[jwt]]
@@ -99,13 +66,12 @@ audience = "another-audience"
 verification_key = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
 ```
 
-All credential sets in the file are considered valid and tried during authentication.
-
 ### IPFS Pinning
 
-There is support for pinning IPFS content using multiple providers. Both the [IPFS Pinning Service API](https://ipfs.github.io/pinning-services-api-spec/) and the [Pinata API](https://docs.pinata.cloud/api-reference/introduction) are currently supported. 
-
-Both the server and CLI can be configured to pin CIDs on IPFS via the unified configuration file. Example IPFS configuration in `config.toml`:
+There is support for pinning IPFS content using multiple providers. Both the
+[IPFS Pinning Service API](https://ipfs.github.io/pinning-services-api-spec/)
+and the [Pinata API](https://docs.pinata.cloud/api-reference/introduction)
+are currently supported.
 
 ```toml
 # Pin to Filebase (supports the IPFS Pinning Service API)
@@ -128,7 +94,7 @@ bearer_token_env = "PINATA_TOKEN"
 Check the supported options in the CLI:
 
 ```sh
-./target/debug/nftbk-cli --help
+cargo run --bin nftbk-cli -- --help
 ```
 
 A few useful targets in the Makefile:
@@ -136,24 +102,23 @@ A few useful targets in the Makefile:
 ```sh
 # Create a local backup based on config.toml and config_tokens.toml
 make run-cli
-# Request a backup from a local server running at localhost:8080 using tokens defined in config_tokens_test.toml
+# Request a backup from a local server running at localhost:8080 using
+# tokens defined in config_tokens_test.toml
 make run-cli-server-test 
 ```
 
 ### Postgres
 
-Postgres is a requirement in order to run the server. Deploy Postgres and run migrations by following these instructions:
+Postgres is a requirement in order to run the server. Deploy Postgres and
+run migrations by following these instructions:
 
 ```sh
+# Run database
 cp .env.postgres.example .env.postgres
-# Fill out .env.postgres with your own credentials, etc.
-# ...
-
-# Run the database
 make start-db
 
 # Run migrations
-export DATABASE_URL=postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@localhost:5432/${POSTGRES_DB}
+export DATABASE_URL=postgres://nftbkuser:nftbkpassword@localhost:5432/nftbkdb
 sqlx migrate run
 ```
 
@@ -170,9 +135,13 @@ make run-server
 
 ### OpenAPI Documentation
 
-The server includes interactive OpenAPI documentation available at `/v1/swagger-ui` when running. This provides a complete API reference with example requests and responses for all endpoints. The OpenAPI specification JSON is available at `/v1/api-docs/openapi.json`.
+The server includes interactive OpenAPI documentation available at `/v1/swagger-ui`
+when running. This provides a complete API reference with example requests and
+responses for all endpoints. The OpenAPI specification JSON is available at
+`/v1/api-docs/openapi.json`.
 
 Example usage:
+
 ```sh
 # Start the server
 make run-server
@@ -184,8 +153,8 @@ open http://localhost:8080/v1/swagger-ui
 ## Contribute
 
 ```sh
-# Update the sqlx cache and commit any changes when necessary - this is needed when developing
-# new or updating existing static queries in the server.
+# Update the sqlx cache and commit any changes when necessary - this is needed
+# when developing new or updating existing static queries in the server.
 make sqlxprepare
 
 # Run tests with coverage output in HTML
@@ -194,6 +163,8 @@ make cover
 
 ## Donations
 
-If you find this project helpful and would like to support its development, you can make a donation in the following addresses:
-* Ethereum: `0xd2Be832911A252302bAc09e30Fc124A405E142DF` (michalis.eth)
-* Tezos: `tz1ioFzpKGdwtncBkGunkUD9Sk16NqB2vML6` (michalis.tez)
+If you find this project helpful and would like to support its development, you
+can make a donation in the following addresses:
+
+- Ethereum: `0xd2Be832911A252302bAc09e30Fc124A405E142DF` (michalis.eth)
+- Tezos: `tz1ioFzpKGdwtncBkGunkUD9Sk16NqB2vML6` (michalis.tez)
