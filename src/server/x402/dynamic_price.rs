@@ -10,7 +10,7 @@ use x402_rs::types::TokenAmount;
 /// Parse a price string (e.g., "0.1069") directly to microdollars (u64)
 /// without using floating-point arithmetic to avoid precision loss.
 /// USDC has 6 decimal places, so we multiply by 1_000_000.
-fn parse_price_to_microdollars(price_str: &str) -> Result<u64, String> {
+pub fn parse_usdc_price_to_wei(price_str: &str) -> Result<u64, String> {
     let price_str = price_str.trim();
     if price_str.is_empty() {
         return Err("Price string is empty".to_string());
@@ -92,7 +92,7 @@ async fn compute_dynamic_price_impl(
 
     // Parse price string directly as integer microdollars to avoid floating-point precision issues
     // USDC has 6 decimal places, so we convert dollars to microdollars (multiply by 1_000_000)
-    let token_amount = parse_price_to_microdollars(&price_str).map_err(|e| {
+    let token_amount = parse_usdc_price_to_wei(&price_str).map_err(|e| {
         let error_msg = format!("Failed to parse price '{}': {}", price_str, e);
         warn!("{}", error_msg);
         X402Error::verification_failed(error_msg, Vec::new())
@@ -121,66 +121,66 @@ pub fn create_dynamic_price_callback(
 }
 
 #[cfg(test)]
-mod parse_price_to_microdollars_tests {
+mod parse_usdc_price_to_wei_tests {
     use super::*;
 
     #[test]
     fn test_parse_whole_number() {
-        assert_eq!(parse_price_to_microdollars("0"), Ok(0));
-        assert_eq!(parse_price_to_microdollars("1"), Ok(1_000_000));
-        assert_eq!(parse_price_to_microdollars("10"), Ok(10_000_000));
-        assert_eq!(parse_price_to_microdollars("100"), Ok(100_000_000));
+        assert_eq!(parse_usdc_price_to_wei("0"), Ok(0));
+        assert_eq!(parse_usdc_price_to_wei("1"), Ok(1_000_000));
+        assert_eq!(parse_usdc_price_to_wei("10"), Ok(10_000_000));
+        assert_eq!(parse_usdc_price_to_wei("100"), Ok(100_000_000));
     }
 
     #[test]
     fn test_parse_with_decimal_places() {
-        assert_eq!(parse_price_to_microdollars("0.1"), Ok(100_000));
-        assert_eq!(parse_price_to_microdollars("0.01"), Ok(10_000));
-        assert_eq!(parse_price_to_microdollars("0.001"), Ok(1_000));
-        assert_eq!(parse_price_to_microdollars("0.0001"), Ok(100));
-        assert_eq!(parse_price_to_microdollars("0.00001"), Ok(10));
-        assert_eq!(parse_price_to_microdollars("0.000001"), Ok(1));
+        assert_eq!(parse_usdc_price_to_wei("0.1"), Ok(100_000));
+        assert_eq!(parse_usdc_price_to_wei("0.01"), Ok(10_000));
+        assert_eq!(parse_usdc_price_to_wei("0.001"), Ok(1_000));
+        assert_eq!(parse_usdc_price_to_wei("0.0001"), Ok(100));
+        assert_eq!(parse_usdc_price_to_wei("0.00001"), Ok(10));
+        assert_eq!(parse_usdc_price_to_wei("0.000001"), Ok(1));
     }
 
     #[test]
     fn test_parse_with_partial_decimal_places() {
-        assert_eq!(parse_price_to_microdollars("0.1069"), Ok(106_900));
-        assert_eq!(parse_price_to_microdollars("1.5"), Ok(1_500_000));
-        assert_eq!(parse_price_to_microdollars("10.25"), Ok(10_250_000));
-        assert_eq!(parse_price_to_microdollars("100.123456"), Ok(100_123_456));
+        assert_eq!(parse_usdc_price_to_wei("0.1069"), Ok(106_900));
+        assert_eq!(parse_usdc_price_to_wei("1.5"), Ok(1_500_000));
+        assert_eq!(parse_usdc_price_to_wei("10.25"), Ok(10_250_000));
+        assert_eq!(parse_usdc_price_to_wei("100.123456"), Ok(100_123_456));
     }
 
     #[test]
     fn test_parse_with_whitespace() {
-        assert_eq!(parse_price_to_microdollars(" 0.1 "), Ok(100_000));
-        assert_eq!(parse_price_to_microdollars("1.5 "), Ok(1_500_000));
-        assert_eq!(parse_price_to_microdollars(" 10"), Ok(10_000_000));
+        assert_eq!(parse_usdc_price_to_wei(" 0.1 "), Ok(100_000));
+        assert_eq!(parse_usdc_price_to_wei("1.5 "), Ok(1_500_000));
+        assert_eq!(parse_usdc_price_to_wei(" 10"), Ok(10_000_000));
     }
 
     #[test]
     fn test_parse_large_values() {
-        assert_eq!(parse_price_to_microdollars("1000"), Ok(1_000_000_000));
-        assert_eq!(parse_price_to_microdollars("10000"), Ok(10_000_000_000));
-        assert_eq!(parse_price_to_microdollars("100000"), Ok(100_000_000_000));
+        assert_eq!(parse_usdc_price_to_wei("1000"), Ok(1_000_000_000));
+        assert_eq!(parse_usdc_price_to_wei("10000"), Ok(10_000_000_000));
+        assert_eq!(parse_usdc_price_to_wei("100000"), Ok(100_000_000_000));
     }
 
     #[test]
     fn test_parse_empty_string() {
-        let result = parse_price_to_microdollars("");
+        let result = parse_usdc_price_to_wei("");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Price string is empty"));
     }
 
     #[test]
     fn test_parse_whitespace_only() {
-        let result = parse_price_to_microdollars("   ");
+        let result = parse_usdc_price_to_wei("   ");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Price string is empty"));
     }
 
     #[test]
     fn test_parse_multiple_decimal_points() {
-        let result = parse_price_to_microdollars("1.2.3");
+        let result = parse_usdc_price_to_wei("1.2.3");
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -189,7 +189,7 @@ mod parse_price_to_microdollars_tests {
 
     #[test]
     fn test_parse_too_many_decimal_places() {
-        let result = parse_price_to_microdollars("0.1234567");
+        let result = parse_usdc_price_to_wei("0.1234567");
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -198,17 +198,17 @@ mod parse_price_to_microdollars_tests {
 
     #[test]
     fn test_parse_exactly_six_decimal_places() {
-        assert_eq!(parse_price_to_microdollars("0.123456"), Ok(123_456));
-        assert_eq!(parse_price_to_microdollars("1.123456"), Ok(1_123_456));
+        assert_eq!(parse_usdc_price_to_wei("0.123456"), Ok(123_456));
+        assert_eq!(parse_usdc_price_to_wei("1.123456"), Ok(1_123_456));
     }
 
     #[test]
     fn test_parse_invalid_characters() {
-        let result = parse_price_to_microdollars("abc");
+        let result = parse_usdc_price_to_wei("abc");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Failed to parse whole part"));
 
-        let result = parse_price_to_microdollars("1.abc");
+        let result = parse_usdc_price_to_wei("1.abc");
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -217,50 +217,50 @@ mod parse_price_to_microdollars_tests {
 
     #[test]
     fn test_parse_negative_number() {
-        let result = parse_price_to_microdollars("-1");
+        let result = parse_usdc_price_to_wei("-1");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Failed to parse whole part"));
     }
 
     #[test]
     fn test_parse_decimal_point_only() {
-        let result = parse_price_to_microdollars(".");
+        let result = parse_usdc_price_to_wei(".");
         assert!(result.is_err());
     }
 
     #[test]
     fn test_parse_leading_decimal_point() {
-        let result = parse_price_to_microdollars(".5");
+        let result = parse_usdc_price_to_wei(".5");
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Failed to parse whole part"));
     }
 
     #[test]
     fn test_parse_trailing_decimal_point() {
-        let result = parse_price_to_microdollars("5.");
+        let result = parse_usdc_price_to_wei("5.");
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), 5_000_000);
     }
 
     #[test]
     fn test_parse_edge_case_zero_with_decimal() {
-        assert_eq!(parse_price_to_microdollars("0.0"), Ok(0));
-        assert_eq!(parse_price_to_microdollars("0.00"), Ok(0));
-        assert_eq!(parse_price_to_microdollars("0.000000"), Ok(0));
+        assert_eq!(parse_usdc_price_to_wei("0.0"), Ok(0));
+        assert_eq!(parse_usdc_price_to_wei("0.00"), Ok(0));
+        assert_eq!(parse_usdc_price_to_wei("0.000000"), Ok(0));
     }
 
     #[test]
     fn test_parse_very_small_amounts() {
-        assert_eq!(parse_price_to_microdollars("0.000001"), Ok(1));
-        assert_eq!(parse_price_to_microdollars("0.000010"), Ok(10));
-        assert_eq!(parse_price_to_microdollars("0.000100"), Ok(100));
+        assert_eq!(parse_usdc_price_to_wei("0.000001"), Ok(1));
+        assert_eq!(parse_usdc_price_to_wei("0.000010"), Ok(10));
+        assert_eq!(parse_usdc_price_to_wei("0.000100"), Ok(100));
     }
 
     #[test]
     fn test_parse_common_price_examples() {
-        assert_eq!(parse_price_to_microdollars("0.01"), Ok(10_000));
-        assert_eq!(parse_price_to_microdollars("0.1"), Ok(100_000));
-        assert_eq!(parse_price_to_microdollars("1.0"), Ok(1_000_000));
-        assert_eq!(parse_price_to_microdollars("10.50"), Ok(10_500_000));
+        assert_eq!(parse_usdc_price_to_wei("0.01"), Ok(10_000));
+        assert_eq!(parse_usdc_price_to_wei("0.1"), Ok(100_000));
+        assert_eq!(parse_usdc_price_to_wei("1.0"), Ok(1_000_000));
+        assert_eq!(parse_usdc_price_to_wei("10.50"), Ok(10_500_000));
     }
 }

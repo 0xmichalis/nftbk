@@ -11,6 +11,7 @@ use x402_rs::types::MixedAddress;
 use crate::server::x402::coinbase_facilitator::CoinbaseFacilitator;
 use crate::server::x402::either_facilitator::EitherFacilitator;
 pub use dynamic_price::create_dynamic_price_callback;
+pub use dynamic_price::parse_usdc_price_to_wei;
 
 mod coinbase_facilitator;
 mod dynamic_price;

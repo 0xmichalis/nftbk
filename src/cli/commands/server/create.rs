@@ -355,8 +355,12 @@ async fn request_quote(
 
         let quote: QuoteResponse = get_resp.json().await.context("Invalid quote response")?;
 
-        if let Some(price) = &quote.price {
-            println!("\nQuote ready! Price: {} USDC", price);
+        if let Some(price_microdollars) = &quote.price {
+            let price_decimal = price_microdollars
+                .parse::<u64>()
+                .map_err(|_| anyhow::anyhow!("Invalid price format: {}", price_microdollars))?;
+            let price_human = price_decimal as f64 / 1_000_000.0;
+            println!("\nQuote ready! Price: {} USDC", price_human);
             return Ok(quote_id);
         }
 
@@ -816,9 +820,16 @@ mod tests {
     }
 
     fn create_test_quote_response(quote_id: &str, price: Option<&str>) -> QuoteResponse {
+        let price_wei = price.and_then(|p| {
+            crate::server::x402::parse_usdc_price_to_wei(p)
+                .map(|wei| wei.to_string())
+                .ok()
+        });
         QuoteResponse {
             quote_id: quote_id.to_string(),
-            price: price.map(|p| p.to_string()),
+            price: price_wei,
+            asset_symbol: None,
+            network: None,
         }
     }
 

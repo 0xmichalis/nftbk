@@ -50,10 +50,19 @@ pub struct QuoteResponse {
     /// Unique identifier for the quote
     #[schema(example = "550e8400-e29b-41d4-a716-446655440000")]
     pub quote_id: String,
-    /// Price in USDC (human-readable format, e.g., "0.1")
+    /// Price in wei (e.g., "100000" for 0.1 USDC)
+    /// USDC has 6 decimal places, so multiply by 1_000_000 to convert from human-readable format
     /// None if the quote is still being computed
-    #[schema(example = "0.1")]
+    #[schema(example = "100000")]
     pub price: Option<String>,
+    /// Asset symbol (e.g., "USDC")
+    /// None if the quote is still being computed
+    #[schema(example = "USDC")]
+    pub asset_symbol: Option<String>,
+    /// Network identifier (e.g., "base", "base-sepolia")
+    /// None if the quote is still being computed
+    #[schema(example = "base-sepolia")]
+    pub network: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]

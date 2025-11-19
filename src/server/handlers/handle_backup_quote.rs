@@ -10,6 +10,7 @@ use crate::server::api::{
     ApiProblem, BackupRequest, ProblemJson, QuoteCreateResponse, QuoteResponse,
 };
 use crate::server::hashing::compute_task_id;
+use crate::server::x402::parse_usdc_price_to_wei;
 use crate::server::AppState;
 
 /// Request a quote for creating a backup. Returns a quote_id that can be used to retrieve the quote
@@ -117,11 +118,27 @@ pub async fn handle_backup_quote_get(
         } else {
             StatusCode::ACCEPTED
         };
+        let (asset_symbol, network, price_decimal) = if let Some(cfg) = state.x402_config.as_ref() {
+            let price_decimal = price.as_ref().and_then(|p| {
+                parse_usdc_price_to_wei(p)
+                    .map(|microdollars| microdollars.to_string())
+                    .ok()
+            });
+            (
+                Some(cfg.asset_symbol.clone()),
+                Some(cfg.facilitator.network.to_string()),
+                price_decimal,
+            )
+        } else {
+            (None, None, None)
+        };
         (
             status,
             Json(QuoteResponse {
                 quote_id,
-                price: price.clone(),
+                price: price_decimal,
+                asset_symbol,
+                network,
             }),
         )
             .into_response()
@@ -365,7 +382,9 @@ mod handle_backup_quote_tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let quote: QuoteResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(quote.quote_id, quote_id);
-        assert_eq!(quote.price, Some("0.1".to_string()));
+        assert_eq!(quote.price, Some("100000".to_string()));
+        assert_eq!(quote.asset_symbol, Some("USDC".to_string()));
+        assert_eq!(quote.network, Some("base-sepolia".to_string()));
     }
 
     #[tokio::test]
