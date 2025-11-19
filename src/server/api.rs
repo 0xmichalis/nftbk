@@ -51,7 +51,6 @@ pub struct QuoteResponse {
     #[schema(example = "550e8400-e29b-41d4-a716-446655440000")]
     pub quote_id: String,
     /// Price in wei (e.g., "100000" for 0.1 USDC)
-    /// USDC has 6 decimal places, so multiply by 1_000_000 to convert from human-readable format
     /// None if the quote is still being computed
     #[schema(example = "100000")]
     pub price: Option<String>,
