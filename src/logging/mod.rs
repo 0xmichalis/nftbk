@@ -104,7 +104,7 @@ where
                             if let (Some(key), Some(value)) = (parts.next(), parts.next()) {
                                 let clean_key = ansi_regex.replace_all(key, "");
                                 let clean_value = ansi_regex.replace_all(value, "");
-                                format!("\x1b[36m{clean_key}\x1b[0m=\x1b[93m{clean_value}\x1b[0m",)
+                                format!("\x1b[36m{clean_key}\x1b[0m=\x1b[95m{clean_value}\x1b[0m",)
                             } else {
                                 pair.to_string()
                             }
@@ -226,7 +226,7 @@ mod custom_format_tests {
         assert!(output.contains(" INFO")); // right-justified level text has at least one leading space
         assert!(output.contains("\x1b[0m")); // reset code present
         assert!(output.contains("colored message"));
-        assert!(output.contains("\x1b[36muser_id\x1b[0m=\x1b[93m7\x1b[0m"));
-        assert!(output.contains("\x1b[36mlabel\x1b[0m=\x1b[93m\"x\"\x1b[0m"));
+        assert!(output.contains("\x1b[36muser_id\x1b[0m=\x1b[95m7\x1b[0m"));
+        assert!(output.contains("\x1b[36mlabel\x1b[0m=\x1b[95m\"x\"\x1b[0m"));
     }
 }
