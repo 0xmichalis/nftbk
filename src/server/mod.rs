@@ -54,6 +54,7 @@ pub enum BackupTaskOrShutdown {
 pub enum TaskType {
     Creation(BackupTask),
     Deletion(DeletionTask),
+    Quote(QuoteTask),
 }
 
 #[derive(Debug, Clone)]
@@ -71,6 +72,14 @@ pub struct DeletionTask {
     pub requestor: Option<String>,
     /// Determines which parts of the backup to delete (e.g., only the archive, only the IPFS pins, or both).
     pub scope: StorageMode,
+}
+
+#[derive(Debug, Clone)]
+pub struct QuoteTask {
+    pub quote_id: String,
+    pub task_id: String,
+    pub request: BackupRequest,
+    pub requestor: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -118,7 +127,7 @@ impl FromStr for StorageMode {
     }
 }
 
-pub type QuoteCache = Arc<Mutex<lru::LruCache<String, (Option<String>, String)>>>;
+pub type QuoteCache = Arc<Mutex<lru::LruCache<String, (Option<u64>, String)>>>;
 
 #[derive(Clone)]
 pub struct AppState {

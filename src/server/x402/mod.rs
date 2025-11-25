@@ -6,7 +6,7 @@ use tracing::info;
 use url::Url;
 use x402_axum::{price::PriceTag, IntoPriceTag, X402Middleware};
 use x402_rs::network::{Network, USDCDeployment};
-use x402_rs::types::MixedAddress;
+use x402_rs::types::{MixedAddress, TokenAmount};
 
 use crate::server::x402::coinbase_facilitator::CoinbaseFacilitator;
 use crate::server::x402::either_facilitator::EitherFacilitator;
@@ -26,8 +26,20 @@ pub struct X402ConfigRaw {
     pub base_url: String,
     pub recipient_address: String,
     pub max_timeout_seconds: u64,
-    pub price: String,
     pub facilitator: X402FacilitatorConfigRaw,
+    #[serde(default)]
+    pub pricing: PricingRaw,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PricingRaw {
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        alias = "archive_price_per_kb"
+    )]
+    pub archive_price_per_gb: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", alias = "pin_price_per_kb")]
+    pub pin_price_per_gb: Option<String>,
 }
 
 /// Raw facilitator configuration (from TOML)
@@ -57,8 +69,30 @@ pub struct X402Config {
     pub base_url: String,
     pub recipient: MixedAddress,
     pub max_timeout_seconds: u64,
-    pub price: String,
     pub facilitator: X402FacilitatorConfig,
+    pub pricing: PricingConfig,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PricingConfig {
+    pub archive_price_per_gb: Option<u64>,
+    pub pin_price_per_gb: Option<u64>,
+}
+
+impl PricingConfig {
+    pub fn from_raw(raw: &PricingRaw) -> anyhow::Result<Self> {
+        Ok(Self {
+            archive_price_per_gb: parse_price_field(
+                "archive_price_per_gb",
+                &raw.archive_price_per_gb,
+            )?,
+            pin_price_per_gb: parse_price_field("pin_price_per_gb", &raw.pin_price_per_gb)?,
+        })
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.archive_price_per_gb.is_none() && self.pin_price_per_gb.is_none()
+    }
 }
 
 impl X402Config {
@@ -81,9 +115,6 @@ impl X402Config {
         if raw.facilitator.network.is_empty() {
             return Err(anyhow::anyhow!("facilitator.network cannot be empty"));
         }
-        if raw.price.is_empty() {
-            return Err(anyhow::anyhow!("price cannot be empty"));
-        }
         let network = parse_network(&raw.facilitator.network)?;
         match network {
             Network::Base | Network::BaseSepolia => {}
@@ -94,18 +125,20 @@ impl X402Config {
             }
         }
 
+        let pricing = PricingConfig::from_raw(&raw.pricing)?;
+
         Ok(X402Config {
             asset_symbol: raw.asset_symbol,
             base_url: normalized_base_url,
             recipient,
             max_timeout_seconds: raw.max_timeout_seconds,
-            price: raw.price,
             facilitator: X402FacilitatorConfig {
                 url: raw.facilitator.url,
                 network,
                 api_key_id_env: raw.facilitator.api_key_id_env,
                 api_key_secret_env: raw.facilitator.api_key_secret_env,
             },
+            pricing,
         })
     }
 
@@ -134,8 +167,10 @@ impl X402Config {
 
         // Use a default placeholder price since dynamic pricing will override it per request
         let default_price = "0.01";
+        let default_price_wei =
+            parse_usdc_price_to_wei(default_price).map_err(|e| anyhow::anyhow!(e))?;
         let price_tag = self
-            .usdc_price_tag_for_amount(default_price)
+            .usdc_price_tag_for_token_amount(default_price_wei)
             .map_err(|e| anyhow::anyhow!("Failed to build initial price tag: {}", e))?;
 
         let middleware = X402Middleware::new(facilitator)
@@ -168,10 +203,10 @@ impl X402Config {
         Ok(builder)
     }
 
-    /// Build a ready PriceTag for a given human-readable amount (e.g. "0.1").
-    pub fn usdc_price_tag_for_amount(&self, amount: &str) -> anyhow::Result<PriceTag> {
+    /// Build a ready PriceTag for a given token-denominated amount (wei).
+    pub fn usdc_price_tag_for_token_amount(&self, amount_wei: u64) -> anyhow::Result<PriceTag> {
         let builder = self.usdc_price_tag_builder()?;
-        let builder = builder.amount(amount);
+        let builder = builder.token_amount(TokenAmount::from(amount_wei));
         let price_tag = builder.build().map_err(|e| anyhow::anyhow!(e))?;
         Ok(price_tag)
     }
@@ -212,6 +247,21 @@ fn parse_network(input: &str) -> anyhow::Result<Network> {
         "base-sepolia" => Ok(Network::BaseSepolia),
         "base" => Ok(Network::Base),
         other => Err(anyhow::anyhow!("unsupported network: {}", other)),
+    }
+}
+
+fn parse_price_field(label: &str, value: &Option<String>) -> anyhow::Result<Option<u64>> {
+    match value {
+        Some(val) => {
+            let trimmed = val.trim();
+            if trimmed.is_empty() {
+                return Err(anyhow::anyhow!("{label} cannot be empty"));
+            }
+            let micros = parse_usdc_price_to_wei(trimmed)
+                .map_err(|e| anyhow::anyhow!("{label} is invalid: {}", e))?;
+            Ok(Some(micros))
+        }
+        None => Ok(None),
     }
 }
 
@@ -601,13 +651,19 @@ mod normalize_base_url_tests {
 mod tests {
     use super::*;
 
+    fn sample_pricing() -> PricingRaw {
+        PricingRaw {
+            archive_price_per_gb: Some("5".to_string()),
+            pin_price_per_gb: Some("2".to_string()),
+        }
+    }
+
     #[test]
     fn test_x402_config_compile_success() {
         let raw = X402ConfigRaw {
             base_url: "http://localhost:8080/".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 300,
-            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -615,6 +671,7 @@ mod tests {
                 api_key_secret_env: None,
             },
             asset_symbol: "USDC".into(),
+            pricing: sample_pricing(),
         };
 
         let config = X402Config::compile(raw).expect("should compile successfully");
@@ -625,7 +682,10 @@ mod tests {
         );
         assert_eq!(config.recipient, expected_recipient);
         assert_eq!(config.max_timeout_seconds, 300);
-        assert_eq!(config.price, "0.1");
+        assert_eq!(
+            config.pricing.archive_price_per_gb,
+            Some(parse_usdc_price_to_wei("5").unwrap())
+        );
         assert_eq!(config.facilitator.url, "https://x402.org/facilitator");
         assert_eq!(config.facilitator.network, Network::BaseSepolia);
     }
@@ -636,7 +696,6 @@ mod tests {
             base_url: "https://example.com".to_string(),
             recipient_address: "".to_string(),
             max_timeout_seconds: 300,
-            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -644,6 +703,7 @@ mod tests {
                 api_key_secret_env: None,
             },
             asset_symbol: "USDC".into(),
+            pricing: sample_pricing(),
         };
 
         let result = X402Config::compile(raw);
@@ -661,7 +721,6 @@ mod tests {
             base_url: "https://example.com".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
-            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -669,6 +728,7 @@ mod tests {
                 api_key_secret_env: None,
             },
             asset_symbol: "USDC".into(),
+            pricing: sample_pricing(),
         };
         let cfg = X402Config::compile(raw).unwrap();
         assert_eq!(cfg.base_url, "https://example.com/");
@@ -678,7 +738,6 @@ mod tests {
             base_url: "https://example.com/api".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
-            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -686,6 +745,7 @@ mod tests {
                 api_key_secret_env: None,
             },
             asset_symbol: "USDC".into(),
+            pricing: sample_pricing(),
         };
         let cfg = X402Config::compile(raw).unwrap();
         assert_eq!(cfg.base_url, "https://example.com/api/");
@@ -695,7 +755,6 @@ mod tests {
             base_url: "  https://example.com  ".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
-            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -703,6 +762,7 @@ mod tests {
                 api_key_secret_env: None,
             },
             asset_symbol: "USDC".into(),
+            pricing: sample_pricing(),
         };
         let cfg = X402Config::compile(raw).unwrap();
         assert_eq!(cfg.base_url, "https://example.com/");
@@ -712,7 +772,6 @@ mod tests {
             base_url: "".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
-            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -720,6 +779,7 @@ mod tests {
                 api_key_secret_env: None,
             },
             asset_symbol: "USDC".into(),
+            pricing: sample_pricing(),
         };
         let err = X402Config::compile(raw).unwrap_err().to_string();
         assert!(err.contains("base_url cannot be empty"));
@@ -728,7 +788,6 @@ mod tests {
             base_url: "example.com".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
-            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -736,6 +795,7 @@ mod tests {
                 api_key_secret_env: None,
             },
             asset_symbol: "USDC".into(),
+            pricing: sample_pricing(),
         };
         let err = X402Config::compile(raw).unwrap_err().to_string();
         assert!(err.contains("invalid base_url"));
@@ -744,7 +804,6 @@ mod tests {
             base_url: "ftp://example.com".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
-            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -752,6 +811,7 @@ mod tests {
                 api_key_secret_env: None,
             },
             asset_symbol: "USDC".into(),
+            pricing: sample_pricing(),
         };
         let err = X402Config::compile(raw).unwrap_err().to_string();
         assert!(err.contains("http or https"));
@@ -760,7 +820,6 @@ mod tests {
             base_url: "https://example.com?x=1".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
-            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -768,6 +827,7 @@ mod tests {
                 api_key_secret_env: None,
             },
             asset_symbol: "USDC".into(),
+            pricing: sample_pricing(),
         };
         let err = X402Config::compile(raw).unwrap_err().to_string();
         assert!(err.contains("must not contain a query"));
@@ -776,7 +836,6 @@ mod tests {
             base_url: "https://example.com#frag".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 60,
-            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
@@ -784,6 +843,7 @@ mod tests {
                 api_key_secret_env: None,
             },
             asset_symbol: "USDC".into(),
+            pricing: sample_pricing(),
         };
         let err = X402Config::compile(raw).unwrap_err().to_string();
         assert!(err.contains("must not contain a fragment"));

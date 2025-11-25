@@ -10,8 +10,8 @@ use crate::server::api::{
     ApiProblem, BackupRequest, ProblemJson, QuoteCreateResponse, QuoteResponse,
 };
 use crate::server::hashing::compute_task_id;
-use crate::server::x402::parse_usdc_price_to_wei;
 use crate::server::AppState;
+use crate::server::{BackupTaskOrShutdown, QuoteTask, TaskType};
 
 /// Request a quote for creating a backup. Returns a quote_id that can be used to retrieve the quote
 /// via GET /v1/backups/quote/{quote_id} once it's ready.
@@ -44,23 +44,9 @@ pub async fn handle_backup_quote(
         return problem.into_response();
     }
 
-    // Generate a unique quote ID
-    let quote_id = Uuid::new_v4().to_string();
-
-    // Compute the task_id for this request (same as backup creation)
-    let requestor_str = _requestor.as_deref().unwrap_or("");
-    let task_id = compute_task_id(&req.tokens, Some(requestor_str));
-
-    // Store the quote in the cache with None price (pending) and task_id for validation
-    {
-        let mut cache = state.quote_cache.lock().await;
-        cache.put(quote_id.clone(), (None, task_id));
-    }
-
-    // Get price from x402 config if available, otherwise return error
-    // TODO: Implement actual price computation asynchronously.
-    let price = if let Some(cfg) = state.x402_config.as_ref() {
-        cfg.price.clone()
+    // Require pricing to be present
+    let pricing = if let Some(cfg) = &state.x402_config {
+        &cfg.pricing
     } else {
         let problem = ProblemJson::from_status(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -69,14 +55,54 @@ pub async fn handle_backup_quote(
         );
         return problem.into_response();
     };
-    {
-        let mut cache = state.quote_cache.lock().await;
-        if let Some((cached_price, _task_id)) = cache.get_mut(&quote_id) {
-            *cached_price = Some(price.clone());
-        }
+
+    if pricing.is_empty() {
+        let problem = ProblemJson::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Some("Quote pricing not configured".to_string()),
+            Some("/v1/backups/quote".to_string()),
+        );
+        return problem.into_response();
     }
 
-    info!("Created quote {} with price {}", quote_id, price);
+    // Generate a unique quote ID
+    let quote_id = Uuid::new_v4().to_string();
+    // Compute the task_id for this request (same as backup creation)
+    let requestor_str = _requestor.as_deref().unwrap_or("");
+    let task_id = compute_task_id(&req.tokens, Some(requestor_str));
+
+    // Store the quote in the cache with None price (pending) and task_id for validation
+    {
+        let mut cache = state.quote_cache.lock().await;
+        cache.put(quote_id.clone(), (None, task_id.clone()));
+    }
+
+    // Queue quote calculation task
+    let quote_task = QuoteTask {
+        quote_id: quote_id.clone(),
+        task_id: task_id.clone(),
+        request: req.clone(),
+        requestor: _requestor.clone(),
+    };
+
+    if let Err(e) = state
+        .backup_task_sender
+        .send(BackupTaskOrShutdown::Task(TaskType::Quote(quote_task)))
+        .await
+    {
+        {
+            let mut cache = state.quote_cache.lock().await;
+            cache.pop(&quote_id);
+        }
+        let problem = ProblemJson::from_status(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Some(format!("Failed to enqueue quote task: {}", e)),
+            Some("/v1/backups/quote".to_string()),
+        );
+        return problem.into_response();
+    }
+
+    info!("Queued quote {}", quote_id);
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -93,6 +119,8 @@ pub async fn handle_backup_quote(
 }
 
 /// Get a quote by quote_id. Returns the quote with price if ready, or 202 Accepted if still being computed.
+/// The price is returned in the smallest unit of the asset, eg. USDC has 6 decimals, so the price is returned
+/// in microdollars (1 USDC = 1_000_000 microdollars).
 #[utoipa::path(
     get,
     path = "/v1/backups/quote/{quote_id}",
@@ -118,16 +146,12 @@ pub async fn handle_backup_quote_get(
         } else {
             StatusCode::ACCEPTED
         };
-        let (asset_symbol, network, price_decimal) = if let Some(cfg) = state.x402_config.as_ref() {
-            let price_decimal = price.as_ref().and_then(|p| {
-                parse_usdc_price_to_wei(p)
-                    .map(|microdollars| microdollars.to_string())
-                    .ok()
-            });
+        let (asset_symbol, network, price_wei) = if let Some(cfg) = state.x402_config.as_ref() {
+            let price_wei = price.map(|p| p.to_string());
             (
                 Some(cfg.asset_symbol.clone()),
                 Some(cfg.facilitator.network.to_string()),
-                price_decimal,
+                price_wei,
             )
         } else {
             (None, None, None)
@@ -136,7 +160,7 @@ pub async fn handle_backup_quote_get(
             status,
             Json(QuoteResponse {
                 quote_id,
-                price: price_decimal,
+                price: price_wei,
                 asset_symbol,
                 network,
             }),
@@ -167,14 +191,22 @@ mod handle_backup_quote_tests {
 
     use crate::ipfs::IpfsPinningConfig;
     use crate::server::database::Db;
-    use crate::server::x402::{X402Config, X402ConfigRaw, X402FacilitatorConfigRaw};
+    use crate::server::x402::{PricingRaw, X402Config, X402ConfigRaw, X402FacilitatorConfigRaw};
     use crate::server::AppState;
+
+    fn sample_pricing_raw() -> PricingRaw {
+        PricingRaw {
+            archive_price_per_gb: Some("5".to_string()),
+            pin_price_per_gb: Some("2".to_string()),
+        }
+    }
 
     fn make_state_with_x402(ipfs_pinning_configs: Vec<IpfsPinningConfig>) -> AppState {
         let mut chains = HashMap::new();
         chains.insert("ethereum".to_string(), "rpc://dummy".to_string());
         let chain_config = crate::ChainConfig(chains);
-        let (tx, _rx) = mpsc::channel(1);
+        let (tx, mut rx) = mpsc::channel(1);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://user:pass@localhost/db")
             .unwrap();
@@ -185,13 +217,13 @@ mod handle_backup_quote_tests {
             base_url: "http://localhost:8080/".to_string(),
             recipient_address: "0x1234567890123456789012345678901234567890".to_string(),
             max_timeout_seconds: 300,
-            price: "0.1".to_string(),
             facilitator: X402FacilitatorConfigRaw {
                 url: "https://x402.org/facilitator".to_string(),
                 network: "base-sepolia".to_string(),
                 api_key_id_env: None,
                 api_key_secret_env: None,
             },
+            pricing: sample_pricing_raw(),
         };
         let x402_config = X402Config::compile(x402_config_raw).unwrap();
 
@@ -210,7 +242,7 @@ mod handle_backup_quote_tests {
             shutdown_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ipfs_pinning_configs,
             ipfs_pinning_instances: Arc::new(Vec::new()),
-            x402_config: Some(x402_config),
+            x402_config: Some(x402_config.clone()),
         }
     }
 
@@ -218,7 +250,8 @@ mod handle_backup_quote_tests {
         let mut chains = HashMap::new();
         chains.insert("ethereum".to_string(), "rpc://dummy".to_string());
         let chain_config = crate::ChainConfig(chains);
-        let (tx, _rx) = mpsc::channel(1);
+        let (tx, mut rx) = mpsc::channel(1);
+        tokio::spawn(async move { while rx.recv().await.is_some() {} });
         let pool = sqlx::postgres::PgPoolOptions::new()
             .connect_lazy("postgres://user:pass@localhost/db")
             .unwrap();
@@ -269,9 +302,15 @@ mod handle_backup_quote_tests {
             .unwrap();
 
         let resp = app.call(req).await.unwrap();
-        assert_eq!(resp.status(), StatusCode::ACCEPTED);
-
+        let status = resp.status();
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        if status != StatusCode::ACCEPTED {
+            panic!(
+                "expected 202 but got {} body={}",
+                status,
+                String::from_utf8_lossy(&body)
+            );
+        }
         let quote_resp: QuoteCreateResponse = serde_json::from_slice(&body).unwrap();
         assert!(!quote_resp.quote_id.is_empty());
     }
@@ -365,9 +404,25 @@ mod handle_backup_quote_tests {
             .unwrap();
 
         let resp = app.call(req).await.unwrap();
+        let status = resp.status();
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        if status != StatusCode::ACCEPTED {
+            panic!(
+                "expected 202 but got {} body={}",
+                status,
+                String::from_utf8_lossy(&body)
+            );
+        }
         let quote_resp: QuoteCreateResponse = serde_json::from_slice(&body).unwrap();
         let quote_id = quote_resp.quote_id;
+
+        // Simulate worker completion by setting the price in the cache
+        {
+            let mut cache = state.quote_cache.lock().await;
+            if let Some((price_slot, _)) = cache.get_mut(&quote_id) {
+                *price_slot = Some(1_000_000);
+            }
+        }
 
         // Now get the quote
         let req = Request::builder()
@@ -382,7 +437,7 @@ mod handle_backup_quote_tests {
         let body = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let quote: QuoteResponse = serde_json::from_slice(&body).unwrap();
         assert_eq!(quote.quote_id, quote_id);
-        assert_eq!(quote.price, Some("100000".to_string()));
+        assert_eq!(quote.price, Some("1000000".to_string()));
         assert_eq!(quote.asset_symbol, Some("USDC".to_string()));
         assert_eq!(quote.network, Some("base-sepolia".to_string()));
     }

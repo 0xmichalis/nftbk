@@ -31,8 +31,12 @@ base_url = "https://localhost:8080/"
 recipient_address = "0xYourRecipientAddress"
 # Maximum time allowed for payment completion
 max_timeout_seconds = 300
-# Price for backup creation in USDC (e.g., "0.1" for 0.1 USDC)
-price = "0.1"
+
+[x402.pricing]
+# Archive price per gigabyte (USDC, decimal string)
+archive_price_per_gb = "0.05"
+# IPFS pinning price per gigabyte (USDC, decimal string)
+pin_price_per_gb = "0.2"
 
 # Check https://www.x402.org/ecosystem?category=facilitators for more facilitator options
 [x402.facilitator]

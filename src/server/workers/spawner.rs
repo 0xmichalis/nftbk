@@ -1,10 +1,12 @@
 use std::sync::Arc;
+
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::info;
 
 use super::creation::run_backup_task;
 use super::deletion::run_deletion_task;
+use super::quote::run_quote_task;
 use crate::server::{AppState, BackupTaskOrShutdown, TaskType};
 
 pub fn spawn_backup_workers(
@@ -31,6 +33,9 @@ pub fn spawn_backup_workers(
                         }
                         TaskType::Deletion(deletion_task) => {
                             run_deletion_task(state_clone.clone(), deletion_task).await;
+                        }
+                        TaskType::Quote(quote_task) => {
+                            run_quote_task(state_clone.clone(), quote_task).await;
                         }
                     },
                     Some(BackupTaskOrShutdown::Shutdown) | None => break,
