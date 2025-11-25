@@ -176,7 +176,7 @@ async fn validate_quote_if_present(
                 let mut cache = quote_cache.lock().await;
                 cache
                     .get(quote_id)
-                    .map(|(price_opt, quote_task_id)| (price_opt.clone(), quote_task_id.clone()))
+                    .map(|(price_opt, quote_task_id)| (*price_opt, quote_task_id.clone()))
             };
             match cache_result {
                 None => {
@@ -1469,7 +1469,7 @@ mod validate_quote_if_present_tests {
         let mut cache = lru::LruCache::new(NonZeroUsize::new(1000).unwrap());
         cache.put(
             "quote_123".to_string(),
-            (Some("0.1".to_string()), "different_task_id".to_string()),
+            (Some(100_000), "different_task_id".to_string()),
         );
         let quote_cache = Arc::new(Mutex::new(cache));
         let task_id = "test_task_id";
@@ -1513,7 +1513,7 @@ mod validate_quote_if_present_tests {
         let mut cache = lru::LruCache::new(NonZeroUsize::new(1000).unwrap());
         cache.put(
             "quote_123".to_string(),
-            (Some("0.1".to_string()), "test_task_id".to_string()),
+            (Some(100_000), "test_task_id".to_string()),
         );
         let quote_cache = Arc::new(Mutex::new(cache));
         let task_id = "test_task_id";

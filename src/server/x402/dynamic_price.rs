@@ -71,7 +71,7 @@ async fn compute_dynamic_price_impl(
         X402Error::verification_failed(format!("Quote {quote_id} not found in cache"), Vec::new())
     })?;
 
-    let price_str = price_opt.clone().ok_or_else(|| {
+    let price_wei = price_opt.ok_or_else(|| {
         X402Error::verification_failed(
             format!("Quote {quote_id} exists but has no price set"),
             Vec::new(),
@@ -81,23 +81,18 @@ async fn compute_dynamic_price_impl(
     drop(cache);
 
     // Validate the price tag
-    let _price_tag = config.usdc_price_tag_for_amount(&price_str).map_err(|e| {
-        let error_msg = format!(
-            "Failed to build price tag from amount '{}': {}",
-            price_str, e
-        );
-        warn!("{}", error_msg);
-        X402Error::verification_failed(error_msg, Vec::new())
-    })?;
+    let _price_tag = config
+        .usdc_price_tag_for_token_amount(price_wei)
+        .map_err(|e| {
+            let error_msg = format!(
+                "Failed to build price tag from amount '{}': {}",
+                price_wei, e
+            );
+            warn!("{}", error_msg);
+            X402Error::verification_failed(error_msg, Vec::new())
+        })?;
 
-    // Parse price string directly as integer microdollars to avoid floating-point precision issues
-    // USDC has 6 decimal places, so we convert dollars to microdollars (multiply by 1_000_000)
-    let token_amount = parse_usdc_price_to_wei(&price_str).map_err(|e| {
-        let error_msg = format!("Failed to parse price '{}': {}", price_str, e);
-        warn!("{}", error_msg);
-        X402Error::verification_failed(error_msg, Vec::new())
-    })?;
-    let token_amount = TokenAmount::from(token_amount);
+    let token_amount = TokenAmount::from(price_wei);
 
     Ok(token_amount)
 }

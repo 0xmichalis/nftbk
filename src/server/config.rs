@@ -196,7 +196,9 @@ asset_symbol = "USDC"
 base_url = "http://localhost:8080/"
 recipient_address = "0x1234567890123456789012345678901234567890"
 max_timeout_seconds = 300
-price = "0.1"
+[x402.pricing]
+archive_price_per_gb = "5"
+pin_price_per_gb = "2"
 
 [x402.facilitator]
 url = "https://x402.org/facilitator"
@@ -316,11 +318,14 @@ asset_symbol = "USDC"
 base_url = "http://localhost:8080/"
 recipient_address = "0x1234567890123456789012345678901234567890"
 max_timeout_seconds = 300
-price = "0.1"
 
 [x402.facilitator]
 url = "https://x402.org/facilitator"
 network = "base-sepolia"
+
+[x402.pricing]
+archive_price_per_gb = "5"
+pin_price_per_gb = "2"
 
 [[ipfs_pinning_provider]]
 type = "pinning-service"
@@ -412,7 +417,10 @@ asset_symbol = "USDC"
 base_url = "http://localhost:8080/"
 recipient_address = "0x1234567890123456789012345678901234567890"
 max_timeout_seconds = 300
-price = "0.1"
+
+[x402.pricing]
+archive_price_per_gb = "5"
+pin_price_per_gb = "2"
 
 [x402.facilitator]
 url = "https://x402.org/facilitator"
@@ -488,7 +496,10 @@ asset_symbol = "USDC"
 base_url = "http://localhost:8080/"
 recipient_address = "invalid-address"
 max_timeout_seconds = 300
-price = "0.1"
+
+[x402.pricing]
+archive_price_per_gb = "5"
+pin_price_per_gb = "2"
 
 [x402.facilitator]
 url = "https://x402.org/facilitator"
