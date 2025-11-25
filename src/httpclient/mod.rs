@@ -4,7 +4,7 @@ use tracing::info;
 
 use crate::content::get_filename;
 use crate::content::{extensions, try_exists, write_and_postprocess_file, Options};
-use crate::httpclient::fetch::try_fetch_response;
+use crate::httpclient::fetch::{try_fetch_response, try_head_content_length};
 use crate::httpclient::retry::{retry_operation, should_retry};
 use crate::httpclient::stream::stream_http_to_file;
 use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType, IPFS_GATEWAYS};
@@ -68,6 +68,30 @@ impl HttpClient {
                         (Err(err), status) => (Err(err), status),
                     }
                 })
+            },
+            self.max_retries,
+            should_retry,
+            &resolved_url,
+        )
+        .await;
+        result
+    }
+
+    pub async fn head_content_length(&self, url: &str) -> anyhow::Result<u64> {
+        if is_data_url(url) {
+            let data = get_data_url(url)
+                .ok_or_else(|| anyhow::anyhow!("Failed to parse data URL: {}", url))?;
+            return Ok(data.len() as u64);
+        }
+
+        let resolved_url = resolve_url_with_gateways(url, &self.ipfs_gateways);
+        let gateways = self.ipfs_gateways.clone();
+
+        let (result, _status) = retry_operation(
+            || {
+                let url = resolved_url.clone();
+                let gateways = gateways.clone();
+                Box::pin(async move { try_head_content_length(&url, &gateways).await })
             },
             self.max_retries,
             should_retry,
@@ -417,5 +441,38 @@ mod fetch_tests {
         // Verify that default has the expected configuration
         assert_eq!(client.max_retries, 5);
         assert!(!client.ipfs_gateways.is_empty()); // Should have default IPFS gateways
+    }
+}
+
+#[cfg(test)]
+mod head_content_length_tests {
+    use super::*;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    #[tokio::test]
+    async fn calculates_size_for_data_url() {
+        let client = HttpClient::new();
+        let data_url = "data:text/plain;base64,SGVsbG8="; // "Hello"
+        let size = client.head_content_length(data_url).await.unwrap();
+        assert_eq!(size, 5);
+    }
+
+    #[tokio::test]
+    async fn calculates_size_for_http_resource() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/asset", mock_server.uri());
+
+        Mock::given(method("HEAD"))
+            .and(path("/asset"))
+            .respond_with(ResponseTemplate::new(200).insert_header("Content-Length", "1024"))
+            .mount(&mock_server)
+            .await;
+
+        let client = HttpClient::new();
+        let size = client.head_content_length(&url).await.unwrap();
+        assert_eq!(size, 1024);
     }
 }

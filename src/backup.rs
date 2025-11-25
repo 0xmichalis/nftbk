@@ -1,13 +1,14 @@
-use anyhow::{Context, Result};
 use std::sync::Arc;
 use std::time::Instant;
+
+use anyhow::{Context, Result};
 use tokio::fs;
 use tracing::{info, warn, Instrument};
 
 use crate::chain::common::ContractTokenId;
 use crate::chain::evm::EvmChainProcessor;
-use crate::chain::process_nfts;
 use crate::chain::tezos::TezosChainProcessor;
+use crate::chain::{process_nfts, size_nfts};
 use crate::types::{ArchiveOutcome, BackupConfig, IpfsOutcome, TokenPinMapping};
 
 impl BackupConfig {
@@ -144,6 +145,95 @@ impl BackupConfig {
             None => backup_inner(self).await,
         }
     }
+
+    /// Estimate total NFT size (in bytes) via metadata serialization and HTTP
+    /// HEAD requests so content is never fully downloaded. Useful for pricing
+    /// and capacity planning calculations.
+    ///
+    /// TODO: Size estimations for IPFS CIDs that are directories are going to
+    /// be inaccurate, see https://discuss.ipfs.tech/t/calculate-total-size-when-cid-is-a-directory/19832
+    pub async fn size(self, span: Option<tracing::Span>) -> Result<u64> {
+        async fn size_inner(cfg: BackupConfig) -> Result<u64> {
+            let chain_config = &cfg.chain_config.0;
+            let token_config = &cfg.token_config;
+
+            let mut total_size = 0u64;
+            let mut nft_count = 0usize;
+
+            for (chain_name, tokens) in &token_config.chains {
+                if tokens.is_empty() {
+                    warn!("No tokens configured for chain {}", chain_name);
+                    continue;
+                }
+                info!(
+                    "Calculating size for {} tokens on {} ...",
+                    tokens.len(),
+                    chain_name
+                );
+                let rpc_url = chain_config
+                    .get(chain_name)
+                    .context(format!("No RPC URL configured for chain {chain_name}"))?;
+                let tokens = ContractTokenId::parse_tokens(tokens, chain_name);
+                nft_count += tokens.len();
+
+                let chain_total = if chain_name == "tezos" {
+                    let processor = Arc::new(TezosChainProcessor::new(
+                        rpc_url,
+                        cfg.storage_config.clone(),
+                    )?);
+                    size_nfts(processor, tokens, cfg.process_config.clone(), |metadata| {
+                        metadata.artifact_uri.as_deref()
+                    })
+                    .await?
+                } else {
+                    let processor = Arc::new(
+                        EvmChainProcessor::new(rpc_url, cfg.storage_config.clone()).await?,
+                    );
+                    size_nfts(processor, tokens, cfg.process_config.clone(), |_metadata| {
+                        None
+                    })
+                    .await?
+                };
+
+                total_size = total_size
+                    .checked_add(chain_total)
+                    .context("Total size overflow while aggregating chain size")?;
+            }
+
+            let (readable_value, readable_unit) = format_size(total_size);
+            info!(
+                "Size calculation complete. {} NFTs total estimated size: {} bytes ({:.2} {}).",
+                nft_count, total_size, readable_value, readable_unit
+            );
+
+            Ok(total_size)
+        }
+
+        let derived_span = span.unwrap_or_else(|| {
+            tracing::info_span!(
+                "backup_size",
+                task_id = %self.task_id.as_deref().unwrap_or("unknown")
+            )
+        });
+        size_inner(self).instrument(derived_span).await
+    }
+}
+
+fn format_size(bytes: u64) -> (f64, &'static str) {
+    const UNITS: [(&str, u64); 5] = [
+        ("bytes", 1),
+        ("KB", 1024),
+        ("MB", 1024 * 1024),
+        ("GB", 1024 * 1024 * 1024),
+        ("TB", 1024 * 1024 * 1024 * 1024),
+    ];
+
+    for (unit, factor) in UNITS.iter().rev() {
+        if bytes >= *factor {
+            return (bytes as f64 / *factor as f64, unit);
+        }
+    }
+    (bytes as f64, "bytes")
 }
 
 #[cfg(test)]
@@ -270,5 +360,20 @@ mod tests {
         // Wait for the backup to complete (should be quick since no tokens to process)
         let result = timeout(Duration::from_secs(5), backup_handle).await;
         assert!(result.is_ok(), "Backup should complete within timeout");
+    }
+
+    #[test]
+    fn format_size_selects_largest_unit() {
+        let (value, unit) = format_size(0);
+        assert_eq!(unit, "bytes");
+        assert_eq!(value, 0.0);
+
+        let (value, unit) = format_size(1024 * 1024);
+        assert_eq!(unit, "MB");
+        assert_eq!(value, 1.0);
+
+        let (value, unit) = format_size(3 * 1024 * 1024 * 1024 + 512);
+        assert_eq!(unit, "GB");
+        assert!((value - 3.0).abs() < 1e-6);
     }
 }
