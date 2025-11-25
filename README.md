@@ -1,5 +1,7 @@
 # nftbk
 
+![x402 badge](assets/x402-button-small.png)
+
 [![CI](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml/badge.svg)](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml)[![Coverage](https://coveralls.io/repos/github/0xmichalis/nftbk/badge.svg?branch=main)](https://coveralls.io/github/0xmichalis/nftbk?branch=main)
 
 A library, server, and CLI tool for protecting NFTs. The following networks are
@@ -86,6 +88,31 @@ type = "pinata"
 base_url = "https://api.pinata.cloud"
 bearer_token_env = "PINATA_TOKEN"
 ```
+
+### x402 payments
+
+The server can lock backup generation behind [x402](https://x402.org)
+micropayments. Enable it by adding an `[x402]` stanza to your config:
+
+```toml
+[x402]
+asset_symbol = "USDC"                # Settlement asset (USDC supported today)
+base_url = "https://localhost:8080"  # Public base URL echoed in 402 replies
+recipient_address = "0x..."          # Wallet that receives payments
+max_timeout_seconds = 300            # How long a quote remains payable
+
+[x402.pricing]
+archive_price_per_gb = "0.05"        # USDC per GB for archive downloads
+pin_price_per_gb = "0.2"             # USDC per GB for IPFS pinning
+
+[x402.facilitator]
+url = "https://x402.org/facilitator" # Facilitator endpoint
+network = "base-sepolia"             # Facilitator network id
+```
+
+When enabled, callers should first request quotes via `POST /v1/backups/quote`;
+the quote should subsequently be used as part of the normal `POST /v1/backups`
+request.
 
 ## Run
 
