@@ -1,9 +1,11 @@
+use reqwest::{header::CONTENT_LENGTH, Method};
 use tracing::{info, warn};
 
 use crate::ipfs::config::IpfsGatewayConfig;
 use crate::ipfs::url::{generate_url_for_gateways, GatewayUrl};
 
-pub(crate) async fn fetch_url(
+async fn send_request(
+    method: Method,
     url: &str,
     bearer_token: Option<String>,
 ) -> anyhow::Result<reqwest::Response> {
@@ -11,12 +13,26 @@ pub(crate) async fn fetch_url(
         .user_agent(crate::USER_AGENT)
         .build()?;
 
-    let mut req = client.get(url);
+    let mut req = client.request(method, url);
     if let Some(token) = bearer_token {
         req = req.bearer_auth(token);
     }
 
     Ok(req.send().await?)
+}
+
+pub(crate) async fn fetch_url(
+    url: &str,
+    bearer_token: Option<String>,
+) -> anyhow::Result<reqwest::Response> {
+    send_request(Method::GET, url, bearer_token).await
+}
+
+pub(crate) async fn head_url(
+    url: &str,
+    bearer_token: Option<String>,
+) -> anyhow::Result<reqwest::Response> {
+    send_request(Method::HEAD, url, bearer_token).await
 }
 
 pub(crate) fn create_http_error(status: reqwest::StatusCode, url: &str) -> anyhow::Error {
@@ -67,10 +83,15 @@ pub(crate) async fn try_fetch_response(
     }
 }
 
-pub(crate) async fn retry_with_gateways(
+/// Retry a failed HTTP request against configured IPFS gateways using the
+/// provided HTTP method so both GET and HEAD flows can share the same logic.
+/// The original error is logged for context and returned if no gateway
+/// succeeds.
+async fn retry_with_gateways_with_method(
     url: &str,
     original_error: anyhow::Error,
     gateways: &[IpfsGatewayConfig],
+    method: Method,
 ) -> anyhow::Result<reqwest::Response> {
     let gateway_urls = match generate_url_for_gateways(url, gateways) {
         Some(urls) => {
@@ -94,7 +115,7 @@ pub(crate) async fn retry_with_gateways(
         bearer_token,
     } in alternative_gateways
     {
-        match fetch_url(&new_url, bearer_token).await {
+        match send_request(method.clone(), &new_url, bearer_token).await {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() {
@@ -116,6 +137,97 @@ pub(crate) async fn retry_with_gateways(
     }
 
     Err(last_err)
+}
+
+pub(crate) async fn retry_with_gateways(
+    url: &str,
+    original_error: anyhow::Error,
+    gateways: &[IpfsGatewayConfig],
+) -> anyhow::Result<reqwest::Response> {
+    retry_with_gateways_with_method(url, original_error, gateways, Method::GET).await
+}
+
+fn extract_content_length(response: &reqwest::Response) -> Option<u64> {
+    response
+        .headers()
+        .get(CONTENT_LENGTH)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.parse::<u64>().ok())
+        .or_else(|| response.content_length())
+}
+
+/// Attempt to read the `Content-Length` of `url` using HEAD requests, falling
+/// back to alternate IPFS gateways when available. Returns the parsed byte size
+/// and the HTTP status code (if any) encountered while probing.
+pub(crate) async fn try_head_content_length(
+    url: &str,
+    gateways: &[IpfsGatewayConfig],
+) -> (anyhow::Result<u64>, Option<reqwest::StatusCode>) {
+    match head_url(url, None).await {
+        Ok(response) => {
+            let status = response.status();
+            if status.is_success() {
+                if let Some(len) = extract_content_length(&response) {
+                    (Ok(len), Some(status))
+                } else {
+                    (
+                        Err(anyhow::anyhow!(
+                            "HEAD response missing Content-Length for {}",
+                            url
+                        )),
+                        Some(status),
+                    )
+                }
+            } else {
+                let error = create_http_error(status, url);
+                match retry_with_gateways_with_method(url, error, gateways, Method::HEAD).await {
+                    Ok(alt_response) => {
+                        let alt_status = alt_response.status();
+                        if alt_status.is_success() {
+                            if let Some(len) = extract_content_length(&alt_response) {
+                                (Ok(len), Some(alt_status))
+                            } else {
+                                (
+                                    Err(anyhow::anyhow!(
+                                        "HEAD response missing Content-Length for {}",
+                                        alt_response.url()
+                                    )),
+                                    Some(alt_status),
+                                )
+                            }
+                        } else {
+                            (
+                                Err(create_http_error(alt_status, alt_response.url().as_str())),
+                                Some(alt_status),
+                            )
+                        }
+                    }
+                    Err(gateway_err) => (Err(gateway_err), Some(status)),
+                }
+            }
+        }
+        Err(e) => match retry_with_gateways_with_method(url, e, gateways, Method::HEAD).await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    if let Some(len) = extract_content_length(&response) {
+                        (Ok(len), Some(status))
+                    } else {
+                        (
+                            Err(anyhow::anyhow!(
+                                "HEAD response missing Content-Length for {}",
+                                response.url()
+                            )),
+                            Some(status),
+                        )
+                    }
+                } else {
+                    (Err(create_http_error(status, url)), Some(status))
+                }
+            }
+            Err(gateway_err) => (Err(gateway_err), None),
+        },
+    }
 }
 
 #[cfg(test)]

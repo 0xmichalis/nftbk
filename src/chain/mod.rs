@@ -1,7 +1,8 @@
-use anyhow::anyhow;
-use async_trait::async_trait;
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
+
+use anyhow::{anyhow, Context};
+use async_trait::async_trait;
 use tracing::{debug, error, info, warn};
 
 use crate::content::extra::fetch_and_write_extra;
@@ -452,6 +453,117 @@ where
             errors: ipfs_errors,
         },
     ))
+}
+
+/// Estimate combined metadata and content size for the provided tokens without
+/// downloading full assets. Uses HEAD requests through the chain processor's
+/// HTTP client and supports chain-specific extra URIs supplied via
+/// `get_extra_content_uri`.
+///
+/// * `processor` – chain processor capable of fetching metadata and HEAD sizes.
+/// * `tokens` – collection of contract token identifiers to inspect.
+/// * `config` – process management config to honor shutdown signals.
+/// * `get_extra_content_uri` – callback that returns an additional content URI
+///   (if any) for a token's metadata (e.g. Tezos `artifact_uri`).
+pub async fn size_nfts<C, FExtraUri>(
+    processor: std::sync::Arc<C>,
+    tokens: Vec<C::ContractTokenId>,
+    config: crate::ProcessManagementConfig,
+    get_extra_content_uri: FExtraUri,
+) -> anyhow::Result<u64>
+where
+    C: NFTChainProcessor + Sync + Send + 'static,
+    C::ContractTokenId: ContractTokenInfo,
+    C::Metadata: serde::Serialize,
+    FExtraUri: Fn(&C::Metadata) -> Option<&str>,
+{
+    let mut total_size = 0u64;
+
+    for token in tokens {
+        check_shutdown_signal(&config)?;
+
+        let token_uri = match processor.get_uri(&token).await {
+            Ok(uri) => uri,
+            Err(err) => {
+                warn!(
+                    token = %token,
+                    error = %err,
+                    "Failed to get token URI during size estimation; skipping token"
+                );
+                continue;
+            }
+        };
+
+        let metadata = match processor.fetch_metadata(&token_uri).await {
+            Ok(metadata) => metadata,
+            Err(err) => {
+                warn!(
+                    token = %token,
+                    error = %err,
+                    "Failed to fetch metadata during size estimation; skipping token"
+                );
+                continue;
+            }
+        };
+
+        let metadata_size = match serde_json::to_vec(&metadata) {
+            Ok(bytes) => bytes.len() as u64,
+            Err(err) => {
+                warn!(
+                    token = %token,
+                    error = %err,
+                    "Failed to serialize metadata during size estimation; skipping token"
+                );
+                continue;
+            }
+        };
+        total_size = total_size
+            .checked_add(metadata_size)
+            .context("Total size overflow while adding metadata")?;
+
+        let mut seen_urls = HashSet::new();
+        for (url, _) in C::collect_urls(&metadata) {
+            if seen_urls.insert(url.clone()) {
+                let size = match processor.http_client().head_content_length(&url).await {
+                    Ok(size) => size,
+                    Err(err) => {
+                        warn!(
+                            token = %token,
+                            url = %url,
+                            error = %err,
+                            "Failed to HEAD content during size estimation; skipping URL"
+                        );
+                        continue;
+                    }
+                };
+                total_size = total_size
+                    .checked_add(size)
+                    .context("Total size overflow while adding content")?;
+            }
+        }
+
+        if let Some(extra_uri) = get_extra_content_uri(&metadata) {
+            if !extra_uri.is_empty() && seen_urls.insert(extra_uri.to_string()) {
+                let size = match processor.http_client().head_content_length(extra_uri).await {
+                    Ok(size) => size,
+                    Err(err) => {
+                        warn!(
+                            token = %token,
+                            url = %extra_uri,
+                            error = %err,
+                            "Failed to HEAD extra content during size estimation; skipping URL"
+                        );
+                        continue;
+                    }
+                };
+                total_size = total_size
+                    .checked_add(size)
+                    .context("Total size overflow while adding extra content")?;
+            }
+        }
+    }
+
+    Ok(total_size)
 }
 
 #[cfg(test)]
@@ -1465,6 +1577,156 @@ mod process_nfts_tests {
                 crate::ipfs::PinResponseStatus::Pinned
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod size_nfts_tests {
+    use super::*;
+    use crate::chain::common::ContractTokenId;
+    use crate::content::Options;
+    use crate::ipfs::IpfsPinningProvider;
+    use crate::ProcessManagementConfig;
+    use std::sync::Arc;
+
+    #[derive(Clone, serde::Serialize)]
+    struct MockMetadata {
+        image: String,
+        animation_url: Option<String>,
+    }
+
+    struct MockProcessor {
+        metadata: MockMetadata,
+        token_uri: String,
+        http_client: crate::httpclient::HttpClient,
+    }
+
+    impl MockProcessor {
+        fn new(metadata: MockMetadata) -> Self {
+            Self {
+                metadata,
+                token_uri: "data:application/json;base64,eyJuYW1lIjoiVCJ9".to_string(),
+                http_client: crate::httpclient::HttpClient::new(),
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl NFTChainProcessor for MockProcessor {
+        type Metadata = MockMetadata;
+        type ContractTokenId = ContractTokenId;
+        type RpcClient = ();
+
+        async fn get_uri(&self, _token: &Self::ContractTokenId) -> anyhow::Result<String> {
+            Ok(self.token_uri.clone())
+        }
+
+        async fn fetch_metadata(&self, _token_uri: &str) -> anyhow::Result<Self::Metadata> {
+            Ok(self.metadata.clone())
+        }
+
+        fn collect_urls(metadata: &Self::Metadata) -> Vec<(String, Options)> {
+            let mut urls = Vec::new();
+            urls.push((
+                metadata.image.clone(),
+                Options {
+                    fallback_filename: None,
+                    overriden_filename: None,
+                },
+            ));
+            if let Some(animation_url) = &metadata.animation_url {
+                urls.push((
+                    animation_url.clone(),
+                    Options {
+                        fallback_filename: None,
+                        overriden_filename: None,
+                    },
+                ));
+            }
+            urls
+        }
+
+        fn ipfs_pinning_providers(&self) -> &[Box<dyn IpfsPinningProvider>] {
+            &[]
+        }
+
+        fn output_path(&self) -> Option<&std::path::Path> {
+            None
+        }
+
+        fn http_client(&self) -> &crate::httpclient::HttpClient {
+            &self.http_client
+        }
+    }
+
+    fn token() -> ContractTokenId {
+        ContractTokenId {
+            address: "0x123".to_string(),
+            token_id: "1".to_string(),
+            chain_name: "test".to_string(),
+        }
+    }
+
+    fn config() -> ProcessManagementConfig {
+        ProcessManagementConfig {
+            exit_on_error: true,
+            shutdown_flag: None,
+        }
+    }
+
+    fn no_extra<M>(_metadata: &M) -> Option<&str> {
+        None
+    }
+
+    fn extra_url<M>(_metadata: &M) -> Option<&str> {
+        Some("data:text/plain;base64,ZXh0cmE=") // "extra"
+    }
+
+    #[tokio::test]
+    async fn size_nfts_returns_expected_size() {
+        let metadata = MockMetadata {
+            image: "data:text/plain;base64,SGVsbG8=".to_string(), // "Hello"
+            animation_url: Some("data:text/plain;base64,V29ybGQ=".to_string()), // "World"
+        };
+        let processor = Arc::new(MockProcessor::new(metadata.clone()));
+        let total = size_nfts(processor, vec![token()], config(), no_extra::<MockMetadata>)
+            .await
+            .unwrap();
+
+        let expected_metadata = serde_json::to_vec(&metadata).unwrap().len() as u64;
+        let client = crate::httpclient::HttpClient::new();
+        let image_size = client.head_content_length(&metadata.image).await.unwrap();
+        let animation_size = client
+            .head_content_length(metadata.animation_url.as_ref().unwrap())
+            .await
+            .unwrap();
+        assert_eq!(total, expected_metadata + image_size + animation_size);
+    }
+
+    #[tokio::test]
+    async fn size_nfts_includes_extra_content() {
+        let metadata = MockMetadata {
+            image: "data:text/plain;base64,QQ==".to_string(), // "A"
+            animation_url: None,
+        };
+        let processor = Arc::new(MockProcessor::new(metadata.clone()));
+        let total = size_nfts(
+            processor,
+            vec![token()],
+            config(),
+            extra_url::<MockMetadata>,
+        )
+        .await
+        .unwrap();
+
+        let expected_metadata = serde_json::to_vec(&metadata).unwrap().len() as u64;
+        let client = crate::httpclient::HttpClient::new();
+        let image_size = client.head_content_length(&metadata.image).await.unwrap();
+        let extra_size = client
+            .head_content_length(extra_url::<MockMetadata>(&metadata).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(total, expected_metadata + image_size + extra_size);
     }
 }
 
