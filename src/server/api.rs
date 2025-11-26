@@ -62,6 +62,10 @@ pub struct QuoteResponse {
     /// None if the quote is still being computed
     #[schema(example = "base-sepolia")]
     pub network: Option<String>,
+    /// Estimated total size of the backup in bytes
+    /// None if the quote is still being computed
+    #[schema(example = 1073741824)]
+    pub estimated_size_bytes: Option<u64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema, Clone)]

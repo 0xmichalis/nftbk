@@ -830,6 +830,7 @@ mod tests {
             price: price_wei,
             asset_symbol: None,
             network: None,
+            estimated_size_bytes: None,
         }
     }
 

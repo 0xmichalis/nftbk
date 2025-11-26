@@ -174,9 +174,7 @@ async fn validate_quote_if_present(
             // Only hold the lock while accessing the cache
             let cache_result = {
                 let mut cache = quote_cache.lock().await;
-                cache
-                    .get(quote_id)
-                    .map(|(price_opt, quote_task_id)| (*price_opt, quote_task_id.clone()))
+                cache.get(quote_id).cloned()
             };
             match cache_result {
                 None => {
@@ -187,19 +185,19 @@ async fn validate_quote_if_present(
                     );
                     return Some(problem.into_response());
                 }
-                Some((price_opt, quote_task_id)) => {
-                    if quote_task_id != task_id {
+                Some(entry) => {
+                    if entry.task_id != task_id {
                         let problem = ProblemJson::from_status(
                             StatusCode::BAD_REQUEST,
                             Some(format!(
                                 "Quote task_id mismatch: quote is for task {}, but request is for task {}",
-                                quote_task_id, task_id
+                                entry.task_id, task_id
                             )),
                             Some("/v1/backups".to_string()),
                         );
                         return Some(problem.into_response());
                     }
-                    if price_opt.is_none() {
+                    if entry.price.is_none() {
                         let problem = ProblemJson::from_status(
                             StatusCode::BAD_REQUEST,
                             Some("Quote is not ready yet".to_string()),
@@ -1430,6 +1428,8 @@ mod validate_quote_if_present_tests {
     use std::sync::Arc;
     use tokio::sync::Mutex;
 
+    use crate::server::Quote;
+
     #[tokio::test]
     async fn returns_none_when_no_quote_header() {
         let headers = HeaderMap::new();
@@ -1469,7 +1469,11 @@ mod validate_quote_if_present_tests {
         let mut cache = lru::LruCache::new(NonZeroUsize::new(1000).unwrap());
         cache.put(
             "quote_123".to_string(),
-            (Some(100_000), "different_task_id".to_string()),
+            Quote {
+                price: Some(100_000),
+                estimated_size_bytes: Some(1),
+                task_id: "different_task_id".to_string(),
+            },
         );
         let quote_cache = Arc::new(Mutex::new(cache));
         let task_id = "test_task_id";
@@ -1492,7 +1496,14 @@ mod validate_quote_if_present_tests {
         let mut headers = HeaderMap::new();
         headers.insert("X-Quote-Id", "quote_123".parse().unwrap());
         let mut cache = lru::LruCache::new(NonZeroUsize::new(1000).unwrap());
-        cache.put("quote_123".to_string(), (None, "test_task_id".to_string()));
+        cache.put(
+            "quote_123".to_string(),
+            Quote {
+                price: None,
+                estimated_size_bytes: None,
+                task_id: "test_task_id".to_string(),
+            },
+        );
         let quote_cache = Arc::new(Mutex::new(cache));
         let task_id = "test_task_id";
 
@@ -1513,7 +1524,11 @@ mod validate_quote_if_present_tests {
         let mut cache = lru::LruCache::new(NonZeroUsize::new(1000).unwrap());
         cache.put(
             "quote_123".to_string(),
-            (Some(100_000), "test_task_id".to_string()),
+            Quote {
+                price: Some(100_000),
+                estimated_size_bytes: Some(1),
+                task_id: "test_task_id".to_string(),
+            },
         );
         let quote_cache = Arc::new(Mutex::new(cache));
         let task_id = "test_task_id";

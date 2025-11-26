@@ -67,9 +67,15 @@ async fn compute_dynamic_price_impl(
     })?;
 
     let mut cache = state.quote_cache.lock().await;
-    let (price_opt, _) = cache.get(&quote_id).ok_or_else(|| {
-        X402Error::verification_failed(format!("Quote {quote_id} not found in cache"), Vec::new())
-    })?;
+    let price_opt = cache
+        .get(&quote_id)
+        .ok_or_else(|| {
+            X402Error::verification_failed(
+                format!("Quote {quote_id} not found in cache"),
+                Vec::new(),
+            )
+        })?
+        .price;
 
     let price_wei = price_opt.ok_or_else(|| {
         X402Error::verification_failed(

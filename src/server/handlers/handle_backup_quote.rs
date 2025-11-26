@@ -11,7 +11,7 @@ use crate::server::api::{
 };
 use crate::server::hashing::compute_task_id;
 use crate::server::AppState;
-use crate::server::{BackupTaskOrShutdown, QuoteTask, TaskType};
+use crate::server::{BackupTaskOrShutdown, Quote, QuoteTask, TaskType};
 
 /// Request a quote for creating a backup. Returns a quote_id that can be used to retrieve the quote
 /// via GET /v1/backups/quote/{quote_id} once it's ready.
@@ -74,7 +74,14 @@ pub async fn handle_backup_quote(
     // Store the quote in the cache with None price (pending) and task_id for validation
     {
         let mut cache = state.quote_cache.lock().await;
-        cache.put(quote_id.clone(), (None, task_id.clone()));
+        cache.put(
+            quote_id.clone(),
+            Quote {
+                price: None,
+                estimated_size_bytes: None,
+                task_id: task_id.clone(),
+            },
+        );
     }
 
     // Queue quote calculation task
@@ -140,14 +147,14 @@ pub async fn handle_backup_quote_get(
     Path(quote_id): Path<String>,
 ) -> axum::response::Response {
     let mut cache = state.quote_cache.lock().await;
-    if let Some((price, _task_id)) = cache.get(&quote_id) {
-        let status = if price.is_some() {
+    if let Some(entry) = cache.get(&quote_id) {
+        let status = if entry.price.is_some() {
             StatusCode::OK
         } else {
             StatusCode::ACCEPTED
         };
         let (asset_symbol, network, price_wei) = if let Some(cfg) = state.x402_config.as_ref() {
-            let price_wei = price.map(|p| p.to_string());
+            let price_wei = entry.price.map(|p| p.to_string());
             (
                 Some(cfg.asset_symbol.clone()),
                 Some(cfg.facilitator.network.to_string()),
@@ -161,6 +168,7 @@ pub async fn handle_backup_quote_get(
             Json(QuoteResponse {
                 quote_id,
                 price: price_wei,
+                estimated_size_bytes: entry.estimated_size_bytes,
                 asset_symbol,
                 network,
             }),
@@ -419,8 +427,9 @@ mod handle_backup_quote_tests {
         // Simulate worker completion by setting the price in the cache
         {
             let mut cache = state.quote_cache.lock().await;
-            if let Some((price_slot, _)) = cache.get_mut(&quote_id) {
-                *price_slot = Some(1_000_000);
+            if let Some(entry) = cache.get_mut(&quote_id) {
+                entry.price = Some(1_000_000);
+                entry.estimated_size_bytes = Some(5_000_000);
             }
         }
 
@@ -440,6 +449,7 @@ mod handle_backup_quote_tests {
         assert_eq!(quote.price, Some("1000000".to_string()));
         assert_eq!(quote.asset_symbol, Some("USDC".to_string()));
         assert_eq!(quote.network, Some("base-sepolia".to_string()));
+        assert_eq!(quote.estimated_size_bytes, Some(5_000_000));
     }
 
     #[tokio::test]

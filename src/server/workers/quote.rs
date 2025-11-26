@@ -62,17 +62,18 @@ pub async fn run_quote_task(state: AppState, task: QuoteTask) {
 
     {
         let mut cache = state.quote_cache.lock().await;
-        if let Some((cached_price, cached_task_id)) = cache.get_mut(&quote_id) {
-            if *cached_task_id != task_id {
+        if let Some(entry) = cache.get_mut(&quote_id) {
+            if entry.task_id != task_id {
                 warn!(
                     quote_id = %quote_id,
-                    existing_task = %cached_task_id,
+                    existing_task = %entry.task_id,
                     new_task = %task_id,
                     "Quote task_id mismatch; ignoring computed price"
                 );
                 return;
             }
-            *cached_price = Some(price_wei);
+            entry.price = Some(price_wei);
+            entry.estimated_size_bytes = Some(total_size_bytes);
         } else {
             warn!(
                 quote_id = %quote_id,
@@ -388,6 +389,7 @@ mod calculate_total_size_bytes_tests {
 #[cfg(test)]
 mod remove_quote_cache_entry_tests {
     use super::*;
+    use crate::server::Quote;
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -395,7 +397,14 @@ mod remove_quote_cache_entry_tests {
         let state = super::test_utils::build_state_with_chains(HashMap::new(), Vec::new());
         {
             let mut cache = state.quote_cache.lock().await;
-            cache.put("quote-1".to_string(), (Some(42), "task-1".to_string()));
+            cache.put(
+                "quote-1".to_string(),
+                Quote {
+                    price: Some(42),
+                    estimated_size_bytes: Some(10),
+                    task_id: "task-1".to_string(),
+                },
+            );
         }
         remove_quote_cache_entry(&state, "quote-1").await;
         let mut cache = state.quote_cache.lock().await;

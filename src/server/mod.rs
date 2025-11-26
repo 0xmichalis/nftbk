@@ -127,7 +127,14 @@ impl FromStr for StorageMode {
     }
 }
 
-pub type QuoteCache = Arc<Mutex<lru::LruCache<String, (Option<u64>, String)>>>;
+#[derive(Debug, Clone)]
+pub struct Quote {
+    pub price: Option<u64>,
+    pub estimated_size_bytes: Option<u64>,
+    pub task_id: String,
+}
+
+pub type QuoteCache = Arc<Mutex<lru::LruCache<String, Quote>>>;
 
 #[derive(Clone)]
 pub struct AppState {
