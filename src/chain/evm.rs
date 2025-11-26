@@ -201,7 +201,11 @@ pub struct EvmChainProcessor {
 }
 
 impl EvmChainProcessor {
-    pub async fn new(rpc_url: &str, storage_config: StorageConfig) -> anyhow::Result<Self> {
+    pub async fn new(
+        rpc_url: &str,
+        storage_config: StorageConfig,
+        max_content_request_retries: u32,
+    ) -> anyhow::Result<Self> {
         let rpc = ProviderBuilder::new().connect(rpc_url).await?;
         let ipfs_pinning_providers: Vec<Box<dyn IpfsPinningProvider>> = storage_config
             .ipfs_pinning_configs
@@ -212,7 +216,7 @@ impl EvmChainProcessor {
             rpc,
             output_path: storage_config.output_path,
             ipfs_pinning_providers,
-            http_client: HttpClient::new(),
+            http_client: HttpClient::new().with_max_retries(max_content_request_retries),
         })
     }
 }
@@ -784,9 +788,13 @@ mod new_tests {
             prune_redundant: false,
             ipfs_pinning_configs: vec![],
         };
-        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage)
-            .await
-            .expect("new ok");
+        let proc = EvmChainProcessor::new(
+            "https://eth.llamarpc.com",
+            storage,
+            crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
+        )
+        .await
+        .expect("new ok");
         // basic sanity
         let _ = proc.http_client();
         let _ = proc.ipfs_pinning_providers();
@@ -810,9 +818,13 @@ mod ipfs_pinning_providers_tests {
                 bearer_token_env: None,
             }],
         };
-        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage)
-            .await
-            .expect("new ok");
+        let proc = EvmChainProcessor::new(
+            "https://eth.llamarpc.com",
+            storage,
+            crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
+        )
+        .await
+        .expect("new ok");
         assert_eq!(proc.ipfs_pinning_providers().len(), 1);
     }
 }
@@ -829,9 +841,13 @@ mod http_client_tests {
             prune_redundant: false,
             ipfs_pinning_configs: vec![],
         };
-        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage)
-            .await
-            .expect("new ok");
+        let proc = EvmChainProcessor::new(
+            "https://eth.llamarpc.com",
+            storage,
+            crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
+        )
+        .await
+        .expect("new ok");
         let _client_ref = proc.http_client();
     }
 }
@@ -848,9 +864,13 @@ mod output_path_tests {
             prune_redundant: false,
             ipfs_pinning_configs: vec![],
         };
-        let proc = EvmChainProcessor::new("https://eth.llamarpc.com", storage)
-            .await
-            .expect("new ok");
+        let proc = EvmChainProcessor::new(
+            "https://eth.llamarpc.com",
+            storage,
+            crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
+        )
+        .await
+        .expect("new ok");
         assert_eq!(proc.output_path().unwrap().to_str().unwrap(), "/tmp");
     }
 }

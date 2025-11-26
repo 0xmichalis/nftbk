@@ -68,6 +68,7 @@ pub fn create_backup_config(
         process_config: ProcessManagementConfig {
             exit_on_error,
             shutdown_flag: None,
+            max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
         },
         task_id: None, // CLI doesn't have a task ID
     }

@@ -84,18 +84,31 @@ run-cli:
 
 .PHONY: run-cli-test
 run-cli-test:
-	@SQLX_OFFLINE=true cargo run --bin nftbk-cli -- create --tokens-config-path config_tokens_test.toml --output-path nft_backup_test $(filter-out $@,$(MAKECMDGOALS))
+	@SQLX_OFFLINE=true cargo run \
+	--bin nftbk-cli \
+	-- create \
+	--tokens-config-path config_tokens_test.toml \
+	--output-path nft_backup_test
 
 .PHONY: run-cli-server-test
 run-cli-server-test:
-	SQLX_OFFLINE=true cargo run --bin nftbk-cli -- server create --tokens-config-path config_tokens_test.toml --output-path nft_backup_test --force true $(filter-out $@,$(MAKECMDGOALS))
+	@SQLX_OFFLINE=true cargo run \
+	--bin nftbk-cli \
+	-- server create \
+	--tokens-config-path config_tokens_test.toml \
+	--output-path nft_backup_test \
+	--force true
 
 .PHONY: run
 run: start-db migrate-db run-server
 
 .PHONY: run-server
 run-server:
-	cargo run --bin nftbk-server -- --unsafe-skip-checksum-check true --backup-parallelism 2
+	@cargo run \
+	--bin nftbk-server \
+	-- --unsafe-skip-checksum-check true \
+	--max-content-request-retries 1 \
+	--backup-parallelism 2
 
 .PHONY: start-db
 start-db:

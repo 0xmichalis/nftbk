@@ -71,6 +71,7 @@ impl BackupConfig {
                     let processor = Arc::new(TezosChainProcessor::new(
                         rpc_url,
                         cfg.storage_config.clone(),
+                        cfg.process_config.max_content_request_retries,
                     )?);
                     let process_config = cfg.process_config.clone();
                     process_nfts(
@@ -83,7 +84,12 @@ impl BackupConfig {
                     .await?
                 } else {
                     let processor = Arc::new(
-                        EvmChainProcessor::new(rpc_url, cfg.storage_config.clone()).await?,
+                        EvmChainProcessor::new(
+                            rpc_url,
+                            cfg.storage_config.clone(),
+                            cfg.process_config.max_content_request_retries,
+                        )
+                        .await?,
                     );
                     let process_config = cfg.process_config.clone();
                     process_nfts(
@@ -181,6 +187,7 @@ impl BackupConfig {
                     let processor = Arc::new(TezosChainProcessor::new(
                         rpc_url,
                         cfg.storage_config.clone(),
+                        cfg.process_config.max_content_request_retries,
                     )?);
                     size_nfts(processor, tokens, cfg.process_config.clone(), |metadata| {
                         metadata.artifact_uri.as_deref()
@@ -188,7 +195,12 @@ impl BackupConfig {
                     .await?
                 } else {
                     let processor = Arc::new(
-                        EvmChainProcessor::new(rpc_url, cfg.storage_config.clone()).await?,
+                        EvmChainProcessor::new(
+                            rpc_url,
+                            cfg.storage_config.clone(),
+                            cfg.process_config.max_content_request_retries,
+                        )
+                        .await?,
                     );
                     size_nfts(processor, tokens, cfg.process_config.clone(), |_metadata| {
                         None
@@ -246,6 +258,7 @@ mod tests {
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
                 shutdown_flag: None,
+                max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
             },
             task_id: None,
         };
@@ -265,6 +278,7 @@ mod tests {
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
                 shutdown_flag: None,
+                max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
             },
             task_id: None,
         };
@@ -287,6 +301,7 @@ mod tests {
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
                 shutdown_flag: None,
+                max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
             },
             task_id: None,
         };
@@ -306,6 +321,7 @@ mod tests {
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
                 shutdown_flag: None,
+                max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
             },
             task_id: None,
         };
@@ -328,6 +344,7 @@ mod tests {
             process_config: ProcessManagementConfig {
                 exit_on_error: false,
                 shutdown_flag: Some(shutdown_flag.clone()),
+                max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
             },
             task_id: None,
         };

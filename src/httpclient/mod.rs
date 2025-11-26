@@ -8,6 +8,7 @@ use crate::httpclient::fetch::{try_fetch_response, try_head_content_length};
 use crate::httpclient::retry::{retry_operation, should_retry};
 use crate::httpclient::stream::stream_http_to_file;
 use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType, IPFS_GATEWAYS};
+use crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES;
 use crate::url::{get_data_url, is_data_url, resolve_url_with_gateways};
 
 pub mod fetch;
@@ -25,7 +26,7 @@ impl HttpClient {
         let ipfs_gateways = IPFS_GATEWAYS.to_vec();
         Self {
             ipfs_gateways,
-            max_retries: 5,
+            max_retries: DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
         }
     }
 

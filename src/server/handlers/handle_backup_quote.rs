@@ -251,6 +251,7 @@ mod handle_backup_quote_tests {
             ipfs_pinning_configs,
             ipfs_pinning_instances: Arc::new(Vec::new()),
             x402_config: Some(x402_config.clone()),
+            max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
         }
     }
 
@@ -280,6 +281,7 @@ mod handle_backup_quote_tests {
             ipfs_pinning_configs,
             ipfs_pinning_instances: Arc::new(Vec::new()),
             x402_config: None,
+            max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
         }
     }
 

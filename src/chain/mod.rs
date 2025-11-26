@@ -823,6 +823,7 @@ mod process_nfts_tests {
         ProcessManagementConfig {
             exit_on_error,
             shutdown_flag: None,
+            max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
         }
     }
 
@@ -833,6 +834,7 @@ mod process_nfts_tests {
         ProcessManagementConfig {
             exit_on_error,
             shutdown_flag: Some(shutdown_flag),
+            max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
         }
     }
 
@@ -1671,6 +1673,7 @@ mod size_nfts_tests {
         ProcessManagementConfig {
             exit_on_error: true,
             shutdown_flag: None,
+            max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
         }
     }
 

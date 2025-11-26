@@ -300,6 +300,7 @@ mod handle_download_tests {
             ipfs_pinning_configs: Vec::new(),
             ipfs_pinning_instances: Arc::new(Vec::new()),
             x402_config: None,
+            max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
         }
     }
 

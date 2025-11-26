@@ -137,6 +137,7 @@ fn build_backup_config(state: &AppState, task: &QuoteTask) -> anyhow::Result<Bac
         process_config: ProcessManagementConfig {
             exit_on_error: true,
             shutdown_flag: Some(state.shutdown_flag.clone()),
+            max_content_request_retries: state.max_content_request_retries,
         },
         task_id: Some(task.task_id.clone()),
     })
@@ -244,6 +245,7 @@ mod test_utils {
             ipfs_pinning_configs: ipfs_configs,
             ipfs_pinning_instances: Arc::new(Vec::new()),
             x402_config: None,
+            max_content_request_retries: crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
         }
     }
 }

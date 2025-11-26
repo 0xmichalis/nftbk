@@ -29,6 +29,8 @@ pub struct IpfsOutcome {
     pub errors: Vec<String>,
 }
 
+pub const DEFAULT_MAX_CONTENT_REQUEST_RETRIES: u32 = 5;
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChainConfig(pub HashMap<String, String>);
 
@@ -57,6 +59,7 @@ pub struct TokenConfig {
 pub struct ProcessManagementConfig {
     pub exit_on_error: bool,
     pub shutdown_flag: Option<Arc<AtomicBool>>,
+    pub max_content_request_retries: u32,
 }
 
 #[derive(Clone)]

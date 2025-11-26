@@ -9,6 +9,7 @@ use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::config::{load_and_validate_config, Config};
 use nftbk::server::{run_server, ServerConfig};
+use nftbk::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -71,6 +72,14 @@ struct Args {
     /// - 10000 entries ≈ 2.2 MB
     #[arg(long, default_value_t = 1000)]
     quote_cache_size: usize,
+
+    /// Maximum number of retries for HTTP content requests (GET/HEAD) before failing the task.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
+        value_parser = clap::value_parser!(u32)
+    )]
+    max_content_request_retries: u32,
 }
 
 #[tokio::main]
@@ -124,6 +133,7 @@ async fn main() {
         x402_config,
         ipfs_pinning_configs,
         quote_cache_size: args.quote_cache_size,
+        max_content_request_retries: args.max_content_request_retries,
     };
 
     if let Err(e) = run_server(config).await {

@@ -219,6 +219,7 @@ fn prepare_backup_config(
         process_config: ProcessManagementConfig {
             exit_on_error: false,
             shutdown_flag: shutdown_flag.clone(),
+            max_content_request_retries: state.max_content_request_retries,
         },
         task_id: Some(task_id.to_string()),
     }

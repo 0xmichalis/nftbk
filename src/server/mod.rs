@@ -151,6 +151,7 @@ pub struct AppState {
     pub ipfs_pinning_configs: Vec<IpfsPinningConfig>,
     pub ipfs_pinning_instances: Arc<Vec<Arc<dyn IpfsPinningProvider>>>,
     pub x402_config: Option<crate::server::x402::X402Config>,
+    pub max_content_request_retries: u32,
 }
 
 impl Default for AppState {
@@ -174,6 +175,7 @@ impl AppState {
         ipfs_pinning_configs: Vec<IpfsPinningConfig>,
         x402_config: Option<crate::server::x402::X402Config>,
         quote_cache_size: usize,
+        max_content_request_retries: u32,
     ) -> Self {
         let db = Arc::new(Db::new(db_url, max_connections).await);
 
@@ -214,6 +216,7 @@ impl AppState {
             ipfs_pinning_configs,
             ipfs_pinning_instances: Arc::new(ipfs_pinning_instances),
             x402_config,
+            max_content_request_retries,
         }
     }
 }
@@ -235,6 +238,7 @@ pub struct ServerConfig {
     pub x402_config: Option<X402Config>,
     pub ipfs_pinning_configs: Vec<IpfsPinningConfig>,
     pub quote_cache_size: usize,
+    pub max_content_request_retries: u32,
 }
 
 /// Start the HTTP server with the given configuration
@@ -325,6 +329,7 @@ pub async fn run_server(
         config.ipfs_pinning_configs.clone(),
         config.x402_config.clone(),
         config.quote_cache_size,
+        config.max_content_request_retries,
     )
     .await;
 

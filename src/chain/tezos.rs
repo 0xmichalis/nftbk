@@ -44,7 +44,11 @@ pub struct TezosChainProcessor {
 }
 
 impl TezosChainProcessor {
-    pub fn new(rpc_url: &str, storage_config: StorageConfig) -> anyhow::Result<Self> {
+    pub fn new(
+        rpc_url: &str,
+        storage_config: StorageConfig,
+        max_content_request_retries: u32,
+    ) -> anyhow::Result<Self> {
         let rpc = TezosRpc::<TezosHttpClient>::new(rpc_url.to_string());
         let ipfs_pinning_providers: Vec<Box<dyn IpfsPinningProvider>> = storage_config
             .ipfs_pinning_configs
@@ -55,7 +59,8 @@ impl TezosChainProcessor {
             rpc,
             output_path: storage_config.output_path,
             ipfs_pinning_providers,
-            http_client: crate::httpclient::HttpClient::new(),
+            http_client: crate::httpclient::HttpClient::new()
+                .with_max_retries(max_content_request_retries),
         })
     }
 }
@@ -370,8 +375,12 @@ mod new_tests {
             prune_redundant: false,
             ipfs_pinning_configs: vec![],
         };
-        let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
-            .expect("new ok");
+        let proc = TezosChainProcessor::new(
+            "https://mainnet.tezos.marigold.dev",
+            storage,
+            crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
+        )
+        .expect("new ok");
         let _ = proc.http_client();
         let _ = proc.ipfs_pinning_providers();
         assert!(proc.output_path().is_some());
@@ -393,8 +402,12 @@ mod ipfs_pinning_providers_tests {
                 bearer_token_env: None,
             }],
         };
-        let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
-            .expect("new ok");
+        let proc = TezosChainProcessor::new(
+            "https://mainnet.tezos.marigold.dev",
+            storage,
+            crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
+        )
+        .expect("new ok");
         assert_eq!(proc.ipfs_pinning_providers().len(), 1);
     }
 }
@@ -411,8 +424,12 @@ mod http_client_tests {
             prune_redundant: false,
             ipfs_pinning_configs: vec![],
         };
-        let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
-            .expect("new ok");
+        let proc = TezosChainProcessor::new(
+            "https://mainnet.tezos.marigold.dev",
+            storage,
+            crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
+        )
+        .expect("new ok");
         let _client_ref = proc.http_client();
     }
 }
@@ -429,8 +446,12 @@ mod output_path_tests {
             prune_redundant: false,
             ipfs_pinning_configs: vec![],
         };
-        let proc = TezosChainProcessor::new("https://mainnet.tezos.marigold.dev", storage)
-            .expect("new ok");
+        let proc = TezosChainProcessor::new(
+            "https://mainnet.tezos.marigold.dev",
+            storage,
+            crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
+        )
+        .expect("new ok");
         assert_eq!(proc.output_path().unwrap().to_str().unwrap(), "/tmp");
     }
 }
