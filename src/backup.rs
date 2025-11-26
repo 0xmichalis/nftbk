@@ -9,6 +9,7 @@ use crate::chain::common::ContractTokenId;
 use crate::chain::evm::EvmChainProcessor;
 use crate::chain::tezos::TezosChainProcessor;
 use crate::chain::{process_nfts, size_nfts};
+use crate::size::format_size;
 use crate::types::{ArchiveOutcome, BackupConfig, IpfsOutcome, TokenPinMapping};
 
 impl BackupConfig {
@@ -219,23 +220,6 @@ impl BackupConfig {
     }
 }
 
-fn format_size(bytes: u64) -> (f64, &'static str) {
-    const UNITS: [(&str, u64); 5] = [
-        ("bytes", 1),
-        ("KB", 1024),
-        ("MB", 1024 * 1024),
-        ("GB", 1024 * 1024 * 1024),
-        ("TB", 1024 * 1024 * 1024 * 1024),
-    ];
-
-    for (unit, factor) in UNITS.iter().rev() {
-        if bytes >= *factor {
-            return (bytes as f64 / *factor as f64, unit);
-        }
-    }
-    (bytes as f64, "bytes")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -360,20 +344,5 @@ mod tests {
         // Wait for the backup to complete (should be quick since no tokens to process)
         let result = timeout(Duration::from_secs(5), backup_handle).await;
         assert!(result.is_ok(), "Backup should complete within timeout");
-    }
-
-    #[test]
-    fn format_size_selects_largest_unit() {
-        let (value, unit) = format_size(0);
-        assert_eq!(unit, "bytes");
-        assert_eq!(value, 0.0);
-
-        let (value, unit) = format_size(1024 * 1024);
-        assert_eq!(unit, "MB");
-        assert_eq!(value, 1.0);
-
-        let (value, unit) = format_size(3 * 1024 * 1024 * 1024 + 512);
-        assert_eq!(unit, "GB");
-        assert!((value - 3.0).abs() < 1e-6);
     }
 }

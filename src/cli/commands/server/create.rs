@@ -18,6 +18,7 @@ use crate::server::api::{
 };
 use crate::server::archive::archive_format_from_user_agent;
 use crate::server::hashing::compute_task_id;
+use crate::size::format_size;
 
 use super::common::delete_backup;
 
@@ -360,7 +361,15 @@ async fn request_quote(
                 .parse::<u64>()
                 .map_err(|_| anyhow::anyhow!("Invalid price format: {}", price_microdollars))?;
             let price_human = price_decimal as f64 / 1_000_000.0;
-            println!("\nQuote ready! Price: {} USDC", price_human);
+            if let Some(size_bytes) = quote.estimated_size_bytes {
+                let (size_value, size_unit) = format_size(size_bytes);
+                println!(
+                    "\nQuote ready! Price: {} USDC (estimated size ≈ {:.2} {})",
+                    price_human, size_value, size_unit
+                );
+            } else {
+                println!("\nQuote ready! Price: {} USDC", price_human);
+            }
             return Ok(quote_id);
         }
 

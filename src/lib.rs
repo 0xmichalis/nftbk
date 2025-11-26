@@ -9,6 +9,7 @@ pub mod ipfs;
 pub mod logging;
 pub mod prune;
 pub mod server;
+pub mod size;
 pub mod types;
 pub mod url;
 
