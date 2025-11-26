@@ -476,4 +476,26 @@ mod head_content_length_tests {
         let size = client.head_content_length(&url).await.unwrap();
         assert_eq!(size, 1024);
     }
+
+    #[tokio::test]
+    async fn falls_back_to_get_when_head_forbidden() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/blocked-head", mock_server.uri());
+
+        Mock::given(method("HEAD"))
+            .and(path("/blocked-head"))
+            .respond_with(ResponseTemplate::new(403))
+            .mount(&mock_server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/blocked-head"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 2048]))
+            .mount(&mock_server)
+            .await;
+
+        let client = HttpClient::new();
+        let size = client.head_content_length(&url).await.unwrap();
+        assert_eq!(size, 2048);
+    }
 }

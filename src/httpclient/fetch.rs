@@ -147,6 +147,81 @@ pub(crate) async fn retry_with_gateways(
     retry_with_gateways_with_method(url, original_error, gateways, Method::GET).await
 }
 
+async fn try_get_content_length(
+    url: &str,
+    gateways: &[IpfsGatewayConfig],
+) -> (anyhow::Result<u64>, Option<reqwest::StatusCode>) {
+    info!(
+        "HEAD denied for {}; falling back to GET for size estimation",
+        url
+    );
+    match fetch_url(url, None).await {
+        Ok(response) => {
+            let status = response.status();
+            if status.is_success() {
+                if let Some(len) = extract_content_length(&response) {
+                    (Ok(len), Some(status))
+                } else {
+                    (
+                        Err(anyhow::anyhow!(
+                            "GET response missing Content-Length for {}",
+                            url
+                        )),
+                        Some(status),
+                    )
+                }
+            } else {
+                let error = create_http_error(status, url);
+                match retry_with_gateways_with_method(url, error, gateways, Method::GET).await {
+                    Ok(alt_response) => {
+                        let alt_status = alt_response.status();
+                        if alt_status.is_success() {
+                            if let Some(len) = extract_content_length(&alt_response) {
+                                (Ok(len), Some(alt_status))
+                            } else {
+                                (
+                                    Err(anyhow::anyhow!(
+                                        "GET response missing Content-Length for {}",
+                                        alt_response.url()
+                                    )),
+                                    Some(alt_status),
+                                )
+                            }
+                        } else {
+                            (
+                                Err(create_http_error(alt_status, alt_response.url().as_str())),
+                                Some(alt_status),
+                            )
+                        }
+                    }
+                    Err(gateway_err) => (Err(gateway_err), Some(status)),
+                }
+            }
+        }
+        Err(e) => match retry_with_gateways_with_method(url, e, gateways, Method::GET).await {
+            Ok(response) => {
+                let status = response.status();
+                if status.is_success() {
+                    if let Some(len) = extract_content_length(&response) {
+                        (Ok(len), Some(status))
+                    } else {
+                        (
+                            Err(anyhow::anyhow!(
+                                "GET response missing Content-Length for {}",
+                                response.url()
+                            )),
+                            Some(status),
+                        )
+                    }
+                } else {
+                    (Err(create_http_error(status, url)), Some(status))
+                }
+            }
+            Err(gateway_err) => (Err(gateway_err), None),
+        },
+    }
+}
+
 fn extract_content_length(response: &reqwest::Response) -> Option<u64> {
     response
         .headers()
@@ -178,6 +253,8 @@ pub(crate) async fn try_head_content_length(
                         Some(status),
                     )
                 }
+            } else if status == reqwest::StatusCode::FORBIDDEN {
+                return try_get_content_length(url, gateways).await;
             } else {
                 let error = create_http_error(status, url);
                 match retry_with_gateways_with_method(url, error, gateways, Method::HEAD).await {
@@ -195,6 +272,9 @@ pub(crate) async fn try_head_content_length(
                                     Some(alt_status),
                                 )
                             }
+                        } else if alt_status == reqwest::StatusCode::FORBIDDEN {
+                            let fallback_url = alt_response.url().to_string();
+                            return try_get_content_length(&fallback_url, gateways).await;
                         } else {
                             (
                                 Err(create_http_error(alt_status, alt_response.url().as_str())),
@@ -221,12 +301,78 @@ pub(crate) async fn try_head_content_length(
                             Some(status),
                         )
                     }
+                } else if status == reqwest::StatusCode::FORBIDDEN {
+                    let fallback_url = response.url().to_string();
+                    return try_get_content_length(&fallback_url, gateways).await;
                 } else {
                     (Err(create_http_error(status, url)), Some(status))
                 }
             }
             Err(gateway_err) => (Err(gateway_err), None),
         },
+    }
+}
+
+#[cfg(test)]
+mod try_get_content_length_tests {
+    use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType};
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    fn leak_str(s: String) -> &'static str {
+        Box::leak(s.into_boxed_str())
+    }
+
+    fn gw(base: &str) -> IpfsGatewayConfig {
+        IpfsGatewayConfig {
+            url: leak_str(base.to_string()),
+            gateway_type: IpfsGatewayType::Path,
+            bearer_token_env: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_length_from_successful_get() {
+        let mock_server = MockServer::start().await;
+        let url = format!("{}/asset.png", mock_server.uri());
+
+        Mock::given(method("GET"))
+            .and(path("/asset.png"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 1234]))
+            .mount(&mock_server)
+            .await;
+
+        let (res, status) = super::try_get_content_length(&url, &[]).await;
+        assert_eq!(status, Some(reqwest::StatusCode::OK));
+        assert_eq!(res.unwrap(), 1234);
+    }
+
+    #[tokio::test]
+    async fn retries_with_gateways_on_error() {
+        let server_a = MockServer::start().await;
+        let server_b = MockServer::start().await;
+        let content_path = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/file";
+        let original_url = format!("{}/ipfs/{}", server_a.uri(), content_path);
+
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", content_path)))
+            .respond_with(ResponseTemplate::new(500))
+            .mount(&server_a)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", content_path)))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0u8; 4096]))
+            .mount(&server_b)
+            .await;
+
+        let gateways = vec![gw(&server_a.uri()), gw(&server_b.uri())];
+
+        let (res, status) = super::try_get_content_length(&original_url, &gateways).await;
+        assert_eq!(status, Some(reqwest::StatusCode::OK));
+        assert_eq!(res.unwrap(), 4096);
     }
 }
 
