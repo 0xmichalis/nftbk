@@ -29,7 +29,7 @@ pub struct IpfsOutcome {
     pub errors: Vec<String>,
 }
 
-pub const DEFAULT_MAX_CONTENT_REQUEST_RETRIES: u32 = 5;
+pub const DEFAULT_MAX_CONTENT_REQUEST_RETRIES: u32 = 3;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ChainConfig(pub HashMap<String, String>);

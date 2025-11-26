@@ -440,7 +440,7 @@ mod fetch_tests {
         assert_eq!(content, b"Default Implementation Works");
 
         // Verify that default has the expected configuration
-        assert_eq!(client.max_retries, 5);
+        assert_eq!(client.max_retries, DEFAULT_MAX_CONTENT_REQUEST_RETRIES);
         assert!(!client.ipfs_gateways.is_empty()); // Should have default IPFS gateways
     }
 }
