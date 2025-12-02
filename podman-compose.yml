@@ -20,16 +20,14 @@ services:
       - "8080"
     volumes:
       - ./data:/app/data
-      - ./config_auth.toml:/app/auth/config.toml:ro
-      - ./config_ipfs.toml:/app/config_ipfs.toml:ro
+      - ./config.toml:/app/config/config.toml:ro
     user: "65532:65532"
     command: [
       "/app/nftbk-server",
       "--listen-address", "0.0.0.0:8080",
       "--unsafe-skip-checksum-check", "true",
       "--base-dir", "/app/data",
-      "--auth-config", "/app/auth/config.toml",
-      "--ipfs-config", "/app/config_ipfs.toml"
+      "--config", "/app/config/config.toml"
     ]
     restart: unless-stopped
 
