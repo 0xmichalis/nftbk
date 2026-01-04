@@ -1,0 +1,14 @@
+---
+description: 
+globs: ["*.md", "*.mdc"]
+alwaysApply: false
+---
+
+# Markdown Guidelines
+
+## Linting
+
+* When editing markdown files, run `markdownlint` if available to ensure the
+  markdown follows best practices and project standards.
+* If `markdownlint` is not available, follow standard markdown formatting
+  conventions.

@@ -6,64 +6,51 @@ alwaysApply: true
 
 # General Rules
 
-## Documentation Changes
+## General Guidelines
 
-- Update [README.md](mdc:README.md) when code changes introduce breakages to the
-documented README commands or logic.
+* Every time you provide a code change, you need to ensure it
+  follows project standards:
+  * code is formatted
+  * tests pass
+  The best way to ensure that is to run `make all`.
+* Never remove comments unless the code you update renders the comment
+  invalid.
+* Never refactor or rename code unless you are explicitly being told so.
+* When removing code, do not add a comment to note the deletion of the code,
+  simply delete the code.
+* When providing a solution, give me a score on a scale of 1-10 about how
+  confident you are in the solution.
 
-## Code Changes
+## GitHub Guidelines
 
-Every time you provide a code change, you need to ensure it follows project standards:
-
-- code is formatted
-- tests pass
-The best way to ensure that is to run `make all`.
-
-### Refactor
-
-- Do not rename variables or refactor unnecessarily unless explicitly instructed.
-- Do not make formatting changes unless specifically asked.
-- When removing code, delete it entirely — do not just comment it out.
-- Never allow dead code
-
-### Structure
-
-- Prefer early returns to avoid long, nested if/else blocks.
-- When writing conditional statements (if-else, match arms, etc.), always place the
-smallest/shortest clause first to enhance readability. This applies to both simple
-conditions and complex nested logic. For example, prefer
-`if condition.is_none() { short_clause } else { long_clause }` over
-`if let Some(value) = condition { long_clause } else { short_clause }`.
-Avoid adding empty blocks or meaningless comments just to satisfy this rule - only
-apply it when it genuinely improves readability without introducing noise.
-
-### Code comments
-
-- Do not add comments just to indicate new code.
-- Only add comments for complex logic; otherwise, code should be self-explanatory.
+* When you cannot access a GitHub link via a web search, try using the `gh` command.
+* Read an issue and all its comments with `gh issue view <id> --comments`.
+  When you read an issue, always read all the comments.
+* List reviews on a PR:
+  `gh api repos/:owner/:repo/pulls/<pr_number>/reviews`
+* Fetch all review comments for a specific review:
+  `gh api repos/:owner/:repo/pulls/<pr_number>/reviews/<review_id>/comments`
+* For quick inspection, you can pipe JSON through `jq`, for example:
+  * `gh api repos/:owner/:repo/pulls/105/reviews | jq '.[].id, .[].user.login'`
+  * `gh api repos/:owner/:repo/pulls/105/reviews/<review_id>/comments | jq '.[].body'`
 
 ## Security Practices
 
-- Never commit sensitive files.
-- Use environment variables for secrets.
-- Keep credentials out of logs and output.
-
-## Misc
-
-- When providing a solution, give me a score on a scale of 1-10 about how confident
-you are in the solution.
+* Never commit sensitive files.
+* Use environment variables for secrets.
+* Keep credentials out of logs and output.
 
 ## Debugging
 
-- When you see `error communicating with database` error then that means that some
-of the tests are trying to communicate with a real database. Avoid these errors by
-running tests with `SQLX_OFFLINE=true` or use the Makefile target for running tests
-`make test` that already sets SQLX_OFFLINE
+* When you see `error communicating with database` error then that means that
+some of the tests are trying to communicate with a real database. Avoid these
+errors by running tests with `SQLX_OFFLINE=true` or use the Makefile target
+for running tests `make test` that already sets `SQLX_OFFLINE`.
 
 ## Testing
 
-- When adding unit tests for a function, create a test module dedicates to that
+* When adding unit tests for a function, create a test module dedicates to that
 function named `mod <function_name>_tests`
-- In unit tests avoid trying to connect to real or dummy databases. Instead write
+* In unit tests avoid trying to connect to real or dummy databases. Instead write
 production code that uses traits to mock database connectors. For blockchain APIs,
 IPFS APIs, or any other external APIs, use `wiremock` to mock them.
