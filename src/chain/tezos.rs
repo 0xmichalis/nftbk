@@ -1,7 +1,8 @@
-use base64::Engine;
-use serde::{Deserialize, Serialize};
 use std::convert::TryInto;
 use std::path::PathBuf;
+
+use base64::Engine;
+use serde::{Deserialize, Serialize};
 use tezos_contract::ContractFetcher;
 use tezos_core::types::number::Int;
 use tezos_michelson::michelson::data;

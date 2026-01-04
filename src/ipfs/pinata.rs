@@ -78,7 +78,7 @@ impl PinataClient {
         let http = Client::builder()
             .user_agent(USER_AGENT)
             .build()
-            .expect("reqwest client");
+            .expect("Failed to create reqwest client - this should never fail");
         Self {
             http,
             base_url: base_url.into(),

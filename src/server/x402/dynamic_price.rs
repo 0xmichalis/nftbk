@@ -1,11 +1,11 @@
 use axum::http::HeaderMap;
 use tracing::warn;
 use url::Url;
+use x402_axum::layer::X402Error;
+use x402_rs::types::TokenAmount;
 
 use crate::server::x402::X402Config;
 use crate::server::AppState;
-use x402_axum::layer::X402Error;
-use x402_rs::types::TokenAmount;
 
 /// Parse a price string (e.g., "0.1069") directly to microdollars (u64)
 /// without using floating-point arithmetic to avoid precision loss.

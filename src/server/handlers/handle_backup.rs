@@ -1,7 +1,7 @@
-use axum::http::{HeaderMap, StatusCode as AxumStatusCode, StatusCode};
-use axum::response::IntoResponse;
 use axum::{
     extract::{Extension, Path as AxumPath, Query as AxumQuery, State},
+    http::{HeaderMap, StatusCode, StatusCode as AxumStatusCode},
+    response::IntoResponse,
     Json,
 };
 
@@ -9,6 +9,7 @@ use super::verify_requestor_owns_task;
 use crate::server::api::{ApiProblem, BackupResponse, ProblemJson, Tokens};
 use crate::server::database::r#trait::Database;
 use crate::server::AppState;
+use tracing::error;
 
 #[derive(serde::Deserialize, utoipa::ToSchema)]
 pub struct TaskTokensQuery {
@@ -74,13 +75,14 @@ pub async fn handle_backup(
             // Build pagination headers
             let total = json.0.total_tokens;
             let mut headers = HeaderMap::new();
-            headers.insert(
-                "X-Total-Tokens",
-                total
-                    .to_string()
-                    .parse()
-                    .expect("Failed to parse X-Total-Tokens header value from total token count"),
-            );
+            if let Ok(header_value) = total.to_string().parse() {
+                headers.insert("X-Total-Tokens", header_value);
+            } else {
+                error!(
+                    "Failed to parse X-Total-Tokens header value from total token count: {}",
+                    total
+                );
+            }
 
             let last_page = total.div_ceil(limit).max(1);
             let mut links: Vec<String> = Vec::new();

@@ -1,9 +1,8 @@
-use axum::http::StatusCode;
-use axum::Json;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{Extension, Path, Query, State},
+    http::StatusCode,
     response::IntoResponse,
-    Extension,
+    Json,
 };
 use tracing::{error, info};
 
@@ -29,10 +28,10 @@ fn validate_scope_for_retry(
         StorageMode::Full => (true, true),
     };
     let archive_status = meta.archive_status.as_deref().unwrap_or("in_progress");
-    let ipfs_status = if ipfs_needed {
-        meta.ipfs_status.as_deref().unwrap_or("in_progress")
-    } else {
+    let ipfs_status = if !ipfs_needed {
         "done"
+    } else {
+        meta.ipfs_status.as_deref().unwrap_or("in_progress")
     };
     (archive_needed && archive_status == "in_progress")
         || (ipfs_needed && ipfs_status == "in_progress")

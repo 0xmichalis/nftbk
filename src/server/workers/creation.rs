@@ -280,7 +280,9 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
             let _ = db.update_pin_request_status(&task_id, status).await;
         }
         StorageMode::Archive => {
-            let out_path = output_path.as_ref().unwrap();
+            let out_path = output_path
+                .as_ref()
+                .expect("output_path should be Some for Archive mode");
             let result = process_archive_outcome(
                 &state,
                 &task,
@@ -304,7 +306,10 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
             }
         }
         StorageMode::Full => {
-            let out_path = output_path.as_ref().unwrap().clone();
+            let out_path = output_path
+                .as_ref()
+                .expect("output_path should be Some for Full mode")
+                .clone();
             let state_ref = &state;
             let task_ref = &task;
             let task_id_ref = task_id.clone();

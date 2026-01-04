@@ -9,6 +9,7 @@ use crate::content::extra::fetch_and_write_extra;
 use crate::content::{write_metadata, Options};
 use crate::ipfs::url::extract_ipfs_cid;
 use crate::ipfs::{IpfsPinningProvider, PinRequest};
+
 pub use common::ContractTokenInfo;
 
 pub mod common;

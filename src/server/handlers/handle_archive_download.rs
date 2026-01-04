@@ -1,18 +1,18 @@
 use std::path::PathBuf;
 
-use axum::response::Response;
-use axum::Json;
 use axum::{
     body::Body,
     extract::{Extension, Path as AxumPath, Query, State},
     http::{header, HeaderMap, StatusCode},
-    response::IntoResponse,
+    response::{IntoResponse, Response},
+    Json,
 };
 use base64::Engine;
 use rand::rngs::OsRng;
 use rand::RngCore;
 use tokio::fs::File;
 use tokio_util::io::ReaderStream;
+use tracing::error;
 
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::database::r#trait::Database;
@@ -79,12 +79,11 @@ pub async fn handle_archive_download_token(
     {
         let mut headers = HeaderMap::new();
         // Point to the immediate action a client can take with the created token
-        headers.insert(
-            header::LOCATION,
-            format!("/v1/backups/{task_id}/download?token={}", token)
-                .parse()
-                .unwrap(),
-        );
+        if let Ok(location) = format!("/v1/backups/{task_id}/download?token={}", token).parse() {
+            headers.insert(header::LOCATION, location);
+        } else {
+            error!("Failed to parse LOCATION header for task {}", task_id);
+        }
         (
             StatusCode::CREATED,
             headers,
@@ -243,17 +242,15 @@ async fn serve_zip_file(zip_path: &PathBuf, task_id: &str, archive_format: &str)
         "zip" => ("application/zip", "zip"),
         _ => ("application/gzip", "tar.gz"),
     };
-    headers.insert(header::CONTENT_TYPE, content_type.parse().unwrap());
-    headers.insert(
-        header::CONTENT_DISPOSITION,
-        format!("attachment; filename=\"nftbk-{task_id}.{ext}\"")
-            .parse()
-            .unwrap(),
-    );
-    headers.insert(
-        header::CONTENT_LENGTH,
-        file_size.to_string().parse().unwrap(),
-    );
+    if let Ok(ct) = content_type.parse() {
+        headers.insert(header::CONTENT_TYPE, ct);
+    }
+    if let Ok(cd) = format!("attachment; filename=\"nftbk-{task_id}.{ext}\"").parse() {
+        headers.insert(header::CONTENT_DISPOSITION, cd);
+    }
+    if let Ok(cl) = file_size.to_string().parse() {
+        headers.insert(header::CONTENT_LENGTH, cl);
+    }
     (StatusCode::OK, headers, body).into_response()
 }
 

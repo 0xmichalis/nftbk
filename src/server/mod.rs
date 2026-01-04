@@ -8,8 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use tokio::signal;
-use tokio::sync::mpsc;
-use tokio::sync::Mutex;
+use tokio::sync::{mpsc, Mutex};
 use tracing::{error, info};
 
 use crate::ipfs::{IpfsPinningConfig, IpfsPinningProvider};
@@ -252,7 +251,7 @@ async fn start_http_server(
     let addr: SocketAddr = config
         .listen_address
         .parse()
-        .expect("Invalid listen address");
+        .map_err(|e| format!("Invalid listen address '{}': {}", config.listen_address, e))?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     let app = build_router(
         state.clone(),
@@ -312,8 +311,8 @@ pub async fn run_server(
     use crate::server::pruner::spawn_pruner;
     let (backup_task_sender, backup_task_receiver) =
         mpsc::channel::<BackupTaskOrShutdown>(config.backup_queue_size);
-    let db_url =
-        std::env::var("DATABASE_URL").expect("DATABASE_URL env var must be set for Postgres");
+    let db_url = std::env::var("DATABASE_URL")
+        .map_err(|_| "DATABASE_URL env var must be set for Postgres")?;
     let shutdown_flag = Arc::new(AtomicBool::new(false));
 
     let state = AppState::new(

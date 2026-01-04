@@ -1,8 +1,7 @@
-use axum::http::{header, StatusCode};
-use axum::middleware;
-use axum::middleware::Next;
 use axum::{
     extract::Request,
+    http::{header, StatusCode},
+    middleware::{self, Next},
     response::IntoResponse,
     routing::{delete, get, post},
     Router,

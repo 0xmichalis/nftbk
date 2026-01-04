@@ -32,8 +32,8 @@ fn construct_gateway_url(ipfs_path: &str, gateway: &IpfsGatewayConfig) -> String
         }
         IpfsGatewayType::Subdomain => {
             let hash = ipfs_path.split('/').next().unwrap_or(ipfs_path);
-            let path_part = if ipfs_path.contains('/') {
-                format!("/{}", ipfs_path.split_once('/').unwrap().1)
+            let path_part = if let Some((_, path)) = ipfs_path.split_once('/') {
+                format!("/{}", path)
             } else {
                 String::new()
             };

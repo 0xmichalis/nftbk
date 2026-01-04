@@ -84,10 +84,11 @@ async fn extract_resource_paths_from_file(path: &Path) -> Result<Vec<String>> {
     let mut found_urls = Vec::new();
 
     // Regex for any filename with a known extension
+    // This pattern is static and should never fail to compile
     let known_ext_regex = Regex::new(
         r#"([\w./-]+\.(?:jpg|jpeg|png|gif|mp4|webm|mp3|ogg|svg|webp|ico|json|xml|txt|pdf))"#,
     )
-    .unwrap();
+    .expect("Static regex pattern should always be valid");
 
     // For locale files: extract value part if it looks like a known file
     if is_locale_file(path) {
@@ -121,10 +122,20 @@ pub async fn download_html_resources(
 ) -> Result<()> {
     let resources = {
         let document = Html::parse_document(html_content);
+        // These are static CSS selectors that should never fail to parse
         let selectors = [
-            (Selector::parse("[src]").unwrap(), "src"),
-            (Selector::parse("link[href]").unwrap(), "href"),
-            (Selector::parse("script[src]").unwrap(), "src"),
+            (
+                Selector::parse("[src]").expect("Static CSS selector should always be valid"),
+                "src",
+            ),
+            (
+                Selector::parse("link[href]").expect("Static CSS selector should always be valid"),
+                "href",
+            ),
+            (
+                Selector::parse("script[src]").expect("Static CSS selector should always be valid"),
+                "src",
+            ),
         ];
         let mut resources = Vec::new();
 

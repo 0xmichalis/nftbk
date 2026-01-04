@@ -1,12 +1,13 @@
-use flate2::write::GzEncoder;
-use flate2::Compression;
-use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::{self, Seek, Write};
 use std::path::Path as StdPath;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+
+use flate2::write::GzEncoder;
+use flate2::Compression;
+use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 use zip::write::FileOptions;
 
