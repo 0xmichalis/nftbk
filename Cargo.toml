@@ -18,9 +18,9 @@ name = "nftbk-server"
 path = "src/bin/server.rs"
 
 [dependencies]
-alloy = { version = "1.0.7", features = ["full"] }
-alloy-contract = { version = "1.0.7" }
-alloy-sol-types = "1.0.7"
+alloy = { version = "1.2", features = ["full"] }
+alloy-contract = { version = "1.2" }
+alloy-sol-types = "1.2"
 anyhow = "1.0"
 async-compression = { version = "0.4", features = ["tokio", "futures-io", "gzip"] }
 async-trait = "0.1.88"
@@ -67,7 +67,7 @@ utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui = { version = "9", features = ["axum"] }
 uuid = { version = "1.4", features = ["v4"] }
 x402-axum = { version = "0.6.2" }
-x402-rs = { version = "0.9.3" }
+x402-rs = { version = "0.10" }
 zip = "0.6"
 
 [dev-dependencies]
