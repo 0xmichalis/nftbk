@@ -32,7 +32,7 @@ services:
     restart: unless-stopped
 
   caddy:
-    image: ghcr.io/0xmichalis/caddy-cloudflare:latest
+    image: ghcr.io/caddy-dns/cloudflare:latest
     ports:
       - "80:80"
       - "443:443"
