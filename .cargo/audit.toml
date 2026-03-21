@@ -7,4 +7,8 @@ ignore = [
     "RUSTSEC-2022-0093",
     # rsa 0.9.8 - no fix available (from sqlx-mysql, but we use postgres)
     "RUSTSEC-2023-0071",
+    # rustls-webpki 0.101.7 - CRLs vuln (from x402-rs->solana->tungstenite 0.20).
+    # Fix requires >=0.103.10; we patch 0.103.8->0.103.10. The 0.101.7 is in
+    # rustls 0.21/webpki-roots 0.24 which require ^0.101.7 (semver excludes 0.103).
+    "RUSTSEC-2026-0049",
 ]
