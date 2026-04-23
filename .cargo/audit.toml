@@ -7,8 +7,18 @@ ignore = [
     "RUSTSEC-2022-0093",
     # rsa 0.9.8 - no fix available (from sqlx-mysql, but we use postgres)
     "RUSTSEC-2023-0071",
-    # rustls-webpki 0.101.7 - CRLs vuln (from x402-rs->solana->tungstenite 0.20).
-    # Fix requires >=0.103.10; we patch 0.103.8->0.103.10. The 0.101.7 is in
-    # rustls 0.21/webpki-roots 0.24 which require ^0.101.7 (semver excludes 0.103).
+    # rustls-webpki 0.101.7 (from x402-rs -> solana-pubsub-client -> tungstenite 0.20
+    # / tokio-rustls 0.24 / rustls 0.21). We patch the 0.103.x copy up to 0.103.13
+    # via [patch.crates-io] in Cargo.toml, but the 0.101.7 copy is locked in by
+    # rustls 0.21 / webpki-roots 0.24 (semver ^0.101). The solana-client 2.3.x
+    # chain still requires those older versions, so there's no viable upgrade path
+    # short of forking the solana-client / tungstenite stack.
+    # RUSTSEC-2026-0049: CRLs not considered authoritative by Distribution Point
     "RUSTSEC-2026-0049",
+    # RUSTSEC-2026-0098: name constraints for URI names incorrectly accepted
+    "RUSTSEC-2026-0098",
+    # RUSTSEC-2026-0099: name constraints accepted for certificates asserting a wildcard name
+    "RUSTSEC-2026-0099",
+    # RUSTSEC-2026-0104: reachable panic in certificate revocation list parsing
+    "RUSTSEC-2026-0104",
 ]
