@@ -1,6 +1,5 @@
 # Builder stage
-ARG RUST_VERSION=1.90.0
-FROM docker.io/library/rust:${RUST_VERSION}-slim-bookworm AS builder
+FROM docker.io/library/debian:bookworm-slim AS builder
 
 WORKDIR /usr/src/app
 
@@ -9,11 +8,22 @@ RUN apt-get update && \
     pkg-config=* \
     libssl-dev=* \
     git=* \
-    curl=* && \
+    curl=* \
+    ca-certificates=* \
+    build-essential=* && \
     rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --default-toolchain none --profile minimal
 
 ARG GIT_COMMIT
 ENV GIT_COMMIT=${GIT_COMMIT}
+
+COPY rust-toolchain.toml ./
+RUN rustup show active-toolchain || rustup toolchain install
 
 COPY . .
 
