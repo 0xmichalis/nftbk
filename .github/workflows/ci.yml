@@ -119,7 +119,7 @@ jobs:
     - name: Check SQLx cache
       run: |
         if ! command -v sqlx > /dev/null; then
-          cargo install sqlx-cli
+          cargo install sqlx-cli --version 0.8.6 --locked
         fi
         cargo sqlx prepare --check
 
