@@ -101,6 +101,18 @@ impl Db {
             .await
             .expect("Postgres connection is not healthy");
         tracing::info!("Postgres connection is healthy");
+
+        // Apply any pending migrations so a fresh deployment self-provisions its
+        // schema. Migrations are embedded into the binary at compile time, so this
+        // works in the distroless runtime image without sqlx-cli or the migrations
+        // directory present. Already-applied migrations are skipped via the
+        // _sqlx_migrations table, so this is consistent with `sqlx migrate run`.
+        sqlx::migrate!("./migrations")
+            .run(&pool)
+            .await
+            .expect("Failed to run database migrations");
+        tracing::info!("Database migrations applied");
+
         Db { pool }
     }
 
