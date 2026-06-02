@@ -1,0 +1,74 @@
+# cargo-deny configuration.
+#
+# Advisories are intentionally NOT checked here — that is owned by the
+# `cargo audit` CI job + .cargo/audit.toml, so the curated RUSTSEC ignore
+# list lives in exactly one place. cargo-deny covers what audit cannot:
+# license policy, banned/duplicate crates, and allowed sources.
+
+[graph]
+all-features = true
+
+[licenses]
+# Permissive licenses present in the dependency tree. Copyleft licenses that
+# only appear as one option of an SPDX `OR` expression (e.g. LGPL/BSL) are
+# satisfied by a permissive alternative and need not be listed.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "0BSD",
+    "CC0-1.0",
+    "CDLA-Permissive-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "MPL-2.0",
+]
+confidence-threshold = 0.8
+# Ignore workspace crates that are not published to a public registry.
+private = { ignore = true }
+
+# tezos-rust-sdk fork ships no license metadata; upstream (airgap-it) is MIT.
+[[licenses.clarify]]
+name = "tezos-core"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "tezos-contract"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "tezos-michelson"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "tezos-operation"
+expression = "MIT"
+license-files = []
+
+[[licenses.clarify]]
+name = "tezos-rpc"
+expression = "MIT"
+license-files = []
+
+[bans]
+# The solana/x402 stack pulls many crates at multiple versions; flag, don't fail.
+multiple-versions = "warn"
+# The direct tezos-* git dependencies carry no version requirement, which counts
+# as a wildcard; warn rather than fail.
+wildcards = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = [
+    "https://github.com/0xmichalis/tezos-rust-sdk",
+    # rustls-webpki security patch pinned via [patch.crates-io] in Cargo.toml.
+    "https://github.com/rustls/webpki",
+]

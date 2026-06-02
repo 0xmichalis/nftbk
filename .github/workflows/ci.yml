@@ -12,6 +12,14 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # Pinned tool versions. Each is cached by version as a standalone binary, so
+  # bumping a version here is the only thing that triggers a reinstall.
+  CARGO_SORT_VERSION: "2.0.1"
+  SQLX_CLI_VERSION: "0.8.6"
+  CARGO_AUDIT_VERSION: "0.22.0"
+  CARGO_TARPAULIN_VERSION: "0.33.0"
+  CARGO_DENY_VERSION: "0.19.8"
+  CARGO_VET_VERSION: "0.10.2"
 
 jobs:
   fmt:
@@ -28,25 +36,25 @@ jobs:
         rustup show active-toolchain || rustup toolchain install
         rustup show
 
-    - name: Cache Dependencies
-      uses: actions/cache@v3
+    - name: Cache cargo-sort binary
+      id: cache-cargo-sort
+      uses: actions/cache@v4
       with:
-        path: |
-          ~/.cargo/registry
-          ~/.cargo/git
-          ~/.cargo/bin
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-bin-${{ hashFiles('.github/workflows/ci.yml') }}
+        path: ${{ runner.tool_cache }}/cargo-sort
+        key: cargo-sort-bin-${{ env.CARGO_SORT_VERSION }}
+
+    - name: Add cargo-sort to PATH
+      run: echo "${{ runner.tool_cache }}/cargo-sort/bin" >> "$GITHUB_PATH"
+
+    - name: Install cargo-sort
+      if: steps.cache-cargo-sort.outputs.cache-hit != 'true'
+      run: cargo install --root "${{ runner.tool_cache }}/cargo-sort" --version ${{ env.CARGO_SORT_VERSION }} --locked cargo-sort
 
     - name: Check Format
       run: cargo fmt --all -- --check
 
     - name: Check cargo sort
-      run: |
-        if ! command -v cargo-sort > /dev/null; then
-          cargo install cargo-sort
-        fi
-        cargo sort --check
+      run: cargo sort --check
 
   clippy:
     name: Clippy
@@ -62,15 +70,14 @@ jobs:
         rustup show active-toolchain || rustup toolchain install
         rustup show
 
-    - name: Cache Dependencies
-      uses: actions/cache@v3
+    - name: Cache build artifacts
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          ~/.cargo/bin
           target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-bin-${{ hashFiles('.github/workflows/ci.yml') }}
+        key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Clippy
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -106,22 +113,31 @@ jobs:
         rustup show active-toolchain || rustup toolchain install
         rustup show
 
-    - name: Cache Dependencies
-      uses: actions/cache@v3
+    - name: Cache build artifacts
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          ~/.cargo/bin
           target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-bin-${{ hashFiles('.github/workflows/ci.yml') }}
+        key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache sqlx-cli binary
+      id: cache-sqlx-cli
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/sqlx-cli
+        key: sqlx-cli-bin-${{ env.SQLX_CLI_VERSION }}
+
+    - name: Add sqlx-cli to PATH
+      run: echo "${{ runner.tool_cache }}/sqlx-cli/bin" >> "$GITHUB_PATH"
+
+    - name: Install sqlx-cli
+      if: steps.cache-sqlx-cli.outputs.cache-hit != 'true'
+      run: cargo install --root "${{ runner.tool_cache }}/sqlx-cli" --version ${{ env.SQLX_CLI_VERSION }} --locked sqlx-cli
 
     - name: Check SQLx cache
-      run: |
-        if ! command -v sqlx > /dev/null; then
-          cargo install sqlx-cli --version 0.8.6 --locked
-        fi
-        cargo sqlx prepare --check
+      run: cargo sqlx prepare --check
 
   audit:
     name: Cargo Audit
@@ -137,24 +153,102 @@ jobs:
         rustup show active-toolchain || rustup toolchain install
         rustup show
 
-    - name: Cache Dependencies
-      uses: actions/cache@v3
+    - name: Cache cargo-audit binary
+      id: cache-cargo-audit
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/cargo-audit
+        key: cargo-audit-bin-${{ env.CARGO_AUDIT_VERSION }}
+
+    - name: Add cargo-audit to PATH
+      run: echo "${{ runner.tool_cache }}/cargo-audit/bin" >> "$GITHUB_PATH"
+
+    - name: Install cargo-audit
+      if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
+      run: cargo install --root "${{ runner.tool_cache }}/cargo-audit" --version ${{ env.CARGO_AUDIT_VERSION }} --locked cargo-audit
+
+    - name: Run cargo audit
+      run: cargo audit
+
+  deny:
+    name: Cargo Deny
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install Rust
+      run: |
+        rustup show active-toolchain || rustup toolchain install
+        rustup show
+
+    - name: Cache cargo registry and git
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          ~/.cargo/bin
-          target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-bin-${{ hashFiles('.github/workflows/ci.yml') }}
+        key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
 
-    - name: Install cargo-audit
+    - name: Cache cargo-deny binary
+      id: cache-cargo-deny
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/cargo-deny
+        key: cargo-deny-bin-${{ env.CARGO_DENY_VERSION }}
+
+    - name: Add cargo-deny to PATH
+      run: echo "${{ runner.tool_cache }}/cargo-deny/bin" >> "$GITHUB_PATH"
+
+    - name: Install cargo-deny
+      if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
+      run: cargo install --root "${{ runner.tool_cache }}/cargo-deny" --version ${{ env.CARGO_DENY_VERSION }} --locked cargo-deny
+
+    # Advisories are owned by the `audit` job (+ .cargo/audit.toml) to keep the
+    # RUSTSEC ignore list in one place; cargo-deny covers licenses/bans/sources.
+    - name: Run cargo deny
+      run: cargo deny check bans licenses sources
+
+  vet:
+    name: Cargo Vet
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Install Rust
       run: |
-        if ! command -v cargo-audit > /dev/null; then
-          cargo install cargo-audit
-        fi
+        rustup show active-toolchain || rustup toolchain install
+        rustup show
 
-    - name: Run cargo audit
-      run: cargo audit
+    - name: Cache cargo registry and git
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+        key: ${{ runner.os }}-cargo-deps-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo-vet binary
+      id: cache-cargo-vet
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/cargo-vet
+        key: cargo-vet-bin-${{ env.CARGO_VET_VERSION }}
+
+    - name: Add cargo-vet to PATH
+      run: echo "${{ runner.tool_cache }}/cargo-vet/bin" >> "$GITHUB_PATH"
+
+    - name: Install cargo-vet
+      if: steps.cache-cargo-vet.outputs.cache-hit != 'true'
+      run: cargo install --root "${{ runner.tool_cache }}/cargo-vet" --version ${{ env.CARGO_VET_VERSION }} --locked cargo-vet
+
+    - name: Run cargo vet
+      run: cargo vet --locked
 
   test:
     name: Run Tests
@@ -170,21 +264,28 @@ jobs:
         rustup show active-toolchain || rustup toolchain install
         rustup show
 
-    - name: Cache Dependencies
-      uses: actions/cache@v3
+    - name: Cache build artifacts
+      uses: actions/cache@v4
       with:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          ~/.cargo/bin
           target
-        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}-bin-${{ hashFiles('.github/workflows/ci.yml') }}
+        key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache cargo-tarpaulin binary
+      id: cache-cargo-tarpaulin
+      uses: actions/cache@v4
+      with:
+        path: ${{ runner.tool_cache }}/cargo-tarpaulin
+        key: cargo-tarpaulin-bin-${{ env.CARGO_TARPAULIN_VERSION }}
+
+    - name: Add cargo-tarpaulin to PATH
+      run: echo "${{ runner.tool_cache }}/cargo-tarpaulin/bin" >> "$GITHUB_PATH"
 
     - name: Install cargo-tarpaulin
-      run: |
-        if ! cargo tarpaulin --version > /dev/null 2>&1; then
-          cargo install cargo-tarpaulin
-        fi
+      if: steps.cache-cargo-tarpaulin.outputs.cache-hit != 'true'
+      run: cargo install --root "${{ runner.tool_cache }}/cargo-tarpaulin" --version ${{ env.CARGO_TARPAULIN_VERSION }} --locked cargo-tarpaulin
 
     - name: Run tests with coverage
       run: |
@@ -205,7 +306,7 @@ jobs:
   docker-publish:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, lint, sqlx, audit, test]
+    needs: [fmt, clippy, lint, sqlx, audit, deny, vet, test]
     if: github.ref == 'refs/heads/main' # Only run on main branch
 
     permissions:

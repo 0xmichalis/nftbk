@@ -136,15 +136,20 @@ make run-cli-server-test
 
 ### Postgres
 
-Postgres is a requirement in order to run the server. Deploy Postgres and
-run migrations by following these instructions:
+Postgres is a requirement in order to run the server. The server applies any
+pending migrations automatically on startup, so you only need to deploy
+Postgres:
 
 ```sh
-# Run database
 cp .env.postgres.example .env.postgres
 make start-db
+```
 
-# Run migrations
+Migrations live in `migrations/` and are embedded into the server binary at
+build time. To apply them manually without starting the server (e.g. for
+inspection), use the sqlx CLI:
+
+```sh
 export DATABASE_URL=postgres://nftbkuser:nftbkpassword@localhost:5432/nftbkdb
 sqlx migrate run
 ```
@@ -152,7 +157,7 @@ sqlx migrate run
 ### Server
 
 ```sh
-# This deploys Postgres, runs the migrations, and finally runs the server
+# This deploys Postgres and runs the server, which applies migrations on startup.
 # You should have already created `.env.postgres` for this to work end to end.
 make run
 
