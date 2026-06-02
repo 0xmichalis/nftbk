@@ -32,6 +32,17 @@ CREATE TABLE IF NOT EXISTS pin_requests (
     deleted_at TIMESTAMPTZ
 );
 
+-- Tokens related to backup tasks
+-- NOTE: must be created before `pins`, which has a foreign key to tokens(id).
+CREATE TABLE IF NOT EXISTS tokens (
+    id BIGSERIAL PRIMARY KEY,
+    task_id VARCHAR(255) NOT NULL REFERENCES backup_tasks(task_id) ON DELETE CASCADE,
+    chain TEXT NOT NULL,
+    contract_address TEXT NOT NULL,
+    token_id TEXT NOT NULL,
+    UNIQUE (task_id, chain, contract_address, token_id)
+);
+
 -- Pins related to pin requests
 CREATE TABLE IF NOT EXISTS pins (
     id BIGSERIAL PRIMARY KEY,
@@ -43,16 +54,6 @@ CREATE TABLE IF NOT EXISTS pins (
     cid VARCHAR(255) NOT NULL,
     request_id VARCHAR(255) NOT NULL,
     pin_status VARCHAR(12) NOT NULL CHECK (pin_status IN ('queued', 'pinning', 'pinned', 'failed'))
-);
-
--- Tokens related to backup tasks
-CREATE TABLE IF NOT EXISTS tokens (
-    id BIGSERIAL PRIMARY KEY,
-    task_id VARCHAR(255) NOT NULL REFERENCES backup_tasks(task_id) ON DELETE CASCADE,
-    chain TEXT NOT NULL,
-    contract_address TEXT NOT NULL,
-    token_id TEXT NOT NULL,
-    UNIQUE (task_id, chain, contract_address, token_id)
 );
 
 -- Indexes for backup_tasks

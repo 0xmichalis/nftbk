@@ -31,24 +31,5 @@ services:
     ]
     restart: unless-stopped
 
-  caddy:
-    image: ghcr.io/caddy-dns/cloudflare:latest
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./Caddyfile.template:/etc/caddy/Caddyfile.template
-      - ./scripts/start_caddy.sh:/start_caddy.sh
-      - caddy_data:/data
-      - caddy_config:/config
-    env_file:
-      - .env.caddy
-    entrypoint: ["/bin/sh", "/start_caddy.sh"]
-    depends_on:
-      - nftbk-server
-    restart: unless-stopped
-
 volumes:
-  caddy_data:
-  caddy_config:
   pgdata:
