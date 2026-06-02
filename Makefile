@@ -100,7 +100,7 @@ run-cli-server-test:
 	--force true
 
 .PHONY: run
-run: start-db migrate-db run-server
+run: start-db run-server
 
 .PHONY: run-server
 run-server:
@@ -121,30 +121,6 @@ stop-db:
 .PHONY: nuke-db
 nuke-db: stop-db
 	podman volume rm nftbk_pgdata
-
-.PHONY: migrate-db
-migrate-db:
-	@if ! cargo sqlx --version >/dev/null 2>&1; then \
-		cargo install sqlx-cli; \
-	fi
-	@echo "Attempting to run database migrations (with retry on startup errors)..."
-	@max_attempts=5; \
-	attempt=1; \
-	while [ $$attempt -le $$max_attempts ]; do \
-		echo "Migration attempt $$attempt/$$max_attempts..."; \
-		if sqlx migrate run; then \
-			echo "Database migration successful!"; \
-			break; \
-		else \
-			if [ $$attempt -eq $$max_attempts ]; then \
-				echo "Migration failed after $$max_attempts attempts"; \
-				exit 1; \
-			fi; \
-			echo "Migration failed, waiting 2 seconds before retry..."; \
-			sleep 2; \
-			attempt=$$((attempt + 1)); \
-		fi; \
-	done
 
 # Deployment-related targets
 
