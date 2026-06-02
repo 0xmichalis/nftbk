@@ -4,6 +4,9 @@
 !.env.*.example
 config_*.toml
 config.toml
+# The bare config.toml rule above also matches supply-chain/config.toml (the
+# cargo-vet store), which must be committed for `cargo vet` to work.
+!supply-chain/config.toml
 /nft_backup*
 /*.json
 !.sqlx/*
