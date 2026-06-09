@@ -91,6 +91,7 @@ mod tests {
     use super::*;
     use crate::server::database::r#trait::MockDatabase;
     use crate::server::database::BackupTask as DbBackupTask;
+    use crate::server::database::{ArchiveStatus, IpfsStatus};
     use chrono::Utc;
     use serde_json::json;
     use tokio::sync::mpsc;
@@ -117,7 +118,7 @@ mod tests {
                 requestor: "user1".to_string(),
                 nft_count: 0,
                 tokens: json!([{ "chain": "ethereum", "tokens": ["0x123"] }]),
-                archive_status: Some("in_progress".to_string()),
+                archive_status: Some(ArchiveStatus::InProgress),
                 ipfs_status: None,
                 archive_error_log: None,
                 ipfs_error_log: None,
@@ -136,8 +137,8 @@ mod tests {
                 requestor: "user2".to_string(),
                 nft_count: 0,
                 tokens: json!([{ "chain": "tezos", "tokens": ["KT1ABC"] }]),
-                archive_status: Some("in_progress".to_string()),
-                ipfs_status: Some("in_progress".to_string()),
+                archive_status: Some(ArchiveStatus::InProgress),
+                ipfs_status: Some(IpfsStatus::InProgress),
                 archive_error_log: None,
                 ipfs_error_log: None,
                 archive_fatal_error: None,
@@ -194,7 +195,7 @@ mod tests {
             requestor: "user1".to_string(),
             nft_count: 0,
             tokens: json!("invalid tokens"),
-            archive_status: Some("in_progress".to_string()),
+            archive_status: Some(ArchiveStatus::InProgress),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
@@ -239,7 +240,7 @@ mod tests {
             requestor: "user1".to_string(),
             nft_count: 0,
             tokens: json!([{ "chain": "ethereum", "tokens": ["0x123"] }]),
-            archive_status: Some("in_progress".to_string()),
+            archive_status: Some(ArchiveStatus::InProgress),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,

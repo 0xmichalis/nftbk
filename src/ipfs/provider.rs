@@ -40,6 +40,17 @@ pub enum PinResponseStatus {
     Failed,
 }
 
+impl PinResponseStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PinResponseStatus::Queued => "queued",
+            PinResponseStatus::Pinning => "pinning",
+            PinResponseStatus::Pinned => "pinned",
+            PinResponseStatus::Failed => "failed",
+        }
+    }
+}
+
 /// Trait for IPFS pinning providers
 #[async_trait]
 pub trait IpfsPinningProvider: Send + Sync {

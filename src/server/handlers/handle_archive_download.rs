@@ -16,6 +16,7 @@ use tracing::error;
 
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::database::r#trait::Database;
+use crate::server::database::ArchiveStatus;
 use crate::server::handlers::verify_requestor_owns_task;
 use crate::server::{archive::check_backup_on_disk, AppState};
 
@@ -169,7 +170,7 @@ async fn serve_zip_file_for_token_core<DB: Database + ?Sized>(
         }
     };
     // Allow download only when archive subresource is done
-    if meta.archive_status.as_deref().unwrap_or("in_progress") != "done" {
+    if meta.archive_status != Some(ArchiveStatus::Done) {
         return ProblemJson::from_status(
             StatusCode::ACCEPTED,
             Some("Task not completed yet".to_string()),
@@ -266,6 +267,7 @@ mod handle_download_tests {
     use tokio::sync::{mpsc, Mutex};
 
     use crate::server::database::r#trait::MockDatabase;
+    use crate::server::database::ArchiveStatus;
     use crate::server::handlers::verify_requestor_owns_task;
     use crate::server::AppState;
     use crate::server::Db;
@@ -326,7 +328,7 @@ mod handle_download_tests {
             requestor: "did:privy:bob".to_string(),
             nft_count: 1,
             tokens: serde_json::json!([]),
-            archive_status: Some("done".to_string()),
+            archive_status: Some(ArchiveStatus::Done),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
@@ -423,7 +425,7 @@ mod handle_download_tests {
             requestor: "did:privy:alice".to_string(),
             nft_count: 1,
             tokens: serde_json::json!([]),
-            archive_status: Some("done".to_string()),
+            archive_status: Some(ArchiveStatus::Done),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
