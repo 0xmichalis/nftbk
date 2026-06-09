@@ -44,10 +44,7 @@ pub async fn monitor_pin_requests<DB: Database + ?Sized>(
 
                 // Only update if the status has changed
                 if new_status != &pin.pin_status {
-                    let new_status_str = serde_json::to_value(new_status)
-                        .map(|v| v.as_str().unwrap().to_string())
-                        .unwrap_or_default();
-                    status_updates.push((pin.id, new_status_str));
+                    status_updates.push((pin.id, new_status.as_str().to_string()));
                     info!(
                         "Queued status update for pin {}: {:?} -> {:?}",
                         pin.id, pin.pin_status, new_status
