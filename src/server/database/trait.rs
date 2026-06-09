@@ -2,7 +2,9 @@ use async_trait::async_trait;
 use serde_json;
 use sqlx;
 
-use crate::server::database::{ArchiveStatus, BackupTask, ExpiredBackup, IpfsStatus, PinRow, TokenWithPins};
+use crate::server::database::{
+    ArchiveStatus, BackupTask, ExpiredBackup, IpfsStatus, PinRow, TokenWithPins,
+};
 use crate::types::TokenPinMapping;
 
 /// Unified database trait that consolidates all database operations

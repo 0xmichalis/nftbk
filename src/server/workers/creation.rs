@@ -277,7 +277,11 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
     match scope {
         StorageMode::Ipfs => {
             let success = process_ipfs_outcome(db, &task, &ipfs_outcome).await;
-            let status = if success { &IpfsStatus::Done } else { &IpfsStatus::Error };
+            let status = if success {
+                &IpfsStatus::Done
+            } else {
+                &IpfsStatus::Error
+            };
             let _ = db.update_pin_request_status(&task_id, status).await;
         }
         StorageMode::Archive => {
@@ -296,10 +300,14 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
             .await;
             match result {
                 ArchiveResult::Success => {
-                    let _ = db.update_archive_request_status(&task_id, &ArchiveStatus::Done).await;
+                    let _ = db
+                        .update_archive_request_status(&task_id, &ArchiveStatus::Done)
+                        .await;
                 }
                 ArchiveResult::Error => {
-                    let _ = db.update_archive_request_status(&task_id, &ArchiveStatus::Error).await;
+                    let _ = db
+                        .update_archive_request_status(&task_id, &ArchiveStatus::Error)
+                        .await;
                 }
                 ArchiveResult::ShutdownInterrupted => {
                     // Don't update status; leave it as is (likely "in_progress")
@@ -330,7 +338,9 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
                 .await;
                 match result {
                     ArchiveResult::Success => {
-                        let _ = db.update_archive_request_status(&task_id_ref, &ArchiveStatus::Done).await;
+                        let _ = db
+                            .update_archive_request_status(&task_id_ref, &ArchiveStatus::Done)
+                            .await;
                     }
                     ArchiveResult::Error => {
                         let _ = db
@@ -345,7 +355,11 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
 
             let ipfs_fut = async {
                 let success = process_ipfs_outcome(db, &task, &ipfs_outcome).await;
-                let status = if success { &IpfsStatus::Done } else { &IpfsStatus::Error };
+                let status = if success {
+                    &IpfsStatus::Done
+                } else {
+                    &IpfsStatus::Error
+                };
                 let _ = db.update_pin_request_status(&task_id, status).await;
             };
 

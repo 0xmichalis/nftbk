@@ -15,8 +15,8 @@ use tokio_util::io::ReaderStream;
 use tracing::error;
 
 use crate::server::api::{ApiProblem, ProblemJson};
-use crate::server::database::ArchiveStatus;
 use crate::server::database::r#trait::Database;
+use crate::server::database::ArchiveStatus;
 use crate::server::handlers::verify_requestor_owns_task;
 use crate::server::{archive::check_backup_on_disk, AppState};
 
@@ -267,6 +267,7 @@ mod handle_download_tests {
     use tokio::sync::{mpsc, Mutex};
 
     use crate::server::database::r#trait::MockDatabase;
+    use crate::server::database::ArchiveStatus;
     use crate::server::handlers::verify_requestor_owns_task;
     use crate::server::AppState;
     use crate::server::Db;

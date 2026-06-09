@@ -11,7 +11,6 @@ use tracing::{debug, error, info};
 use crate::server::api::{ApiProblem, BackupCreateResponse, BackupRequest, ProblemJson};
 use crate::server::archive::negotiate_archive_format;
 use crate::server::database::r#trait::Database;
-use crate::server::database::{ArchiveStatus, IpfsStatus};
 use crate::server::hashing::compute_task_id;
 use crate::server::{
     AppState, BackupTask, BackupTaskOrShutdown, QuoteCache, StorageMode, TaskType,
@@ -396,7 +395,7 @@ mod ensure_backup_exists_unit_tests {
     use super::ensure_backup_exists;
     use crate::server::api::Tokens;
     use crate::server::database::r#trait::MockDatabase;
-    use crate::server::database::BackupTask;
+    use crate::server::database::{ArchiveStatus, BackupTask};
     use crate::server::StorageMode;
 
     fn sample_meta() -> BackupTask {
@@ -711,6 +710,7 @@ mod handle_backup_endpoint_tests {
 mod handle_backup_core_tests {
     use crate::server::api::{BackupRequest, Tokens};
     use crate::server::database::r#trait::MockDatabase;
+    use crate::server::database::{ArchiveStatus, IpfsStatus};
     use axum::body::to_bytes;
     use axum::http::{HeaderMap, StatusCode};
     use axum::response::IntoResponse;
@@ -1371,7 +1371,7 @@ mod validate_scope_unit_tests {
 #[cfg(test)]
 mod get_status_unit_tests {
     use super::get_status;
-    use crate::server::database::BackupTask;
+    use crate::server::database::{ArchiveStatus, BackupTask, IpfsStatus};
     use crate::server::StorageMode;
 
     fn base_meta() -> BackupTask {

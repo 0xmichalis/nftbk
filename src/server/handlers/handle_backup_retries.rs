@@ -28,14 +28,16 @@ fn validate_scope_for_retry(
         StorageMode::Ipfs => (false, true),
         StorageMode::Full => (true, true),
     };
-    let archive_status = meta.archive_status.unwrap_or(ArchiveStatus::InProgress);
-    let ipfs_status = if !ipfs_needed {
-        IpfsStatus::Done
-    } else {
-        meta.ipfs_status.unwrap_or(IpfsStatus::InProgress)
-    };
-    (archive_needed && archive_status == ArchiveStatus::InProgress)
-        || (ipfs_needed && ipfs_status == IpfsStatus::InProgress)
+    // A missing status is treated as in_progress.
+    let archive_in_progress = meta
+        .archive_status
+        .as_ref()
+        .is_none_or(|s| *s == ArchiveStatus::InProgress);
+    let ipfs_in_progress = meta
+        .ipfs_status
+        .as_ref()
+        .is_none_or(|s| *s == IpfsStatus::InProgress);
+    (archive_needed && archive_in_progress) || (ipfs_needed && ipfs_in_progress)
 }
 
 /// Validate if a task is in the process of deletion for the given scope/storage mode.

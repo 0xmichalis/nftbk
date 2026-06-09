@@ -329,31 +329,61 @@ pub async fn run_deletion_task(state: AppState, task: DeletionTask) {
 
 #[cfg(test)]
 mod validate_status_for_scope_tests {
-    use super::{validate_status_for_scope, StorageMode, ArchiveStatus, IpfsStatus};
+    use super::{validate_status_for_scope, ArchiveStatus, IpfsStatus, StorageMode};
 
     #[test]
     fn table_validates_all_cases() {
         // (scope, archive_status, ipfs_status, expect_ok)
-        let cases: Vec<(
-            StorageMode,
-            Option<ArchiveStatus>,
-            Option<IpfsStatus>,
-            bool,
-        )> = vec![
+        let cases: Vec<(StorageMode, Option<ArchiveStatus>, Option<IpfsStatus>, bool)> = vec![
             // Full scope
-            (StorageMode::Full, Some(ArchiveStatus::Done), Some(IpfsStatus::Done), true),
-            (StorageMode::Full, Some(ArchiveStatus::Error), Some(IpfsStatus::Done), true),
+            (
+                StorageMode::Full,
+                Some(ArchiveStatus::Done),
+                Some(IpfsStatus::Done),
+                true,
+            ),
+            (
+                StorageMode::Full,
+                Some(ArchiveStatus::Error),
+                Some(IpfsStatus::Done),
+                true,
+            ),
             (StorageMode::Full, None, Some(IpfsStatus::Done), true),
             (StorageMode::Full, Some(ArchiveStatus::Done), None, true),
             (StorageMode::Full, None, None, true),
-            (StorageMode::Full, Some(ArchiveStatus::InProgress), Some(IpfsStatus::Done), false),
-            (StorageMode::Full, Some(ArchiveStatus::Done), Some(IpfsStatus::InProgress), false),
-            (StorageMode::Full, Some(ArchiveStatus::InProgress), None, false),
+            (
+                StorageMode::Full,
+                Some(ArchiveStatus::InProgress),
+                Some(IpfsStatus::Done),
+                false,
+            ),
+            (
+                StorageMode::Full,
+                Some(ArchiveStatus::Done),
+                Some(IpfsStatus::InProgress),
+                false,
+            ),
+            (
+                StorageMode::Full,
+                Some(ArchiveStatus::InProgress),
+                None,
+                false,
+            ),
             (StorageMode::Full, None, Some(IpfsStatus::InProgress), false),
             // Archive scope
-            (StorageMode::Archive, Some(ArchiveStatus::Done), Some(IpfsStatus::Done), true),
+            (
+                StorageMode::Archive,
+                Some(ArchiveStatus::Done),
+                Some(IpfsStatus::Done),
+                true,
+            ),
             (StorageMode::Archive, Some(ArchiveStatus::Error), None, true),
-            (StorageMode::Archive, None, Some(IpfsStatus::InProgress), true),
+            (
+                StorageMode::Archive,
+                None,
+                Some(IpfsStatus::InProgress),
+                true,
+            ),
             (StorageMode::Archive, None, None, true),
             (
                 StorageMode::Archive,
@@ -361,18 +391,38 @@ mod validate_status_for_scope_tests {
                 Some(IpfsStatus::Done),
                 false,
             ),
-            (StorageMode::Archive, Some(ArchiveStatus::InProgress), None, false),
+            (
+                StorageMode::Archive,
+                Some(ArchiveStatus::InProgress),
+                None,
+                false,
+            ),
             // Ipfs scope
-            (StorageMode::Ipfs, Some(ArchiveStatus::Done), Some(IpfsStatus::Done), true),
+            (
+                StorageMode::Ipfs,
+                Some(ArchiveStatus::Done),
+                Some(IpfsStatus::Done),
+                true,
+            ),
             (StorageMode::Ipfs, None, Some(IpfsStatus::Error), true),
-            (StorageMode::Ipfs, Some(ArchiveStatus::InProgress), None, true),
+            (
+                StorageMode::Ipfs,
+                Some(ArchiveStatus::InProgress),
+                None,
+                true,
+            ),
             (StorageMode::Ipfs, None, None, true),
-            (StorageMode::Ipfs, Some(ArchiveStatus::Done), Some(IpfsStatus::InProgress), false),
+            (
+                StorageMode::Ipfs,
+                Some(ArchiveStatus::Done),
+                Some(IpfsStatus::InProgress),
+                false,
+            ),
             (StorageMode::Ipfs, None, Some(IpfsStatus::InProgress), false),
         ];
 
         for (idx, (scope, a, i, expect_ok)) in cases.into_iter().enumerate() {
-            let result = validate_status_for_scope(&scope, a, i);
+            let result = validate_status_for_scope(&scope, a.as_ref(), i.as_ref());
             let ok = result.is_ok();
             assert_eq!(
                 ok, expect_ok,
@@ -386,6 +436,7 @@ mod validate_status_for_scope_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ipfs::PinResponseStatus;
 
     #[tokio::test]
     async fn delete_dir_and_archive_for_task_removes_files_and_dir() {
@@ -491,7 +542,7 @@ mod tests {
                 provider_url: Some("mock".into()),
                 cid: "cid1".into(),
                 request_id: "rid1".into(),
-                pin_status: "pinned".into(),
+                pin_status: PinResponseStatus::Pinned,
                 created_at: chrono::Utc::now(),
             },
             crate::server::database::PinRow {
@@ -501,7 +552,7 @@ mod tests {
                 provider_url: Some("mock".into()),
                 cid: "cid2".into(),
                 request_id: "rid2".into(),
-                pin_status: "pinned".into(),
+                pin_status: PinResponseStatus::Pinned,
                 created_at: chrono::Utc::now(),
             },
         ];
@@ -522,7 +573,7 @@ mod tests {
             provider_url: Some("https://unknown".into()),
             cid: "cid".into(),
             request_id: "rid".into(),
-            pin_status: "pinned".into(),
+            pin_status: PinResponseStatus::Pinned,
             created_at: chrono::Utc::now(),
         }];
         let result = delete_ipfs_pins(&providers, "t", &rows).await.unwrap();

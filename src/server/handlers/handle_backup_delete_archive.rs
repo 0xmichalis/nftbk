@@ -178,7 +178,11 @@ mod handle_backup_delete_archive_core_tests {
     async fn returns_403_on_owner_mismatch() {
         // owner mismatch should return 403
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:other", ArchiveStatus::Done, "archive")));
+        db.set_get_backup_task_result(Some(sample_meta(
+            "did:other",
+            ArchiveStatus::Done,
+            "archive",
+        )));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -189,7 +193,11 @@ mod handle_backup_delete_archive_core_tests {
     #[tokio::test]
     async fn returns_409_when_in_progress() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::InProgress, "archive")));
+        db.set_get_backup_task_result(Some(sample_meta(
+            "did:me",
+            ArchiveStatus::InProgress,
+            "archive",
+        )));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await

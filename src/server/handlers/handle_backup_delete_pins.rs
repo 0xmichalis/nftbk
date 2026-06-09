@@ -7,6 +7,7 @@ use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::database::r#trait::Database;
+use crate::server::database::IpfsStatus;
 use crate::server::handlers::verify_requestor_owns_task;
 use crate::server::AppState;
 
@@ -107,8 +108,8 @@ async fn handle_backup_delete_pins_core<DB: Database + ?Sized>(
 #[cfg(test)]
 mod handle_backup_delete_pins_core_tests {
     use super::handle_backup_delete_pins_core;
-    use crate::server::database::IpfsStatus;
     use crate::server::database::r#trait::MockDatabase;
+    use crate::server::database::{ArchiveStatus, IpfsStatus};
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
@@ -143,7 +144,12 @@ mod handle_backup_delete_pins_core_tests {
     #[tokio::test]
     async fn returns_401_when_missing_requestor() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::Done, "ipfs", IpfsStatus::Done)));
+        db.set_get_backup_task_result(Some(sample_meta(
+            "did:me",
+            ArchiveStatus::Done,
+            "ipfs",
+            IpfsStatus::Done,
+        )));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", None)
             .await
@@ -176,7 +182,12 @@ mod handle_backup_delete_pins_core_tests {
     #[tokio::test]
     async fn returns_403_on_owner_mismatch() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:other", ArchiveStatus::Done, "ipfs", IpfsStatus::Done)));
+        db.set_get_backup_task_result(Some(sample_meta(
+            "did:other",
+            ArchiveStatus::Done,
+            "ipfs",
+            IpfsStatus::Done,
+        )));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -187,7 +198,12 @@ mod handle_backup_delete_pins_core_tests {
     #[tokio::test]
     async fn returns_409_when_in_progress() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::InProgress, "ipfs", IpfsStatus::InProgress)));
+        db.set_get_backup_task_result(Some(sample_meta(
+            "did:me",
+            ArchiveStatus::InProgress,
+            "ipfs",
+            IpfsStatus::InProgress,
+        )));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -198,7 +214,12 @@ mod handle_backup_delete_pins_core_tests {
     #[tokio::test]
     async fn returns_422_when_archive_only() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::Done, "archive", IpfsStatus::Done)));
+        db.set_get_backup_task_result(Some(sample_meta(
+            "did:me",
+            ArchiveStatus::Done,
+            "archive",
+            IpfsStatus::Done,
+        )));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -209,7 +230,12 @@ mod handle_backup_delete_pins_core_tests {
     #[tokio::test]
     async fn deletes_pin_request_on_success() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::Done, "ipfs", IpfsStatus::Done)));
+        db.set_get_backup_task_result(Some(sample_meta(
+            "did:me",
+            ArchiveStatus::Done,
+            "ipfs",
+            IpfsStatus::Done,
+        )));
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -224,7 +250,12 @@ mod handle_backup_delete_pins_core_tests {
     #[tokio::test]
     async fn updates_storage_mode_for_full_task() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::Done, "full", IpfsStatus::Done)));
+        db.set_get_backup_task_result(Some(sample_meta(
+            "did:me",
+            ArchiveStatus::Done,
+            "full",
+            IpfsStatus::Done,
+        )));
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_pins_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
