@@ -40,18 +40,16 @@ pub async fn monitor_pin_requests<DB: Database + ?Sized>(
         // Get the current status from the provider
         match provider.get_pin(&pin.request_id).await {
             Ok(pin_response) => {
-                let new_status = match pin_response.status {
-                    PinResponseStatus::Queued => "queued",
-                    PinResponseStatus::Pinning => "pinning",
-                    PinResponseStatus::Pinned => "pinned",
-                    PinResponseStatus::Failed => "failed",
-                };
+                let new_status = &pin_response.status;
 
                 // Only update if the status has changed
-                if new_status != pin.pin_status {
-                    status_updates.push((pin.id, new_status.to_string()));
+                if new_status != &pin.pin_status {
+                    let new_status_str = serde_json::to_value(new_status)
+                        .and_then(|v| Ok(v.as_str().unwrap().to_string()))
+                        .unwrap_or_default();
+                    status_updates.push((pin.id, new_status_str));
                     info!(
-                        "Queued status update for pin {}: {} -> {}",
+                        "Queued status update for pin {}: {:?} -> {:?}",
                         pin.id, pin.pin_status, new_status
                     );
                 }
@@ -203,7 +201,7 @@ mod tests {
         }
     }
 
-    fn create_test_pin_row(id: i64, provider_url: &str, request_id: &str, status: &str) -> PinRow {
+    fn create_test_pin_row(id: i64, provider_url: &str, request_id: &str, status: PinResponseStatus) -> PinRow {
         PinRow {
             id,
             task_id: "test-task".to_string(),
@@ -211,7 +209,7 @@ mod tests {
             provider_url: Some(provider_url.to_string()),
             cid: "QmTestCid".to_string(),
             request_id: request_id.to_string(),
-            pin_status: status.to_string(),
+            pin_status: status,
             created_at: chrono::Utc::now(),
         }
     }
@@ -269,7 +267,7 @@ mod tests {
     #[tokio::test]
     async fn test_monitor_pin_requests_no_provider_found() {
         // Setup: DB has a pin request for a provider that doesn't exist
-        let pin_request = create_test_pin_row(1, "unknown-provider", "req-1", "queued");
+        let pin_request = create_test_pin_row(1, "unknown-provider", "req-1", PinResponseStatus::Queued);
         let mut mock_db = MockDatabase::default();
         mock_db.set_get_active_pins_result(vec![pin_request]);
 
@@ -288,7 +286,7 @@ mod tests {
     #[tokio::test]
     async fn test_monitor_pin_requests_provider_name_mismatch() {
         // Setup: DB has a pin request for a provider that doesn't match any configured providers
-        let pin_request = create_test_pin_row(1, "unknown-provider", "req-1", "queued");
+        let pin_request = create_test_pin_row(1, "unknown-provider", "req-1", PinResponseStatus::Queued);
         let mut mock_db = MockDatabase::default();
         mock_db.set_get_active_pins_result(vec![pin_request]);
 
@@ -319,7 +317,7 @@ mod tests {
     #[tokio::test]
     async fn test_monitor_pin_requests_provider_error() {
         // Setup: DB has a pin request for a valid provider
-        let pin_request = create_test_pin_row(1, "test-provider", "req-1", "queued");
+        let pin_request = create_test_pin_row(1, "test-provider", "req-1", PinResponseStatus::Queued);
         let mut mock_db = MockDatabase::default();
         mock_db.set_get_active_pins_result(vec![pin_request]);
 
@@ -344,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn test_monitor_pin_requests_status_unchanged() {
         // Setup: DB has a pin request with queued status
-        let pin_request = create_test_pin_row(1, "test-provider", "req-1", "queued");
+        let pin_request = create_test_pin_row(1, "test-provider", "req-1", PinResponseStatus::Queued);
         let mut mock_db = MockDatabase::default();
         mock_db.set_get_active_pins_result(vec![pin_request]);
 
@@ -372,7 +370,7 @@ mod tests {
     #[tokio::test]
     async fn test_monitor_pin_requests_status_changed() {
         // Setup: DB has a pin request with queued status
-        let pin_request = create_test_pin_row(1, "test-provider", "req-1", "queued");
+        let pin_request = create_test_pin_row(1, "test-provider", "req-1", PinResponseStatus::Queued);
         let mut mock_db = MockDatabase::default();
         mock_db.set_get_active_pins_result(vec![pin_request]);
 
@@ -400,8 +398,8 @@ mod tests {
     #[tokio::test]
     async fn test_monitor_pin_requests_multiple_status_changes() {
         // Setup: DB has 2 pin requests with different initial statuses
-        let pin_request1 = create_test_pin_row(1, "test-provider", "req-1", "queued");
-        let pin_request2 = create_test_pin_row(2, "test-provider", "req-2", "pinning");
+        let pin_request1 = create_test_pin_row(1, "test-provider", "req-1", PinResponseStatus::Queued);
+        let pin_request2 = create_test_pin_row(2, "test-provider", "req-2", PinResponseStatus::Pinning);
         let mut mock_db = MockDatabase::default();
         mock_db.set_get_active_pins_result(vec![pin_request1, pin_request2]);
 
@@ -430,7 +428,7 @@ mod tests {
     #[tokio::test]
     async fn test_monitor_pin_requests_batch_update_error() {
         // Setup: DB has a pin request and will fail on batch update
-        let pin_request = create_test_pin_row(1, "test-provider", "req-1", "queued");
+        let pin_request = create_test_pin_row(1, "test-provider", "req-1", PinResponseStatus::Queued);
         let mut mock_db = MockDatabase::default();
         mock_db.set_get_active_pins_result(vec![pin_request]);
         mock_db.set_update_pin_statuses_error(Some("Batch update error".to_string()));
@@ -459,8 +457,8 @@ mod tests {
     #[tokio::test]
     async fn test_monitor_pin_requests_mixed_providers() {
         // Setup: DB has 2 pin requests for different providers
-        let pin_request1 = create_test_pin_row(1, "provider-1", "req-1", "queued");
-        let pin_request2 = create_test_pin_row(2, "provider-2", "req-2", "pinning");
+        let pin_request1 = create_test_pin_row(1, "provider-1", "req-1", PinResponseStatus::Queued);
+        let pin_request2 = create_test_pin_row(2, "provider-2", "req-2", PinResponseStatus::Pinning);
         let mut mock_db = MockDatabase::default();
         mock_db.set_get_active_pins_result(vec![pin_request1, pin_request2]);
 
@@ -501,7 +499,7 @@ mod tests {
     #[tokio::test]
     async fn test_monitor_pin_requests_queued_to_pinned_transition() {
         // Setup: DB has a queued pin request
-        let pin_request = create_test_pin_row(1, "test-provider", "req-1", "queued");
+        let pin_request = create_test_pin_row(1, "test-provider", "req-1", PinResponseStatus::Queued);
         let mut mock_db = MockDatabase::default();
         mock_db.set_get_active_pins_result(vec![pin_request]);
 
@@ -529,10 +527,10 @@ mod tests {
     #[tokio::test]
     async fn test_monitor_pin_requests_all_status_types() {
         // Setup: DB has 4 pin requests with different initial statuses
-        let pin_request1 = create_test_pin_row(1, "test-provider", "req-1", "queued");
-        let pin_request2 = create_test_pin_row(2, "test-provider", "req-2", "pinning");
-        let pin_request3 = create_test_pin_row(3, "test-provider", "req-3", "pinned");
-        let pin_request4 = create_test_pin_row(4, "test-provider", "req-4", "failed");
+        let pin_request1 = create_test_pin_row(1, "test-provider", "req-1", PinResponseStatus::Queued);
+        let pin_request2 = create_test_pin_row(2, "test-provider", "req-2", PinResponseStatus::Pinning);
+        let pin_request3 = create_test_pin_row(3, "test-provider", "req-3", PinResponseStatus::Pinned);
+        let pin_request4 = create_test_pin_row(4, "test-provider", "req-4", PinResponseStatus::Failed);
         let mut mock_db = MockDatabase::default();
         mock_db.set_get_active_pins_result(vec![
             pin_request1,

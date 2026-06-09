@@ -11,6 +11,7 @@ use tracing::{debug, error, info};
 use crate::server::api::{ApiProblem, BackupCreateResponse, BackupRequest, ProblemJson};
 use crate::server::archive::negotiate_archive_format;
 use crate::server::database::r#trait::Database;
+use crate::server::database::{ArchiveStatus, IpfsStatus};
 use crate::server::hashing::compute_task_id;
 use crate::server::{
     AppState, BackupTask, BackupTaskOrShutdown, QuoteCache, StorageMode, TaskType,
@@ -18,8 +19,8 @@ use crate::server::{
 
 fn get_status(meta: &crate::server::database::BackupTask, scope: &StorageMode) -> Option<String> {
     match scope {
-        StorageMode::Archive => meta.archive_status.clone(),
-        StorageMode::Ipfs => meta.ipfs_status.clone(),
+        StorageMode::Archive => meta.archive_status.as_ref().map(|s| s.as_str().to_string()),
+        StorageMode::Ipfs => meta.ipfs_status.as_ref().map(|s| s.as_str().to_string()),
         StorageMode::Full => {
             unreachable!("get_status reached with Full scope in POST /backups path")
         }
@@ -406,7 +407,7 @@ mod ensure_backup_exists_unit_tests {
             requestor: "did:test".to_string(),
             nft_count: 1,
             tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
-            archive_status: Some("done".to_string()),
+            archive_status: Some(ArchiveStatus::Done),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
@@ -794,7 +795,7 @@ mod handle_backup_core_tests {
             requestor: "did:test".to_string(),
             nft_count: 0,
             tokens: serde_json::Value::Null,
-            archive_status: Some("done".to_string()),
+            archive_status: Some(ArchiveStatus::Done),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
@@ -843,7 +844,7 @@ mod handle_backup_core_tests {
             requestor: "did:privy:bob".to_string(),
             nft_count: 1,
             tokens: serde_json::json!([]),
-            archive_status: Some("done".to_string()),
+            archive_status: Some(ArchiveStatus::Done),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
@@ -892,7 +893,7 @@ mod handle_backup_core_tests {
             requestor: "did:test".to_string(),
             nft_count: 1,
             tokens: serde_json::json!([]),
-            archive_status: Some("in_progress".to_string()),
+            archive_status: Some(ArchiveStatus::InProgress),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
@@ -1189,7 +1190,7 @@ mod handle_backup_core_tests {
             requestor: "did:test".to_string(),
             nft_count: 1,
             tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
-            archive_status: Some("done".to_string()),
+            archive_status: Some(ArchiveStatus::Done),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
@@ -1251,7 +1252,7 @@ mod handle_backup_core_tests {
             nft_count: 1,
             tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
             archive_status: None,
-            ipfs_status: Some("done".to_string()),
+            ipfs_status: Some(IpfsStatus::Done),
             archive_error_log: None,
             ipfs_error_log: None,
             archive_fatal_error: None,
@@ -1399,7 +1400,7 @@ mod get_status_unit_tests {
     fn archive_returns_substatus_or_none() {
         let mut meta = base_meta();
         assert_eq!(get_status(&meta, &StorageMode::Archive), None);
-        meta.archive_status = Some("done".to_string());
+        meta.archive_status = Some(ArchiveStatus::Done);
         assert_eq!(
             get_status(&meta, &StorageMode::Archive),
             Some("done".to_string())
@@ -1411,7 +1412,7 @@ mod get_status_unit_tests {
         let mut meta = base_meta();
         meta.storage_mode = "ipfs".to_string();
         assert_eq!(get_status(&meta, &StorageMode::Ipfs), None);
-        meta.ipfs_status = Some("in_progress".to_string());
+        meta.ipfs_status = Some(IpfsStatus::InProgress);
         assert_eq!(
             get_status(&meta, &StorageMode::Ipfs),
             Some("in_progress".to_string())

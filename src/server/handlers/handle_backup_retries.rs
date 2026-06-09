@@ -8,6 +8,7 @@ use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, BackupCreateResponse, BackupRequest, ProblemJson};
 use crate::server::database::r#trait::Database;
+use crate::server::database::{ArchiveStatus, IpfsStatus};
 use crate::server::handlers::verify_requestor_owns_task;
 use crate::server::{
     parse_scope, AppState, BackupTask, BackupTaskOrShutdown, StorageMode, TaskType, Tokens,
@@ -27,14 +28,14 @@ fn validate_scope_for_retry(
         StorageMode::Ipfs => (false, true),
         StorageMode::Full => (true, true),
     };
-    let archive_status = meta.archive_status.as_deref().unwrap_or("in_progress");
+    let archive_status = meta.archive_status.unwrap_or(ArchiveStatus::InProgress);
     let ipfs_status = if !ipfs_needed {
-        "done"
+        IpfsStatus::Done
     } else {
-        meta.ipfs_status.as_deref().unwrap_or("in_progress")
+        meta.ipfs_status.unwrap_or(IpfsStatus::InProgress)
     };
-    (archive_needed && archive_status == "in_progress")
-        || (ipfs_needed && ipfs_status == "in_progress")
+    (archive_needed && archive_status == ArchiveStatus::InProgress)
+        || (ipfs_needed && ipfs_status == IpfsStatus::InProgress)
 }
 
 /// Validate if a task is in the process of deletion for the given scope/storage mode.
@@ -187,13 +188,13 @@ async fn handle_backup_retries_core<DB: Database + ?Sized>(
 mod handle_backup_retries_core_tests {
     use super::handle_backup_retries_core;
     use crate::server::database::r#trait::MockDatabase;
-    use crate::server::database::BackupTask;
+    use crate::server::database::{ArchiveStatus, BackupTask};
     use crate::server::StorageMode;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use tokio::sync::mpsc;
 
-    fn sample_meta(owner: &str, status: &str) -> BackupTask {
+    fn sample_meta(owner: &str, status: ArchiveStatus) -> BackupTask {
         use chrono::{TimeZone, Utc};
         BackupTask {
             task_id: "t1".to_string(),
@@ -202,7 +203,7 @@ mod handle_backup_retries_core_tests {
             requestor: owner.to_string(),
             nft_count: 1,
             tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
-            archive_status: Some(status.to_string()),
+            archive_status: Some(status),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
@@ -241,7 +242,7 @@ mod handle_backup_retries_core_tests {
     #[tokio::test]
     async fn returns_409_when_in_progress() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", "in_progress")));
+        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::InProgress)));
         let (tx, _rx) = mpsc::channel(1);
         let resp = handle_backup_retries_core(&db, &tx, "t1", None, Some("did:me".to_string()), 7)
             .await
@@ -251,7 +252,7 @@ mod handle_backup_retries_core_tests {
 
     #[tokio::test]
     async fn returns_409_when_being_deleted() {
-        let mut meta = sample_meta("did:me", "done");
+        let mut meta = sample_meta("did:me", ArchiveStatus::Done);
         meta.archive_deleted_at = Some(chrono::Utc::now());
         let mut db = MockDatabase::default();
         db.set_get_backup_task_result(Some(meta));
@@ -265,7 +266,7 @@ mod handle_backup_retries_core_tests {
     #[tokio::test]
     async fn returns_403_on_owner_mismatch() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:other", "done")));
+        db.set_get_backup_task_result(Some(sample_meta("did:other", ArchiveStatus::Done)));
         let (tx, _rx) = mpsc::channel(1);
         let resp = handle_backup_retries_core(&db, &tx, "t1", None, Some("did:me".to_string()), 7)
             .await
@@ -276,7 +277,7 @@ mod handle_backup_retries_core_tests {
     #[tokio::test]
     async fn returns_500_when_enqueue_fails() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", "done")));
+        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::Done)));
         let (tx, rx) = mpsc::channel(1);
         drop(rx); // close receiver to force send error
         let resp = handle_backup_retries_core(&db, &tx, "t1", None, Some("did:me".to_string()), 7)
@@ -288,7 +289,7 @@ mod handle_backup_retries_core_tests {
     #[tokio::test]
     async fn returns_202_on_success_with_scope() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", "error")));
+        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::Error)));
         let (tx, mut rx) = mpsc::channel(1);
         let resp = handle_backup_retries_core(
             &db,
@@ -311,10 +312,17 @@ mod handle_backup_retries_core_tests {
 mod validate_scope_for_retry_tests {
     use super::validate_scope_for_retry;
     use crate::server::database::BackupTask;
+    use crate::server::database::{ArchiveStatus, IpfsStatus};
     use crate::server::StorageMode;
 
-    fn sample_meta(owner: &str, status: &str, storage_mode: &str) -> BackupTask {
+    fn sample_meta(owner: &str, status: ArchiveStatus, storage_mode: &str) -> BackupTask {
         use chrono::{TimeZone, Utc};
+        let ipfs_status = match status {
+            ArchiveStatus::InProgress => IpfsStatus::InProgress,
+            ArchiveStatus::Done => IpfsStatus::Done,
+            ArchiveStatus::Error => IpfsStatus::Error,
+            ArchiveStatus::Expired => IpfsStatus::Done,
+        };
         BackupTask {
             task_id: "t1".to_string(),
             created_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
@@ -322,8 +330,8 @@ mod validate_scope_for_retry_tests {
             requestor: owner.to_string(),
             nft_count: 1,
             tokens: serde_json::json!([["ethereum", "0xabc:1"]]),
-            archive_status: Some(status.to_string()),
-            ipfs_status: Some(status.to_string()),
+            archive_status: Some(status),
+            ipfs_status: Some(ipfs_status),
             archive_error_log: None,
             ipfs_error_log: None,
             archive_fatal_error: None,
@@ -338,21 +346,21 @@ mod validate_scope_for_retry_tests {
 
     #[test]
     fn archive_scope_conflicts_when_archive_in_progress() {
-        let meta = sample_meta("did:me", "in_progress", "full");
+        let meta = sample_meta("did:me", ArchiveStatus::InProgress, "full");
         let conflict = validate_scope_for_retry(&meta, StorageMode::Archive);
         assert!(conflict);
     }
 
     #[test]
     fn ipfs_scope_conflicts_when_ipfs_in_progress() {
-        let meta = sample_meta("did:me", "in_progress", "full");
+        let meta = sample_meta("did:me", ArchiveStatus::InProgress, "full");
         let conflict = validate_scope_for_retry(&meta, StorageMode::Ipfs);
         assert!(conflict);
     }
 
     #[test]
     fn full_scope_conflicts_when_either_in_progress() {
-        let meta = sample_meta("did:me", "in_progress", "full");
+        let meta = sample_meta("did:me", ArchiveStatus::InProgress, "full");
         let conflict = validate_scope_for_retry(&meta, StorageMode::Full);
         assert!(conflict);
     }

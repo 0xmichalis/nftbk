@@ -1,3 +1,4 @@
+use std::fmt;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
@@ -5,10 +6,105 @@ use serde::{Deserialize, Serialize};
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 use tracing::{info, warn};
 
+use crate::ipfs::PinResponseStatus;
 use crate::server::database::r#trait::Database;
 use crate::server::StorageMode;
 
 pub mod r#trait;
+
+/// Status of an archive request (backup archive stored on disk)
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ArchiveStatus {
+    InProgress,
+    Done,
+    Error,
+    Expired,
+}
+
+impl ArchiveStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ArchiveStatus::InProgress => "in_progress",
+            ArchiveStatus::Done => "done",
+            ArchiveStatus::Error => "error",
+            ArchiveStatus::Expired => "expired",
+        }
+    }
+}
+
+impl fmt::Display for ArchiveStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Status of an IPFS pin request
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum IpfsStatus {
+    InProgress,
+    Done,
+    Error,
+}
+
+impl IpfsStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IpfsStatus::InProgress => "in_progress",
+            IpfsStatus::Done => "done",
+            IpfsStatus::Error => "error",
+        }
+    }
+}
+
+impl fmt::Display for IpfsStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Parse an optional status string from the database into an enum variant.
+fn parse_archive_status(s: Option<String>) -> Option<ArchiveStatus> {
+    s.as_deref().and_then(|s| match s {
+        "in_progress" => Some(ArchiveStatus::InProgress),
+        "done" => Some(ArchiveStatus::Done),
+        "error" => Some(ArchiveStatus::Error),
+        "expired" => Some(ArchiveStatus::Expired),
+        _ => {
+            warn!("Unknown archive status string: {s}");
+            None
+        }
+    })
+}
+
+/// Parse an optional IPFS status string from the database into an enum variant.
+fn parse_ipfs_status(s: Option<String>) -> Option<IpfsStatus> {
+    s.as_deref().and_then(|s| match s {
+        "in_progress" => Some(IpfsStatus::InProgress),
+        "done" => Some(IpfsStatus::Done),
+        "error" => Some(IpfsStatus::Error),
+        _ => {
+            warn!("Unknown IPFS status string: {s}");
+            None
+        }
+    })
+}
+
+/// Parse a pin status string from the database into a PinResponseStatus.
+fn parse_pin_status(s: String) -> PinResponseStatus {
+    match s.as_str() {
+        "queued" => PinResponseStatus::Queued,
+        "pinning" => PinResponseStatus::Pinning,
+        "pinned" => PinResponseStatus::Pinned,
+        "failed" => PinResponseStatus::Failed,
+        other => {
+            warn!("Unknown pin status string: {other}");
+            // Default to a safe fallback
+            PinResponseStatus::Failed
+        }
+    }
+}
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct BackupTask {
@@ -18,8 +114,8 @@ pub struct BackupTask {
     pub requestor: String,
     pub nft_count: i32,
     pub tokens: serde_json::Value,
-    pub archive_status: Option<String>,
-    pub ipfs_status: Option<String>,
+    pub archive_status: Option<ArchiveStatus>,
+    pub ipfs_status: Option<IpfsStatus>,
     pub archive_error_log: Option<String>,
     pub ipfs_error_log: Option<String>,
     pub archive_fatal_error: Option<String>,
@@ -75,7 +171,7 @@ pub struct PinRow {
     pub provider_url: Option<String>,
     pub cid: String,
     pub request_id: String,
-    pub pin_status: String,
+    pub pin_status: PinResponseStatus,
     pub created_at: DateTime<Utc>,
 }
 
@@ -345,7 +441,7 @@ impl Db {
     pub async fn update_pin_request_status(
         &self,
         task_id: &str,
-        status: &str,
+        status: &IpfsStatus,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
@@ -355,11 +451,11 @@ impl Db {
             "#,
         )
         .bind(task_id)
-        .bind(status)
+        .bind(status.as_str())
         .execute(&self.pool)
         .await?;
 
-        Self::log_status(task_id, status, &StorageMode::Ipfs);
+        Self::log_status(task_id, status.as_str(), &StorageMode::Ipfs);
 
         Ok(())
     }
@@ -367,7 +463,7 @@ impl Db {
     pub async fn update_archive_request_status(
         &self,
         task_id: &str,
-        status: &str,
+        status: &ArchiveStatus,
     ) -> Result<(), sqlx::Error> {
         sqlx::query(
             r#"
@@ -377,11 +473,11 @@ impl Db {
             "#,
         )
         .bind(task_id)
-        .bind(status)
+        .bind(status.as_str())
         .execute(&self.pool)
         .await?;
 
-        Self::log_status(task_id, status, &StorageMode::Archive);
+        Self::log_status(task_id, status.as_str(), &StorageMode::Archive);
 
         Ok(())
     }
@@ -389,7 +485,7 @@ impl Db {
     pub async fn update_archive_request_statuses(
         &self,
         task_ids: &[String],
-        status: &str,
+        status: &ArchiveStatus,
     ) -> Result<(), sqlx::Error> {
         if task_ids.is_empty() {
             return Ok(());
@@ -401,7 +497,7 @@ impl Db {
         // Update each task_id individually with a prepared statement
         for task_id in task_ids {
             sqlx::query("UPDATE archive_requests SET status = $1 WHERE task_id = $2")
-                .bind(status)
+                .bind(status.as_str())
                 .bind(task_id)
                 .execute(&mut *tx)
                 .await?;
@@ -695,14 +791,16 @@ impl Db {
                 requestor: row.get("requestor"),
                 nft_count: row.get("nft_count"),
                 tokens: tokens_json,
-                archive_status: row
-                    .try_get::<Option<String>, _>("archive_status")
-                    .ok()
-                    .flatten(),
-                ipfs_status: row
-                    .try_get::<Option<String>, _>("ipfs_status")
-                    .ok()
-                    .flatten(),
+                archive_status: parse_archive_status(
+                    row.try_get::<Option<String>, _>("archive_status")
+                        .ok()
+                        .flatten(),
+                ),
+                ipfs_status: parse_ipfs_status(
+                    row.try_get::<Option<String>, _>("ipfs_status")
+                        .ok()
+                        .flatten(),
+                ),
                 archive_error_log: row.get("archive_error_log"),
                 ipfs_error_log: row.get("ipfs_error_log"),
                 archive_fatal_error: row.get("fatal_error"),
@@ -800,14 +898,16 @@ impl Db {
             requestor: row.get("requestor"),
             nft_count: row.get("nft_count"),
             tokens: tokens_json,
-            archive_status: row
-                .try_get::<Option<String>, _>("archive_status")
-                .ok()
-                .flatten(),
-            ipfs_status: row
-                .try_get::<Option<String>, _>("ipfs_status")
-                .ok()
-                .flatten(),
+            archive_status: parse_archive_status(
+                row.try_get::<Option<String>, _>("archive_status")
+                    .ok()
+                    .flatten(),
+            ),
+            ipfs_status: parse_ipfs_status(
+                row.try_get::<Option<String>, _>("ipfs_status")
+                    .ok()
+                    .flatten(),
+            ),
             archive_error_log: row.get("archive_error_log"),
             ipfs_error_log: row.get("ipfs_error_log"),
             archive_fatal_error: row.get("fatal_error"),
@@ -879,14 +979,16 @@ impl Db {
                     // Client should use get_backup_task to get tokens so the tokens
                     // can be properly paginated.
                     tokens: serde_json::Value::Null,
-                    archive_status: row
-                        .try_get::<Option<String>, _>("archive_status")
-                        .ok()
-                        .flatten(),
-                    ipfs_status: row
-                        .try_get::<Option<String>, _>("ipfs_status")
-                        .ok()
-                        .flatten(),
+                    archive_status: parse_archive_status(
+                        row.try_get::<Option<String>, _>("archive_status")
+                            .ok()
+                            .flatten(),
+                    ),
+                    ipfs_status: parse_ipfs_status(
+                        row.try_get::<Option<String>, _>("ipfs_status")
+                            .ok()
+                            .flatten(),
+                    ),
                     archive_error_log: row.get("archive_error_log"),
                     ipfs_error_log: row.get("ipfs_error_log"),
                     archive_fatal_error: row.get("fatal_error"),
@@ -1022,14 +1124,16 @@ impl Db {
                     requestor: row.get("requestor"),
                     nft_count: row.get("nft_count"),
                     tokens: tokens_json,
-                    archive_status: row
-                        .try_get::<Option<String>, _>("archive_status")
-                        .ok()
-                        .flatten(),
-                    ipfs_status: row
-                        .try_get::<Option<String>, _>("ipfs_status")
-                        .ok()
-                        .flatten(),
+                    archive_status: parse_archive_status(
+                        row.try_get::<Option<String>, _>("archive_status")
+                            .ok()
+                            .flatten(),
+                    ),
+                    ipfs_status: parse_ipfs_status(
+                        row.try_get::<Option<String>, _>("ipfs_status")
+                            .ok()
+                            .flatten(),
+                    ),
                     archive_error_log: row.get("archive_error_log"),
                     ipfs_error_log: row.get("ipfs_error_log"),
                     archive_fatal_error: row.get("fatal_error"),
@@ -1162,7 +1266,7 @@ impl Db {
                     .flatten(),
                 cid: row.get("cid"),
                 request_id: row.get("request_id"),
-                pin_status: row.get("pin_status"),
+                pin_status: parse_pin_status(row.get("pin_status")),
                 created_at: row.get("created_at"),
             })
             .collect())
@@ -1371,7 +1475,7 @@ impl Db {
                     .flatten(),
                 cid: row.get("cid"),
                 request_id: row.get("request_id"),
-                pin_status: row.get("pin_status"),
+                pin_status: parse_pin_status(row.get("pin_status")),
                 created_at: row.get("created_at"),
             })
             .collect())
@@ -1428,8 +1532,8 @@ impl Db {
         &self,
         task_id: &str,
         scope: &str,
-        archive_status: &str,
-        ipfs_status: &str,
+        archive_status: &ArchiveStatus,
+        ipfs_status: &IpfsStatus,
     ) -> Result<(), sqlx::Error> {
         let sql = r#"
             WITH upd_archive AS (
@@ -1451,8 +1555,8 @@ impl Db {
         "#;
         sqlx::query(sql)
             .bind(task_id)
-            .bind(archive_status)
-            .bind(ipfs_status)
+            .bind(archive_status.as_str())
+            .bind(ipfs_status.as_str())
             .bind(scope)
             .execute(&self.pool)
             .await?;
@@ -1719,7 +1823,7 @@ impl Database for Db {
     async fn update_archive_request_status(
         &self,
         task_id: &str,
-        status: &str,
+        status: &ArchiveStatus,
     ) -> Result<(), sqlx::Error> {
         Db::update_archive_request_status(self, task_id, status).await
     }
@@ -1727,7 +1831,7 @@ impl Database for Db {
     async fn update_pin_request_status(
         &self,
         task_id: &str,
-        status: &str,
+        status: &IpfsStatus,
     ) -> Result<(), sqlx::Error> {
         Db::update_pin_request_status(self, task_id, status).await
     }
@@ -1736,8 +1840,8 @@ impl Database for Db {
         &self,
         task_id: &str,
         scope: &str,
-        archive_status: &str,
-        ipfs_status: &str,
+        archive_status: &ArchiveStatus,
+        ipfs_status: &IpfsStatus,
     ) -> Result<(), sqlx::Error> {
         Db::update_backup_statuses(self, task_id, scope, archive_status, ipfs_status).await
     }
@@ -1745,7 +1849,7 @@ impl Database for Db {
     async fn update_archive_request_statuses(
         &self,
         task_ids: &[String],
-        status: &str,
+        status: &ArchiveStatus,
     ) -> Result<(), sqlx::Error> {
         Db::update_archive_request_statuses(self, task_ids, status).await
     }

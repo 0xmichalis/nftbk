@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde_json;
 use sqlx;
 
-use crate::server::database::{BackupTask, ExpiredBackup, PinRow, TokenWithPins};
+use crate::server::database::{ArchiveStatus, BackupTask, ExpiredBackup, IpfsStatus, PinRow, TokenWithPins};
 use crate::types::TokenPinMapping;
 
 /// Unified database trait that consolidates all database operations
@@ -84,27 +84,27 @@ pub trait Database {
     async fn update_archive_request_status(
         &self,
         task_id: &str,
-        status: &str,
+        status: &ArchiveStatus,
     ) -> Result<(), sqlx::Error>;
 
     async fn update_pin_request_status(
         &self,
         task_id: &str,
-        status: &str,
+        status: &IpfsStatus,
     ) -> Result<(), sqlx::Error>;
 
     async fn update_backup_statuses(
         &self,
         task_id: &str,
         scope: &str,
-        archive_status: &str,
-        ipfs_status: &str,
+        archive_status: &ArchiveStatus,
+        ipfs_status: &IpfsStatus,
     ) -> Result<(), sqlx::Error>;
 
     async fn update_archive_request_statuses(
         &self,
         task_ids: &[String],
-        status: &str,
+        status: &ArchiveStatus,
     ) -> Result<(), sqlx::Error>;
 
     // Upgrade operations
@@ -598,7 +598,7 @@ impl Database for MockDatabase {
     async fn update_archive_request_status(
         &self,
         _task_id: &str,
-        _status: &str,
+        _status: &ArchiveStatus,
     ) -> Result<(), sqlx::Error> {
         if let Some(error) = &self.update_archive_request_status_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
@@ -610,7 +610,7 @@ impl Database for MockDatabase {
     async fn update_pin_request_status(
         &self,
         _task_id: &str,
-        _status: &str,
+        _status: &IpfsStatus,
     ) -> Result<(), sqlx::Error> {
         if let Some(error) = &self.update_pin_request_status_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
@@ -623,8 +623,8 @@ impl Database for MockDatabase {
         &self,
         _task_id: &str,
         _scope: &str,
-        _archive_status: &str,
-        _ipfs_status: &str,
+        _archive_status: &ArchiveStatus,
+        _ipfs_status: &IpfsStatus,
     ) -> Result<(), sqlx::Error> {
         if let Some(error) = &self.update_backup_statuses_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
@@ -636,7 +636,7 @@ impl Database for MockDatabase {
     async fn update_archive_request_statuses(
         &self,
         _task_ids: &[String],
-        _status: &str,
+        _status: &ArchiveStatus,
     ) -> Result<(), sqlx::Error> {
         if let Some(error) = &self.update_archive_request_statuses_error {
             Err(sqlx::Error::Configuration(error.clone().into()))

@@ -152,6 +152,7 @@ async fn handle_backups_core<DB: Database + ?Sized>(
 mod handle_backups_core_mockdb_tests {
     use super::handle_backups_core;
     use crate::server::database::r#trait::MockDatabase;
+    use crate::server::database::ArchiveStatus;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
@@ -182,7 +183,7 @@ mod handle_backups_core_mockdb_tests {
                 requestor: "did:privy:alice".to_string(),
                 nft_count: 1,
                 tokens: serde_json::json!([]),
-                archive_status: Some("done".to_string()),
+                archive_status: Some(ArchiveStatus::Done),
                 ipfs_status: None,
                 archive_error_log: None,
                 ipfs_error_log: None,

@@ -186,6 +186,7 @@ mod handle_status_core_tests {
     use super::handle_backup_core as handle_status_core;
     use crate::server::api::BackupResponse;
     use crate::server::database::r#trait::MockDatabase;
+    use crate::server::database::ArchiveStatus;
     use crate::server::database::BackupTask;
     use crate::server::handlers::verify_requestor_owns_task;
     use axum::http::StatusCode as AxumStatusCode;
@@ -199,7 +200,7 @@ mod handle_status_core_tests {
             requestor: "did:privy:alice".to_string(),
             nft_count: 1,
             tokens: serde_json::json!([["0xabc:1"]]),
-            archive_status: Some("done".to_string()),
+            archive_status: Some(ArchiveStatus::Done),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,

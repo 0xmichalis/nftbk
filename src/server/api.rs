@@ -131,7 +131,10 @@ impl BackupResponse {
         limit: u32,
     ) -> Self {
         let archive_status = SubresourceStatus {
-            status: task.archive_status.clone(),
+            status: task
+                .archive_status
+                .as_ref()
+                .map(|s: &crate::server::database::ArchiveStatus| s.as_str().to_string()),
             fatal_error: task.archive_fatal_error.clone(),
             error_log: task.archive_error_log.clone(),
             deleted_at: task
@@ -140,7 +143,10 @@ impl BackupResponse {
                 .map(|d: &DateTime<Utc>| d.to_rfc3339()),
         };
         let pins_status = SubresourceStatus {
-            status: task.ipfs_status.clone(),
+            status: task
+                .ipfs_status
+                .as_ref()
+                .map(|s: &crate::server::database::IpfsStatus| s.as_str().to_string()),
             fatal_error: task.ipfs_fatal_error.clone(),
             error_log: task.ipfs_error_log.clone(),
             deleted_at: task
@@ -179,7 +185,7 @@ impl BackupResponse {
 #[cfg(test)]
 mod from_backup_task_tests {
     use super::{BackupResponse, Tokens};
-    use crate::server::database::BackupTask;
+    use crate::server::database::{ArchiveStatus, BackupTask, IpfsStatus};
     use chrono::{TimeZone, Utc};
 
     fn sample_task() -> BackupTask {
@@ -190,8 +196,8 @@ mod from_backup_task_tests {
             requestor: "did:privy:alice".to_string(),
             nft_count: 3,
             tokens: serde_json::json!([]),
-            archive_status: Some("done".to_string()),
-            ipfs_status: Some("in_progress".to_string()),
+            archive_status: Some(ArchiveStatus::Done),
+            ipfs_status: Some(IpfsStatus::InProgress),
             archive_error_log: Some("arch warnings".to_string()),
             ipfs_error_log: None,
             archive_fatal_error: None,

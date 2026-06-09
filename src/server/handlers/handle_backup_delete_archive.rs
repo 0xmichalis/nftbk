@@ -7,6 +7,7 @@ use tracing::{error, info};
 
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::database::r#trait::Database;
+use crate::server::database::ArchiveStatus;
 use crate::server::handlers::verify_requestor_owns_task;
 use crate::server::AppState;
 
@@ -71,7 +72,7 @@ async fn handle_backup_delete_archive_core<DB: Database + ?Sized>(
     }
 
     // Check if task is in progress
-    if matches!(meta.archive_status.as_deref(), Some("in_progress")) {
+    if matches!(meta.archive_status, Some(ArchiveStatus::InProgress)) {
         let problem = ProblemJson::from_status(
             StatusCode::CONFLICT,
             Some("Can only delete completed tasks".to_string()),
@@ -109,12 +110,13 @@ async fn handle_backup_delete_archive_core<DB: Database + ?Sized>(
 mod handle_backup_delete_archive_core_tests {
     use super::handle_backup_delete_archive_core;
     use crate::server::database::r#trait::MockDatabase;
+    use crate::server::database::ArchiveStatus;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
 
     fn sample_meta(
         owner: &str,
-        status: &str,
+        status: ArchiveStatus,
         storage_mode: &str,
     ) -> crate::server::database::BackupTask {
         use chrono::{TimeZone, Utc};
@@ -125,7 +127,7 @@ mod handle_backup_delete_archive_core_tests {
             requestor: owner.to_string(),
             nft_count: 1,
             tokens: serde_json::json!([{"chain":"ethereum","tokens":["0xabc:1"]}]),
-            archive_status: Some(status.to_string()),
+            archive_status: Some(status),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
@@ -142,7 +144,7 @@ mod handle_backup_delete_archive_core_tests {
     #[tokio::test]
     async fn returns_401_when_missing_requestor() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", "done", "archive")));
+        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::Done, "archive")));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_archive_core(&db, &tx, "t1", None)
             .await
@@ -176,7 +178,7 @@ mod handle_backup_delete_archive_core_tests {
     async fn returns_403_on_owner_mismatch() {
         // owner mismatch should return 403
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:other", "done", "archive")));
+        db.set_get_backup_task_result(Some(sample_meta("did:other", ArchiveStatus::Done, "archive")));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -187,7 +189,7 @@ mod handle_backup_delete_archive_core_tests {
     #[tokio::test]
     async fn returns_409_when_in_progress() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", "in_progress", "archive")));
+        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::InProgress, "archive")));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -198,7 +200,7 @@ mod handle_backup_delete_archive_core_tests {
     #[tokio::test]
     async fn returns_422_when_ipfs_only() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", "done", "ipfs")));
+        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::Done, "ipfs")));
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -209,7 +211,7 @@ mod handle_backup_delete_archive_core_tests {
     #[tokio::test]
     async fn deletes_archive_task_on_success() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", "done", "archive")));
+        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::Done, "archive")));
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await
@@ -224,7 +226,7 @@ mod handle_backup_delete_archive_core_tests {
     #[tokio::test]
     async fn updates_storage_mode_for_full_task() {
         let mut db = MockDatabase::default();
-        db.set_get_backup_task_result(Some(sample_meta("did:me", "done", "full")));
+        db.set_get_backup_task_result(Some(sample_meta("did:me", ArchiveStatus::Done, "full")));
         let (tx, mut rx) = tokio::sync::mpsc::channel(1);
         let resp = handle_backup_delete_archive_core(&db, &tx, "t1", Some("did:me".to_string()))
             .await

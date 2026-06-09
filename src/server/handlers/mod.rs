@@ -73,6 +73,7 @@ pub async fn verify_requestor_owns_task<DB: Database + ?Sized>(
 mod verify_owns_task_tests {
     use super::verify_requestor_owns_task;
     use crate::server::database::r#trait::MockDatabase;
+    use crate::server::database::ArchiveStatus;
     use crate::server::database::BackupTask;
     use axum::http::StatusCode;
     use chrono::{TimeZone, Utc};
@@ -85,7 +86,7 @@ mod verify_owns_task_tests {
             requestor: req.to_string(),
             nft_count: 1,
             tokens: serde_json::json!([]),
-            archive_status: Some("done".to_string()),
+            archive_status: Some(ArchiveStatus::Done),
             ipfs_status: None,
             archive_error_log: None,
             ipfs_error_log: None,
