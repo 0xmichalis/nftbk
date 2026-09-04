@@ -21,7 +21,9 @@ pub struct IpfsGatewayConfig {
 impl IpfsGatewayConfig {
     pub fn resolve_bearer_token(&self) -> Option<String> {
         let env_name = self.bearer_token_env?;
-        std::env::var(env_name).ok()
+        std::env::var(env_name)
+            .ok()
+            .filter(|token| !token.trim().is_empty())
     }
 }
 
@@ -44,6 +46,17 @@ pub const IPFS_GATEWAYS: &[IpfsGatewayConfig] = &[
         bearer_token_env: Some("PINATA_GATEWAY_TOKEN"),
     },
 ];
+
+/// Order gateways so that those with a resolvable bearer token are tried first.
+/// Authenticated gateways are far less likely to rate-limit or block requests
+/// than public ones, so they make the best primary choice.
+pub fn prioritize_authenticated(gateways: &[IpfsGatewayConfig]) -> Vec<IpfsGatewayConfig> {
+    let (authenticated, public): (Vec<_>, Vec<_>) = gateways
+        .iter()
+        .cloned()
+        .partition(|gw| gw.resolve_bearer_token().is_some());
+    authenticated.into_iter().chain(public).collect()
+}
 
 /// Configuration for a single IPFS pinning provider
 #[derive(Clone, Debug, Deserialize)]
@@ -114,5 +127,55 @@ impl IpfsPinningConfig {
             })?;
             Ok(Some(token))
         }
+    }
+}
+
+#[cfg(test)]
+mod prioritize_authenticated_tests {
+    use super::*;
+
+    const PATH: IpfsGatewayType = IpfsGatewayType::Path;
+
+    fn gw(url: &'static str, bearer_token_env: Option<&'static str>) -> IpfsGatewayConfig {
+        IpfsGatewayConfig {
+            url,
+            gateway_type: PATH,
+            bearer_token_env,
+        }
+    }
+
+    #[test]
+    fn authenticated_gateways_come_first_preserving_relative_order() {
+        std::env::set_var("NFTBK_TEST_GW_TOKEN_A", "tok");
+        let gateways = [
+            gw("https://a", None),
+            gw("https://b", Some("NFTBK_TEST_GW_TOKEN_A")),
+            gw("https://c", None),
+        ];
+        let ordered: Vec<&str> = prioritize_authenticated(&gateways)
+            .iter()
+            .map(|g| g.url)
+            .collect();
+        assert_eq!(ordered, vec!["https://b", "https://a", "https://c"]);
+    }
+
+    #[test]
+    fn blank_token_is_treated_as_absent() {
+        std::env::set_var("NFTBK_TEST_GW_TOKEN_BLANK", "  ");
+        let gateway = gw("https://a", Some("NFTBK_TEST_GW_TOKEN_BLANK"));
+        assert_eq!(gateway.resolve_bearer_token(), None);
+    }
+
+    #[test]
+    fn unresolvable_token_env_does_not_promote_gateway() {
+        let gateways = [
+            gw("https://a", None),
+            gw("https://b", Some("NFTBK_TEST_GW_TOKEN_UNSET")),
+        ];
+        let ordered: Vec<&str> = prioritize_authenticated(&gateways)
+            .iter()
+            .map(|g| g.url)
+            .collect();
+        assert_eq!(ordered, vec!["https://a", "https://b"]);
     }
 }

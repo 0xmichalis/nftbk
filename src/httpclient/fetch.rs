@@ -35,6 +35,15 @@ pub(crate) async fn head_url(
     send_request(Method::HEAD, url, bearer_token).await
 }
 
+/// Bearer token of the gateway that `url` points at, if it is one of the
+/// configured gateways and has a resolvable token.
+fn bearer_token_for(url: &str, gateways: &[IpfsGatewayConfig]) -> Option<String> {
+    generate_url_for_gateways(url, gateways)?
+        .into_iter()
+        .find(|gw| gw.url == url)
+        .and_then(|gw| gw.bearer_token)
+}
+
 pub(crate) fn create_http_error(status: reqwest::StatusCode, url: &str) -> anyhow::Error {
     anyhow::anyhow!("HTTP error: status {status} from {url}")
 }
@@ -46,7 +55,7 @@ pub(crate) async fn try_fetch_response(
     anyhow::Result<reqwest::Response>,
     Option<reqwest::StatusCode>,
 ) {
-    match fetch_url(url, None).await {
+    match fetch_url(url, bearer_token_for(url, gateways)).await {
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
@@ -155,7 +164,7 @@ async fn try_get_content_length(
         "HEAD denied for {}; falling back to GET for size estimation",
         url
     );
-    match fetch_url(url, None).await {
+    match fetch_url(url, bearer_token_for(url, gateways)).await {
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
@@ -238,7 +247,7 @@ pub(crate) async fn try_head_content_length(
     url: &str,
     gateways: &[IpfsGatewayConfig],
 ) -> (anyhow::Result<u64>, Option<reqwest::StatusCode>) {
-    match head_url(url, None).await {
+    match head_url(url, bearer_token_for(url, gateways)).await {
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
@@ -395,6 +404,28 @@ mod try_fetch_response_tests {
             gateway_type: IpfsGatewayType::Path,
             bearer_token_env: None,
         }
+    }
+
+    #[tokio::test]
+    async fn primary_gateway_request_carries_its_bearer_token() {
+        std::env::set_var("NFTBK_TEST_PRIMARY_GW_TOKEN", "secret");
+        let mock_server = MockServer::start().await;
+        let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
+        let url = format!("{}/ipfs/{}", mock_server.uri(), cid);
+
+        Mock::given(method("GET"))
+            .and(path(format!("/ipfs/{}", cid)))
+            .and(wiremock::matchers::header("authorization", "Bearer secret"))
+            .respond_with(ResponseTemplate::new(200))
+            .mount(&mock_server)
+            .await;
+
+        let mut primary = gw(&mock_server.uri());
+        primary.bearer_token_env = Some("NFTBK_TEST_PRIMARY_GW_TOKEN");
+
+        let (res, status) = super::try_fetch_response(&url, &[primary]).await;
+        assert_eq!(status, Some(reqwest::StatusCode::OK));
+        assert!(res.is_ok());
     }
 
     #[tokio::test]
