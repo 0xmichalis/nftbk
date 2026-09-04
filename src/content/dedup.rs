@@ -12,9 +12,20 @@ use tokio::io::AsyncReadExt;
 
 const COMPARE_CHUNK_SIZE: usize = 64 * 1024;
 
+/// If a regular file in the same directory as `path` has identical content,
+/// replace `path` with a hard link to it and return that file. The content is
+/// then stored once but stays addressable under both names.
+pub(crate) async fn hard_link_to_identical_sibling(path: &Path) -> anyhow::Result<Option<PathBuf>> {
+    let Some(original) = find_identical_sibling(path).await? else {
+        return Ok(None);
+    };
+    replace_with_hard_link(path, &original).await?;
+    Ok(Some(original))
+}
+
 /// Find a regular file in the same directory as `path` with identical content.
 /// `path` itself and directories are ignored; candidates are pre-filtered by size.
-pub(crate) async fn find_identical_sibling(path: &Path) -> anyhow::Result<Option<PathBuf>> {
+async fn find_identical_sibling(path: &Path) -> anyhow::Result<Option<PathBuf>> {
     let Some(parent) = path.parent() else {
         return Ok(None);
     };
@@ -54,18 +65,27 @@ async fn files_identical(a: &Path, b: &Path) -> anyhow::Result<bool> {
     }
 }
 
-/// Replace `duplicate` with a hard link to `original`, so the content is
-/// stored once but stays addressable under both names. The link is created
+/// Replace `duplicate` with a hard link to `original`. The link is created
 /// under a temporary name and renamed into place, so `duplicate` is never
-/// missing if the link cannot be created.
-pub(crate) async fn replace_with_hard_link(
-    duplicate: &Path,
-    original: &Path,
-) -> anyhow::Result<()> {
+/// missing if the link cannot be created. A temporary file left behind by an
+/// earlier failure is removed first, and one produced by this call is removed
+/// if the rename fails.
+async fn replace_with_hard_link(duplicate: &Path, original: &Path) -> anyhow::Result<()> {
     let tmp = duplicate.with_extension("nftbk-link.tmp");
+    remove_if_exists(&tmp).await?;
     fs::hard_link(original, &tmp).await?;
-    fs::rename(&tmp, duplicate).await?;
+    if let Err(e) = fs::rename(&tmp, duplicate).await {
+        remove_if_exists(&tmp).await?;
+        return Err(e.into());
+    }
     Ok(())
+}
+
+async fn remove_if_exists(path: &Path) -> std::io::Result<()> {
+    match fs::remove_file(path).await {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
+    }
 }
 
 #[cfg(test)]
@@ -124,7 +144,7 @@ mod find_identical_sibling_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod replace_with_hard_link_tests {
     use super::*;
     use std::os::unix::fs::MetadataExt;
@@ -145,5 +165,25 @@ mod replace_with_hard_link_tests {
         assert_eq!(original_meta.ino(), duplicate_meta.ino());
         assert_eq!(original_meta.nlink(), 2);
         assert_eq!(fs::read(&duplicate).await.unwrap(), b"bytes");
+    }
+
+    #[tokio::test]
+    async fn removes_temp_file_left_by_an_earlier_failure() {
+        let dir = TempDir::new().unwrap();
+        let original = dir.path().join("original.jpg");
+        let duplicate = dir.path().join("image.jpg");
+        fs::write(&original, b"bytes").await.unwrap();
+        fs::write(&duplicate, b"bytes").await.unwrap();
+        fs::write(dir.path().join("image.nftbk-link.tmp"), b"stale")
+            .await
+            .unwrap();
+
+        replace_with_hard_link(&duplicate, &original).await.unwrap();
+
+        assert!(!dir.path().join("image.nftbk-link.tmp").exists());
+        assert_eq!(
+            fs::metadata(&duplicate).await.unwrap().ino(),
+            fs::metadata(&original).await.unwrap().ino()
+        );
     }
 }
