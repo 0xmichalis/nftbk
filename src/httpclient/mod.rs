@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use tracing::info;
 
+use crate::content::dedup::{find_identical_sibling, replace_with_hard_link};
 use crate::content::get_filename;
 use crate::content::{extensions, try_exists, write_and_postprocess_file, Options};
 use crate::httpclient::fetch::{try_fetch_response, try_head_content_length};
@@ -160,6 +161,18 @@ impl HttpClient {
             .fetch_and_stream_to_file(&resolved_url, &file_path, self.max_retries)
             .await?;
 
+        // The same content may already be on disk under a name derived from an
+        // earlier URL. Keep a single copy and expose it under both names.
+        if let Some(original) = find_identical_sibling(&file_path).await? {
+            replace_with_hard_link(&file_path, &original).await?;
+            info!(
+                "Saved {} as a hard link to identical {}",
+                file_path.display(),
+                original.display()
+            );
+            return Ok(file_path);
+        }
+
         write_and_postprocess_file(&file_path, &[], url).await?;
         if url == resolved_url {
             info!("Saved {} (url: {})", file_path.display(), url);
@@ -225,6 +238,98 @@ async fn fetch_and_stream_to_file(
 impl Default for HttpClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod fetch_and_write_tests {
+    use super::*;
+    use crate::chain::common::ContractTokenId;
+    use std::os::unix::fs::MetadataExt;
+    use tempfile::TempDir;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    const PNG_1X1: &[u8] = &[
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1F,
+        0x15, 0xC4, 0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41, 0x54, 0x78, 0xDA, 0x63, 0x64,
+        0x60, 0xF8, 0x5F, 0x0F, 0x00, 0x02, 0x87, 0x01, 0x80, 0xEB, 0x47, 0xBA, 0x92, 0x00, 0x00,
+        0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+
+    fn token() -> ContractTokenId {
+        ContractTokenId {
+            address: "0xabc".to_string(),
+            token_id: "1".to_string(),
+            chain_name: "ethereum".to_string(),
+        }
+    }
+
+    fn image_options() -> Options {
+        Options {
+            overriden_filename: None,
+            fallback_filename: Some("image".to_string()),
+        }
+    }
+
+    #[tokio::test]
+    async fn hard_links_download_identical_to_existing_file_under_another_name() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/thumbnails/1667336455"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(PNG_1X1))
+            .mount(&server)
+            .await;
+        let out = TempDir::new().unwrap();
+        let token_dir = out.path().join("ethereum").join("0xabc").join("1");
+        tokio::fs::create_dir_all(&token_dir).await.unwrap();
+        let existing = token_dir.join("old-name.png");
+        tokio::fs::write(&existing, PNG_1X1).await.unwrap();
+
+        // The URL has no path segment, so the file is named after the fallback.
+        let url = format!("{}/thumbnails/1667336455", server.uri());
+        let saved = HttpClient::new()
+            .fetch_and_write(&url, &token(), out.path(), image_options())
+            .await
+            .unwrap();
+
+        assert_ne!(saved, existing);
+        let saved_meta = tokio::fs::metadata(&saved).await.unwrap();
+        let existing_meta = tokio::fs::metadata(&existing).await.unwrap();
+        assert_eq!(
+            saved_meta.ino(),
+            existing_meta.ino(),
+            "expected a hard link"
+        );
+        assert_eq!(tokio::fs::read(&saved).await.unwrap(), PNG_1X1);
+    }
+
+    #[tokio::test]
+    async fn keeps_download_when_no_identical_file_exists() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/thumbnails/1667336455"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(PNG_1X1))
+            .mount(&server)
+            .await;
+        let out = TempDir::new().unwrap();
+        let token_dir = out.path().join("ethereum").join("0xabc").join("1");
+        tokio::fs::create_dir_all(&token_dir).await.unwrap();
+        tokio::fs::write(token_dir.join("other.png"), b"different")
+            .await
+            .unwrap();
+
+        let url = format!("{}/thumbnails/1667336455", server.uri());
+        let saved = HttpClient::new()
+            .fetch_and_write(&url, &token(), out.path(), image_options())
+            .await
+            .unwrap();
+
+        assert_eq!(tokio::fs::metadata(&saved).await.unwrap().nlink(), 1);
+        assert_eq!(tokio::fs::read(&saved).await.unwrap(), PNG_1X1);
     }
 }
 
