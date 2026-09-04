@@ -1,1 +1,1 @@
-.cursor/rules/general.mdc
+CLAUDE.md
