@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use tracing::info;
 
-use crate::content::dedup::{find_identical_sibling, replace_with_hard_link};
+use crate::content::dedup::hard_link_to_identical_sibling;
 use crate::content::get_filename;
 use crate::content::{extensions, try_exists, write_and_postprocess_file, Options};
 use crate::httpclient::fetch::{try_fetch_response, try_head_content_length};
@@ -162,15 +162,23 @@ impl HttpClient {
             .await?;
 
         // The same content may already be on disk under a name derived from an
-        // earlier URL. Keep a single copy and expose it under both names.
-        if let Some(original) = find_identical_sibling(&file_path).await? {
-            replace_with_hard_link(&file_path, &original).await?;
-            info!(
-                "Saved {} as a hard link to identical {}",
+        // earlier URL. Keep a single copy and expose it under both names. This is
+        // best effort: the download succeeded, so a failure here must not fail it.
+        match hard_link_to_identical_sibling(&file_path).await {
+            Ok(Some(original)) => {
+                info!(
+                    "Saved {} as a hard link to identical {}",
+                    file_path.display(),
+                    original.display()
+                );
+                return Ok(file_path);
+            }
+            Ok(None) => {}
+            Err(e) => tracing::warn!(
+                "Could not deduplicate {}, keeping the downloaded file: {}",
                 file_path.display(),
-                original.display()
-            );
-            return Ok(file_path);
+                e
+            ),
         }
 
         write_and_postprocess_file(&file_path, &[], url).await?;
@@ -241,7 +249,7 @@ impl Default for HttpClient {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod fetch_and_write_tests {
     use super::*;
     use crate::chain::common::ContractTokenId;
@@ -289,7 +297,7 @@ mod fetch_and_write_tests {
         let existing = token_dir.join("old-name.png");
         tokio::fs::write(&existing, PNG_1X1).await.unwrap();
 
-        // The URL has no path segment, so the file is named after the fallback.
+        // Named after the URL's last segment, so it does not collide with old-name.png.
         let url = format!("{}/thumbnails/1667336455", server.uri());
         let saved = HttpClient::new()
             .fetch_and_write(&url, &token(), out.path(), image_options())
