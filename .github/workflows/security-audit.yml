@@ -1,0 +1,132 @@
+name: Security Audit
+
+# `cargo audit` on a schedule rather than in CI: advisories are published against
+# code that has not changed, so a vulnerability is news about the world, not about
+# the commit. Running it here keeps unrelated pull requests green while still
+# surfacing a finding within a day — as a GitHub issue rather than a red X on
+# somebody else's work.
+#
+# Exclusions live in `[advisories] ignore` in .cargo/audit.toml, which cargo audit
+# reads on its own, so an accepted risk is recorded in exactly one place.
+
+on:
+  schedule:
+    - cron: "17 6 * * *" # daily, 06:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# The rolling issue is shared mutable state: two runs interleaving list/create/
+# close would fight over it. Queue instead of cancelling, so a manual run cannot
+# discard the scheduled one's result.
+concurrency:
+  group: security-audit
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_AUDIT_VERSION: "0.22.0"
+  ISSUE_TITLE: "cargo audit: vulnerable dependencies"
+
+jobs:
+  audit:
+    name: Cargo Audit
+    runs-on: ubuntu-latest
+
+    steps:
+    # Always audit the default branch, never the dispatching ref. Auditing a
+    # feature branch and then closing the rolling issue would silently declare a
+    # vulnerable main clean.
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: ${{ github.event.repository.default_branch }}
+        persist-credentials: false
+
+    - name: Record audited commit
+      id: audited
+      run: echo "sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+
+    - name: Install Rust
+      run: |
+        rustup show active-toolchain || rustup toolchain install
+        rustup show
+
+    - name: Cache cargo-audit binary
+      id: cache-cargo-audit
+      uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+      with:
+        path: ${{ runner.tool_cache }}/cargo-audit
+        key: cargo-audit-bin-${{ env.CARGO_AUDIT_VERSION }}
+
+    - name: Add cargo-audit to PATH
+      run: echo "${{ runner.tool_cache }}/cargo-audit/bin" >> "$GITHUB_PATH"
+
+    - name: Install cargo-audit
+      if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
+      run: cargo install --root "${{ runner.tool_cache }}/cargo-audit" --version ${{ env.CARGO_AUDIT_VERSION }} --locked cargo-audit
+
+    # `if` rather than a bare command: steps run under `bash -e`, and a failing
+    # audit must not abort the step, or the reporting steps below get skipped.
+    - name: Run cargo audit
+      id: audit
+      run: |
+        set -uo pipefail
+        if cargo audit 2>&1 | tee audit.log; then
+          echo "exit_code=0" >> "$GITHUB_OUTPUT"
+        else
+          echo "exit_code=1" >> "$GITHUB_OUTPUT"
+        fi
+
+    # One rolling issue, reused across runs: a daily cron that opens a fresh issue
+    # every morning trains you to ignore it.
+    - name: Open or update issue on findings
+      if: steps.audit.outputs.exit_code != '0'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        AUDITED_SHA: ${{ steps.audited.outputs.sha }}
+      run: |
+        set -euo pipefail
+
+        {
+          echo "\`cargo audit\` found vulnerable dependencies on \`$AUDITED_SHA\` (default branch)."
+          echo
+          echo "\`\`\`"
+          cat audit.log
+          echo "\`\`\`"
+          echo
+          echo "[Workflow run]($RUN_URL)"
+          echo
+          echo "_Exclusions are configured in \`[advisories] ignore\` in .cargo/audit.toml._"
+        } > issue-body.md
+
+        EXISTING=$(gh issue list --state open --search "\"$ISSUE_TITLE\" in:title" \
+          --json number,title --jq "[.[] | select(.title == \"$ISSUE_TITLE\")][0].number // empty")
+
+        if [[ -n "$EXISTING" ]]; then
+          echo "Updating issue #$EXISTING"
+          gh issue edit "$EXISTING" --body-file issue-body.md
+          gh issue comment "$EXISTING" --body "Still failing as of $RUN_URL"
+        else
+          echo "Opening a new issue"
+          gh issue create --title "$ISSUE_TITLE" --body-file issue-body.md
+        fi
+
+    - name: Close the issue when clean
+      if: steps.audit.outputs.exit_code == '0'
+      env:
+        GH_TOKEN: ${{ github.token }}
+        AUDITED_SHA: ${{ steps.audited.outputs.sha }}
+      run: |
+        set -euo pipefail
+        EXISTING=$(gh issue list --state open --search "\"$ISSUE_TITLE\" in:title" \
+          --json number,title --jq "[.[] | select(.title == \"$ISSUE_TITLE\")][0].number // empty")
+        if [[ -n "$EXISTING" ]]; then
+          gh issue close "$EXISTING" --comment "No advisories reported by \`cargo audit\` on \`$AUDITED_SHA\` (default branch)."
+        fi
+
+    - name: Fail the run when advisories were found
+      if: steps.audit.outputs.exit_code != '0'
+      run: exit 1

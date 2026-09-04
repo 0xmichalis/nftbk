@@ -16,7 +16,6 @@ env:
   # bumping a version here is the only thing that triggers a reinstall.
   CARGO_SORT_VERSION: "2.0.1"
   SQLX_CLI_VERSION: "0.8.6"
-  CARGO_AUDIT_VERSION: "0.22.0"
   CARGO_TARPAULIN_VERSION: "0.33.0"
   CARGO_DENY_VERSION: "0.19.8"
   CARGO_VET_VERSION: "0.10.2"
@@ -139,37 +138,6 @@ jobs:
     - name: Check SQLx cache
       run: cargo sqlx prepare --check
 
-  audit:
-    name: Cargo Audit
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v4
-      with:
-        fetch-depth: 0
-
-    - name: Install Rust
-      run: |
-        rustup show active-toolchain || rustup toolchain install
-        rustup show
-
-    - name: Cache cargo-audit binary
-      id: cache-cargo-audit
-      uses: actions/cache@v4
-      with:
-        path: ${{ runner.tool_cache }}/cargo-audit
-        key: cargo-audit-bin-${{ env.CARGO_AUDIT_VERSION }}
-
-    - name: Add cargo-audit to PATH
-      run: echo "${{ runner.tool_cache }}/cargo-audit/bin" >> "$GITHUB_PATH"
-
-    - name: Install cargo-audit
-      if: steps.cache-cargo-audit.outputs.cache-hit != 'true'
-      run: cargo install --root "${{ runner.tool_cache }}/cargo-audit" --version ${{ env.CARGO_AUDIT_VERSION }} --locked cargo-audit
-
-    - name: Run cargo audit
-      run: cargo audit
-
   deny:
     name: Cargo Deny
     runs-on: ubuntu-latest
@@ -206,8 +174,9 @@ jobs:
       if: steps.cache-cargo-deny.outputs.cache-hit != 'true'
       run: cargo install --root "${{ runner.tool_cache }}/cargo-deny" --version ${{ env.CARGO_DENY_VERSION }} --locked cargo-deny
 
-    # Advisories are owned by the `audit` job (+ .cargo/audit.toml) to keep the
-    # RUSTSEC ignore list in one place; cargo-deny covers licenses/bans/sources.
+    # Advisories are owned by the scheduled security-audit.yml workflow
+    # (+ .cargo/audit.toml) to keep the RUSTSEC ignore list in one place;
+    # cargo-deny covers licenses/bans/sources.
     - name: Run cargo deny
       run: cargo deny check bans licenses sources
 
@@ -306,7 +275,7 @@ jobs:
   docker-publish:
     name: Build and Push Docker Image
     runs-on: ubuntu-latest
-    needs: [fmt, clippy, lint, sqlx, audit, deny, vet, test]
+    needs: [fmt, clippy, lint, sqlx, deny, vet, test]
     if: github.ref == 'refs/heads/main' # Only run on main branch
 
     permissions:

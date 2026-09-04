@@ -1,0 +1,172 @@
+name: Auto Tag on Version Bump
+
+# When the version in Cargo.toml changes on main, create and push a matching
+# `v<version>` tag, then run release.yml against it to build and publish the
+# Docker image.
+#
+# The release is dispatched explicitly rather than left to release.yml's
+# `on: push: tags` trigger. A tag pushed with the default GITHUB_TOKEN does not
+# start a new workflow run — GitHub suppresses it to avoid recursion — so the
+# push trigger never fires for tags created here. `workflow_dispatch` is one of
+# the two documented exceptions to that rule, so dispatching works.
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  actions: write # required to dispatch release.yml
+
+jobs:
+  auto-tag:
+    name: Detect version bumps and create tags
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Find changed Cargo.toml files
+        id: changed
+        run: |
+          set -euo pipefail
+
+          PREV_SHA="${{ github.event.before }}"
+          CURR_SHA="${{ github.sha }}"
+
+          echo "Comparing $PREV_SHA → $CURR_SHA"
+
+          CHANGED_TOMLS=$(git diff --name-only "$PREV_SHA" "$CURR_SHA" \
+            | grep -E '(^|/)Cargo\.toml$' || true)
+
+          if [[ -z "$CHANGED_TOMLS" ]]; then
+            echo "No Cargo.toml files changed. Nothing to do."
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "has_changes=true" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "tomls<<EOF"
+            echo "$CHANGED_TOMLS"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Detect version bumps
+        if: steps.changed.outputs.has_changes == 'true'
+        id: versions
+        run: |
+          set -euo pipefail
+
+          PREV_SHA="${{ github.event.before }}"
+          CURR_SHA="${{ github.sha }}"
+          TAGS_JSON="[]"
+
+          while IFS= read -r toml; do
+            echo "--- Checking $toml ---"
+
+            CURR_VERSION=$(git show "$CURR_SHA:$toml" \
+              | grep -m1 '^version\s*=' \
+              | sed -E 's/version\s*=\s*"([^"]+)".*/\1/')
+
+            PREV_VERSION=$(git show "$PREV_SHA:$toml" 2>/dev/null \
+              | grep -m1 '^version\s*=' \
+              | sed -E 's/version\s*=\s*"([^"]+)".*/\1/' || echo "")
+
+            echo "  prev=$PREV_VERSION  curr=$CURR_VERSION"
+
+            if [[ -z "$CURR_VERSION" ]]; then
+              echo "  Could not parse version, skipping."
+              continue
+            fi
+
+            if [[ "$CURR_VERSION" == "$PREV_VERSION" ]]; then
+              echo "  Version unchanged, skipping."
+              continue
+            fi
+
+            TOML_DIR=$(dirname "$toml")
+            if [[ "$TOML_DIR" == "." ]]; then
+              TAG="v${CURR_VERSION}"
+            else
+              PKG_NAME=$(basename "$TOML_DIR")
+              TAG="${PKG_NAME}-v${CURR_VERSION}"
+            fi
+
+            echo "  Candidate tag: $TAG"
+            TAGS_JSON=$(echo "$TAGS_JSON" | jq --arg tag "$TAG" '. + [$tag]')
+          done <<< "${{ steps.changed.outputs.tomls }}"
+
+          echo "tags=$(echo "$TAGS_JSON" | jq -c .)" >> "$GITHUB_OUTPUT"
+
+      - name: Filter out existing tags
+        if: steps.changed.outputs.has_changes == 'true'
+        id: new-tags
+        run: |
+          set -euo pipefail
+
+          TAGS='${{ steps.versions.outputs.tags }}'
+          NEW_TAGS="[]"
+
+          for TAG in $(echo "$TAGS" | jq -r '.[]'); do
+            if git rev-parse "refs/tags/$TAG" >/dev/null 2>&1; then
+              echo "Tag $TAG already exists, skipping."
+            else
+              echo "New tag: $TAG"
+              NEW_TAGS=$(echo "$NEW_TAGS" | jq --arg tag "$TAG" '. + [$tag]')
+            fi
+          done
+
+          COUNT=$(echo "$NEW_TAGS" | jq 'length')
+          echo "new_tags=$(echo "$NEW_TAGS" | jq -c .)" >> "$GITHUB_OUTPUT"
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+
+      - name: Create and push tags
+        if: steps.changed.outputs.has_changes == 'true' && steps.new-tags.outputs.count != '0'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+
+          CURR_SHA="${{ github.sha }}"
+          NEW_TAGS='${{ steps.new-tags.outputs.new_tags }}'
+
+          for TAG in $(echo "$NEW_TAGS" | jq -r '.[]'); do
+            echo "Creating and pushing tag: $TAG"
+            git tag "$TAG" "$CURR_SHA"
+            git push origin "$TAG"
+
+            # The tag is already pushed, so a failed dispatch cannot be fixed by
+            # re-running this workflow: the next run sees the tag and skips it.
+            # Retry, and if it still fails say exactly how to recover by hand.
+            echo "Dispatching release.yml for $TAG"
+            for attempt in 1 2 3; do
+              if gh workflow run release.yml --repo "$GITHUB_REPOSITORY" --field tag="$TAG"; then
+                break
+              fi
+              if [[ $attempt == 3 ]]; then
+                echo "::error::Tag $TAG was pushed but dispatching release.yml failed." \
+                     "Re-running this workflow will NOT retry (the tag now exists)." \
+                     "Recover with: gh workflow run release.yml --repo $GITHUB_REPOSITORY --field tag=$TAG"
+                exit 1
+              fi
+              echo "Dispatch attempt $attempt failed; retrying in $((attempt * 5))s"
+              sleep $((attempt * 5))
+            done
+          done
+
+      - name: Summary
+        if: always()
+        run: |
+          if [[ "${{ steps.changed.outputs.has_changes }}" != "true" ]]; then
+            echo "No Cargo.toml files changed."
+          elif [[ "${{ steps.new-tags.outputs.count }}" == "0" || -z "${{ steps.new-tags.outputs.count }}" ]]; then
+            echo "No new tags were created."
+          else
+            echo "Created ${{ steps.new-tags.outputs.count }} new tag(s):"
+            echo '${{ steps.new-tags.outputs.new_tags }}' | jq -r '.[]'
+          fi
