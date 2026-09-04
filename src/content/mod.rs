@@ -218,8 +218,13 @@ pub(crate) async fn write_and_postprocess_file(
             } else {
                 String::from_utf8_lossy(content).to_string()
             };
-            if !content.is_empty() {
-                fs::write(file_path, content).await.map_err(|e| {
+            let original = content_str;
+            let content_str = html::strip_gateway_injected_markup(&original);
+            let stripped = content_str.len() != original.len();
+            // A streamed file (empty `content`) is already on disk; rewrite it only if
+            // stripping changed it.
+            if !content.is_empty() || stripped {
+                fs::write(file_path, &content_str).await.map_err(|e| {
                     anyhow::anyhow!(
                         "Failed to write HTML content to {}: {}",
                         file_path.display(),
@@ -645,6 +650,26 @@ mod write_and_postprocess_file_tests {
             .unwrap();
         let s = std::fs::read(&path).unwrap();
         assert_eq!(s, bytes);
+    }
+
+    #[tokio::test]
+    async fn html_streamed_file_has_gateway_injected_markup_stripped() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("animation.html");
+        let honeypot = r#"<a href="https://ipfs.io/cdn-cgi/content?id=abc" aria-hidden="true" rel="nofollow noopener" style="display: none !important"></a>"#;
+        tokio::fs::write(
+            &path,
+            format!("<html><body>{honeypot}<p>art</p></body></html>"),
+        )
+        .await
+        .unwrap();
+
+        write_and_postprocess_file(&path, b"", "https://example/")
+            .await
+            .unwrap();
+
+        let s = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(s, "<html><body><p>art</p></body></html>");
     }
 
     #[tokio::test]

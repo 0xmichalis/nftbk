@@ -8,7 +8,9 @@ use tokio::fs;
 use tracing::{debug, info, warn};
 use url::Url;
 
+use crate::httpclient::fetch::try_fetch_response;
 use crate::httpclient::stream::stream_http_to_file;
+use crate::ipfs::config::IPFS_GATEWAYS;
 use crate::url::resolve_url;
 
 fn add_resource(
@@ -65,6 +67,57 @@ fn is_script_js_file(path: &Path) -> bool {
     }
 }
 
+/// Unity WebGL templates assemble asset paths in inline JavaScript:
+///
+/// ```text
+/// var buildUrl = "Build";
+/// var loaderUrl = buildUrl + "/x.loader.js";
+/// var config = { dataUrl: buildUrl + "/x.data", codeUrl: buildUrl + "/x.wasm", ... };
+/// ```
+///
+/// The generic literal scan only sees `"/x.loader.js"` and rejects it as an
+/// absolute path, so join each `buildUrl + "..."` literal with the build dir.
+fn extract_unity_build_files(script_text: &str) -> Vec<String> {
+    if !script_text.contains("createUnityInstance") {
+        return Vec::new();
+    }
+    let build_url_regex = Regex::new(r#"var\s+buildUrl\s*=\s*["']([^"']+)["']"#)
+        .expect("Static regex pattern should always be valid");
+    let Some(build_dir) = build_url_regex
+        .captures(script_text)
+        .map(|c| c[1].trim_end_matches('/').to_string())
+    else {
+        return Vec::new();
+    };
+
+    let file_regex = Regex::new(r#"buildUrl\s*\+\s*["']/?([^"']+)["']"#)
+        .expect("Static regex pattern should always be valid");
+    file_regex
+        .captures_iter(script_text)
+        .map(|c| format!("{build_dir}/{}", &c[1]))
+        .collect()
+}
+
+/// Remove markup that a gateway injected into the page. Cloudflare-fronted
+/// gateways such as ipfs.io add a hidden bot-trap anchor to `<body>`, which is
+/// not part of the artwork and makes the saved file differ from the original.
+pub(crate) fn strip_gateway_injected_markup(html: &str) -> String {
+    let honeypot_regex = Regex::new(r#"<a href="[^"]*/cdn-cgi/content\?[^"]*"[^>]*></a>"#)
+        .expect("Static regex pattern should always be valid");
+    honeypot_regex.replace_all(html, "").into_owned()
+}
+
+/// Fetch `absolute_url` (with IPFS gateway fallback) and stream it to `resource_path`.
+async fn download_resource(absolute_url: &str, resource_path: &Path) -> Result<()> {
+    debug!("Downloading HTML resource: {}", absolute_url);
+    let (response, _status) = try_fetch_response(absolute_url, IPFS_GATEWAYS).await;
+    let response = response?;
+    info!("Saving HTML resource at {}", resource_path.display());
+    stream_http_to_file(response, resource_path).await?;
+    info!("Saved HTML resource at {}", resource_path.display());
+    Ok(())
+}
+
 fn is_safe_resource_path(resource_url: &str) -> bool {
     if resource_url.contains("..") || resource_url.starts_with('/') {
         warn!("Skipping unsafe or absolute path: {}", resource_url);
@@ -86,7 +139,7 @@ async fn extract_resource_paths_from_file(path: &Path) -> Result<Vec<String>> {
     // Regex for any filename with a known extension
     // This pattern is static and should never fail to compile
     let known_ext_regex = Regex::new(
-        r#"([\w./-]+\.(?:jpg|jpeg|png|gif|mp4|webm|mp3|ogg|svg|webp|ico|json|xml|txt|pdf))"#,
+        r#"([\w./-]+\.(?:jpg|jpeg|png|gif|mp4|webm|mp3|ogg|svg|webp|ico|json|xml|txt|pdf|wasm|data))"#,
     )
     .expect("Static regex pattern should always be valid");
 
@@ -155,8 +208,16 @@ pub async fn download_html_resources(
         for element in document.select(&script_selector) {
             if element.value().attr("src").is_none() {
                 let script_text = element.text().collect::<String>();
+                let unity_files = extract_unity_build_files(&script_text);
+                for resource_url in &unity_files {
+                    add_resource(&mut resources, resource_url, base_url, dir_path);
+                }
                 for cap in js_regex.captures_iter(&script_text) {
                     let resource_url = &cap[1];
+                    // Already added with its build dir; the bare literal would only warn.
+                    if unity_files.iter().any(|f| f.ends_with(resource_url)) {
+                        continue;
+                    }
                     add_resource(&mut resources, resource_url, base_url, dir_path);
                 }
                 for cap in xml_json_regex.captures_iter(&script_text) {
@@ -179,20 +240,9 @@ pub async fn download_html_resources(
         }
         if fs::try_exists(resource_path).await? {
             debug!("Resource already exists at {}", resource_path.display());
-        } else {
-            debug!("Downloading HTML resource: {}", absolute_url);
-            let client = reqwest::Client::new();
-            match client.get(absolute_url).send().await {
-                Ok(response) => {
-                    info!("Saving HTML resource at {}", resource_path.display());
-                    stream_http_to_file(response, resource_path).await?;
-                    info!("Saved HTML resource at {}", resource_path.display());
-                }
-                Err(e) => {
-                    warn!("Failed to download HTML resource {}: {}", absolute_url, e);
-                    continue;
-                }
-            }
+        } else if let Err(e) = download_resource(absolute_url, resource_path).await {
+            warn!("Failed to download HTML resource {}: {}", absolute_url, e);
+            continue;
         }
         downloaded_files.push(resource_path.clone());
     }
@@ -238,20 +288,9 @@ pub async fn download_html_resources(
                 }
                 if fs::try_exists(&found_path).await? {
                     debug!("Resource already exists at {}", found_path.display());
-                } else {
-                    debug!("Downloading HTML resource: {}", abs_url);
-                    let client = reqwest::Client::new();
-                    match client.get(&abs_url).send().await {
-                        Ok(response) => {
-                            info!("Saving HTML resource at {}", found_path.display());
-                            stream_http_to_file(response, &found_path).await?;
-                            info!("Saved HTML resource at {}", found_path.display());
-                        }
-                        Err(e) => {
-                            warn!("Failed to download HTML resource {}: {}", abs_url, e);
-                            continue;
-                        }
-                    }
+                } else if let Err(e) = download_resource(&abs_url, &found_path).await {
+                    warn!("Failed to download HTML resource {}: {}", abs_url, e);
+                    continue;
                 }
                 to_process.push(found_path);
             }
@@ -638,11 +677,129 @@ key3=not-a-file
 }
 
 #[cfg(test)]
+mod extract_unity_build_files_tests {
+    use super::*;
+
+    const UNITY_LOADER_SCRIPT: &str = r#"
+        var buildUrl = "Build";
+        var loaderUrl = buildUrl + "/bb0101_uncompressed.loader.js";
+        var config = {
+          dataUrl: buildUrl + "/bb0101_uncompressed.data",
+          frameworkUrl: buildUrl + "/bb0101_uncompressed.framework.js",
+          codeUrl: buildUrl + "/bb0101_uncompressed.wasm",
+          streamingAssetsUrl: "StreamingAssets",
+        };
+        script.src = loaderUrl;
+        script.onload = () => { createUnityInstance(canvas, config); };
+    "#;
+
+    #[test]
+    fn joins_build_dir_with_each_referenced_file() {
+        let files = extract_unity_build_files(UNITY_LOADER_SCRIPT);
+        assert_eq!(
+            files,
+            vec![
+                "Build/bb0101_uncompressed.loader.js",
+                "Build/bb0101_uncompressed.data",
+                "Build/bb0101_uncompressed.framework.js",
+                "Build/bb0101_uncompressed.wasm",
+            ]
+        );
+    }
+
+    #[test]
+    fn handles_trailing_slash_and_single_quotes() {
+        let script = "var buildUrl = 'Build/'; createUnityInstance(); x = buildUrl + 'a.wasm';";
+        assert_eq!(extract_unity_build_files(script), vec!["Build/a.wasm"]);
+    }
+
+    #[test]
+    fn ignores_scripts_that_are_not_unity_loaders() {
+        let script = r#"var buildUrl = "Build"; var x = buildUrl + "/thing.js";"#;
+        assert!(extract_unity_build_files(script).is_empty());
+        assert!(extract_unity_build_files("createUnityInstance(canvas, config)").is_empty());
+    }
+}
+
+#[cfg(test)]
+mod strip_gateway_injected_markup_tests {
+    use super::*;
+
+    #[test]
+    fn removes_cloudflare_honeypot_anchor() {
+        let html = r#"<body><a href="https://ipfs.io/cdn-cgi/content?id=dNnYXr-1.2.1.1-d2wU_8h1" aria-hidden="true" rel="nofollow noopener" style="display: none !important; visibility: hidden !important"></a>
+    <div id="unity-container"></div></body>"#;
+        assert_eq!(
+            strip_gateway_injected_markup(html),
+            "<body>\n    <div id=\"unity-container\"></div></body>"
+        );
+    }
+
+    #[test]
+    fn leaves_ordinary_html_untouched() {
+        let html = r#"<body><a href="https://example.com/cdn-cgi/other">x</a><a href="a.html"></a></body>"#;
+        assert_eq!(strip_gateway_injected_markup(html), html);
+    }
+}
+
+#[cfg(test)]
 mod download_html_resources_tests {
     use super::*;
     use tempfile::TempDir;
     use wiremock::matchers::{method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn downloads_unity_build_files_referenced_via_build_url() {
+        let mock_server = MockServer::start().await;
+        let temp_dir = TempDir::new().unwrap();
+        for file in ["bb.loader.js", "bb.data", "bb.framework.js", "bb.wasm"] {
+            Mock::given(method("GET"))
+                .and(path(format!("/Build/{file}")))
+                .respond_with(ResponseTemplate::new(200).set_body_bytes(b"bytes"))
+                .mount(&mock_server)
+                .await;
+        }
+        let html_content = r#"<html><body><script>
+            var buildUrl = "Build";
+            var loaderUrl = buildUrl + "/bb.loader.js";
+            var config = {
+              dataUrl: buildUrl + "/bb.data",
+              frameworkUrl: buildUrl + "/bb.framework.js",
+              codeUrl: buildUrl + "/bb.wasm",
+            };
+            createUnityInstance(canvas, config);
+        </script></body></html>"#;
+
+        download_html_resources(html_content, &mock_server.uri(), temp_dir.path())
+            .await
+            .unwrap();
+
+        for file in ["bb.loader.js", "bb.data", "bb.framework.js", "bb.wasm"] {
+            assert!(
+                temp_dir.path().join("Build").join(file).exists(),
+                "missing Build/{file}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn does_not_save_error_responses_as_resources() {
+        let mock_server = MockServer::start().await;
+        let temp_dir = TempDir::new().unwrap();
+        Mock::given(method("GET"))
+            .and(path("/missing.css"))
+            .respond_with(ResponseTemplate::new(404).set_body_string("not found"))
+            .mount(&mock_server)
+            .await;
+        let html_content = r#"<html><head><link href="missing.css"></head></html>"#;
+
+        download_html_resources(html_content, &mock_server.uri(), temp_dir.path())
+            .await
+            .unwrap();
+
+        assert!(!temp_dir.path().join("missing.css").exists());
+    }
 
     #[tokio::test]
     async fn downloads_html_resources() {
