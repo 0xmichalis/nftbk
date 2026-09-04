@@ -1,6 +1,6 @@
 [package]
 name = "nftbk"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 description = "A library, server, and CLI tool for backing up NFT metadata and content from EVM and Tezos NFT contracts."
 license = "Apache-2.0"
