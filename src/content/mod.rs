@@ -11,6 +11,7 @@ use crate::chain::common::ContractTokenInfo;
 use crate::content::html::download_html_resources;
 use crate::url::{get_last_path_segment, is_data_url};
 
+pub mod dedup;
 pub mod extensions;
 pub mod extra;
 pub mod html;
