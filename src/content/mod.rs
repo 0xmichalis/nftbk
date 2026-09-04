@@ -314,6 +314,87 @@ pub async fn write_metadata<T: serde::Serialize>(
     .await
 }
 
+/// Read the metadata.json saved for `token` by a previous run.
+/// Returns `Ok(None)` when no metadata has been saved yet.
+pub async fn read_metadata<T: serde::de::DeserializeOwned>(
+    token: &impl ContractTokenInfo,
+    output_path: &Path,
+) -> anyhow::Result<Option<T>> {
+    // The URL only matters when no filename override is given, so it is irrelevant here.
+    let file_path = get_filename(
+        "",
+        token,
+        output_path,
+        Options {
+            overriden_filename: Some("metadata.json".to_string()),
+            fallback_filename: None,
+        },
+    )
+    .await?;
+    if !fs::try_exists(&file_path).await? {
+        return Ok(None);
+    }
+
+    let bytes = fs::read(&file_path).await?;
+    let metadata = serde_json::from_slice(&bytes)
+        .map_err(|e| anyhow::anyhow!("Failed to parse {}: {}", file_path.display(), e))?;
+    Ok(Some(metadata))
+}
+
+#[cfg(test)]
+mod read_metadata_tests {
+    use super::*;
+    use crate::chain::common::ContractTokenId;
+    use tempfile::TempDir;
+
+    #[derive(Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+    struct Meta {
+        name: String,
+    }
+
+    fn token() -> ContractTokenId {
+        ContractTokenId {
+            address: "0xabc".to_string(),
+            token_id: "7".to_string(),
+            chain_name: "ethereum".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn returns_none_when_no_metadata_saved() {
+        let out = TempDir::new().unwrap();
+        let read: Option<Meta> = read_metadata(&token(), out.path()).await.unwrap();
+        assert_eq!(read, None);
+    }
+
+    #[tokio::test]
+    async fn round_trips_metadata_written_by_write_metadata() {
+        let out = TempDir::new().unwrap();
+        let meta = Meta {
+            name: "local".to_string(),
+        };
+        write_metadata("ipfs://QmToken", &token(), out.path(), &meta)
+            .await
+            .unwrap();
+
+        let read: Option<Meta> = read_metadata(&token(), out.path()).await.unwrap();
+        assert_eq!(read, Some(meta));
+    }
+
+    #[tokio::test]
+    async fn errors_on_unparseable_metadata() {
+        let out = TempDir::new().unwrap();
+        let dir = out.path().join("ethereum").join("0xabc").join("7");
+        fs::create_dir_all(&dir).await.unwrap();
+        fs::write(dir.join("metadata.json"), b"not json")
+            .await
+            .unwrap();
+
+        let read: Result<Option<Meta>> = read_metadata(&token(), out.path()).await;
+        assert!(read.is_err());
+    }
+}
+
 #[cfg(test)]
 mod write_content_tests {
     use super::*;
