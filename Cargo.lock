@@ -4492,7 +4492,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nftbk"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "alloy",
  "alloy-contract",
