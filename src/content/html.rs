@@ -81,7 +81,7 @@ fn extract_unity_build_files(script_text: &str) -> Vec<String> {
     if !script_text.contains("createUnityInstance") {
         return Vec::new();
     }
-    let build_url_regex = Regex::new(r#"var\s+buildUrl\s*=\s*["']([^"']+)["']"#)
+    let build_url_regex = Regex::new(r#"(?:var|let|const)\s+buildUrl\s*=\s*["']([^"']+)["']"#)
         .expect("Static regex pattern should always be valid");
     let Some(build_dir) = build_url_regex
         .captures(script_text)
@@ -711,6 +711,16 @@ mod extract_unity_build_files_tests {
     fn handles_trailing_slash_and_single_quotes() {
         let script = "var buildUrl = 'Build/'; createUnityInstance(); x = buildUrl + 'a.wasm';";
         assert_eq!(extract_unity_build_files(script), vec!["Build/a.wasm"]);
+    }
+
+    #[test]
+    fn accepts_let_and_const_declarations() {
+        for keyword in ["let", "const"] {
+            let script = format!(
+                r#"{keyword} buildUrl = "Build"; createUnityInstance(); x = buildUrl + "/a.wasm";"#
+            );
+            assert_eq!(extract_unity_build_files(&script), vec!["Build/a.wasm"]);
+        }
     }
 
     #[test]
