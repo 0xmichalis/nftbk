@@ -1,0 +1,100 @@
+name: Release
+
+# Build the server image from a version tag and publish it to GHCR as both
+# `<tag>` and `latest`, then cut a GitHub Release with generated notes.
+#   git tag v0.2.0 && git push origin v0.2.0
+# auto-tag.yml dispatches this workflow whenever the version in Cargo.toml
+# changes on main, so tags are normally not pushed by hand.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to build and release (e.g. v0.2.0)"
+        required: true
+
+# Least privilege: each job asks for exactly what it needs below.
+permissions:
+  contents: read
+
+env:
+  # Resolved once. On workflow_dispatch github.ref_name is the branch the
+  # workflow was dispatched from ("main"), not the tag being released.
+  RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/nftbk-server
+
+jobs:
+  docker:
+    name: Build and Push Docker Image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+
+    steps:
+    # A tag name may legally contain shell metacharacters, and it reaches several
+    # `run:` scripts below. Reject anything that is not a plain version tag before
+    # it is used, and pass it through env rather than `${{ }}` interpolation.
+    - name: Validate release tag
+      run: |
+        if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
+          echo "refusing to release a tag that is not vMAJOR.MINOR.PATCH: $RELEASE_TAG" >&2
+          exit 1
+        fi
+
+    # On a tag push this is the tag; on workflow_dispatch it must be stated
+    # explicitly, or checkout would silently build the default branch and
+    # publish it under the tag's name.
+    #
+    # persist-credentials: false keeps the token out of .git/config; the Docker
+    # build context would otherwise be able to read it.
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      with:
+        ref: ${{ env.RELEASE_TAG }}
+        persist-credentials: false
+
+    # The tag is the release's identity, so the code it points at must agree.
+    - name: Check Cargo.toml version matches the tag
+      run: |
+        set -euo pipefail
+        VERSION=$(grep -m1 '^version\s*=' Cargo.toml | sed -E 's/version\s*=\s*"([^"]+)".*/\1/')
+        if [[ "v$VERSION" != "$RELEASE_TAG" ]]; then
+          echo "Cargo.toml version v$VERSION does not match tag $RELEASE_TAG" >&2
+          exit 1
+        fi
+
+    - name: Log in to GHCR
+      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+
+    - name: Build Docker image
+      run: |
+        set -euo pipefail
+        GIT_COMMIT=$(git rev-parse --short HEAD)
+        docker build \
+          --build-arg GIT_COMMIT="$GIT_COMMIT" \
+          -t "$IMAGE_NAME:$RELEASE_TAG" \
+          -t "$IMAGE_NAME:latest" \
+          .
+
+    - name: Push to GHCR
+      run: |
+        set -euo pipefail
+        docker push "$IMAGE_NAME:$RELEASE_TAG"
+        docker push "$IMAGE_NAME:latest"
+
+  release:
+    name: Publish Release
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the release
+    steps:
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
+      with:
+        tag_name: ${{ env.RELEASE_TAG }}
+        draft: false
+        generate_release_notes: true
+        body: |
+          Docker image: `${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}`

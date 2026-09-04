@@ -1,7 +1,7 @@
 # cargo-deny configuration.
 #
-# Advisories are intentionally NOT checked here — that is owned by the
-# `cargo audit` CI job + .cargo/audit.toml, so the curated RUSTSEC ignore
+# Advisories are intentionally NOT checked here — that is owned by the scheduled
+# security-audit.yml workflow + .cargo/audit.toml, so the curated RUSTSEC ignore
 # list lives in exactly one place. cargo-deny covers what audit cannot:
 # license policy, banned/duplicate crates, and allowed sources.
 
