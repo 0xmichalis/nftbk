@@ -1,3 +1,5 @@
+use data_encoding::BASE32_NOPAD;
+
 use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType, IPFS_GATEWAYS};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -6,23 +8,97 @@ pub struct GatewayUrl {
     pub bearer_token: Option<String>,
 }
 
-fn is_valid_cid(cid: &str) -> bool {
-    // CIDv0: 46 chars, starts with Qm, base58btc charset (no 0, O, I, l)
-    if cid.len() == 46 && cid.starts_with("Qm") {
-        const BASE58BTC: &str = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-        if cid.chars().all(|c| BASE58BTC.contains(c)) {
-            return true;
+const CIDV1: u8 = 0x01;
+const DAG_PB: u8 = 0x70;
+/// Multihash prefix every CIDv0 carries: sha2-256 (0x12) with a 32-byte digest.
+const SHA2_256_MULTIHASH_PREFIX: [u8; 2] = [0x12, 0x20];
+const CIDV0_MULTIHASH_LEN: usize = 34;
+
+/// Decode a CIDv0 (`Qm…`, base58btc sha2-256 multihash) into its multihash bytes.
+fn decode_cidv0(cid: &str) -> Option<Vec<u8>> {
+    if cid.len() != 46 || !cid.starts_with("Qm") {
+        return None;
+    }
+    let multihash = bs58::decode(cid).into_vec().ok()?;
+    (multihash.len() == CIDV0_MULTIHASH_LEN && multihash[..2] == SHA2_256_MULTIHASH_PREFIX)
+        .then_some(multihash)
+}
+
+fn is_cidv0(cid: &str) -> bool {
+    decode_cidv0(cid).is_some()
+}
+
+fn is_base32_lower(s: &str) -> bool {
+    !s.is_empty()
+        && s.chars()
+            .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
+}
+
+/// Unsigned LEB128 varint; a u64 occupies at most 10 bytes.
+fn read_uvarint(bytes: &[u8]) -> Option<(u64, &[u8])> {
+    const MAX_VARINT_LEN: usize = 10;
+    let mut value = 0u64;
+    for (i, byte) in bytes.iter().enumerate().take(MAX_VARINT_LEN) {
+        value |= u64::from(byte & 0x7f) << (7 * i);
+        if byte & 0x80 == 0 {
+            return Some((value, &bytes[i + 1..]));
         }
     }
-    // CIDv1 (most common): base32lower, typically starts with bafy
-    if cid.starts_with("bafy")
-        && cid
-            .chars()
-            .all(|c: char| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
-    {
-        return true;
+    None
+}
+
+/// CIDv1 in base32lower multibase: `b` + base32(version || codec || multihash).
+fn is_cidv1_base32(cid: &str) -> bool {
+    let Some(payload) = cid.strip_prefix('b') else {
+        return false;
+    };
+    if !is_base32_lower(payload) {
+        return false;
     }
-    false
+    let Ok(bytes) = BASE32_NOPAD.decode(payload.to_ascii_uppercase().as_bytes()) else {
+        return false;
+    };
+    let Some((version, rest)) = read_uvarint(&bytes) else {
+        return false;
+    };
+    if version != u64::from(CIDV1) {
+        return false;
+    }
+    let Some((_codec, rest)) = read_uvarint(rest) else {
+        return false;
+    };
+    let Some((_hash_fn, rest)) = read_uvarint(rest) else {
+        return false;
+    };
+    let Some((hash_len, digest)) = read_uvarint(rest) else {
+        return false;
+    };
+    u64::try_from(digest.len()) == Ok(hash_len)
+}
+
+fn is_valid_cid(cid: &str) -> bool {
+    is_cidv0(cid) || is_cidv1_base32(cid)
+}
+
+/// Convert a CIDv0 (`Qm…`, base58btc multihash, implicitly dag-pb) to its
+/// CIDv1 base32lower form. CIDv0 cannot be used in subdomain gateways because
+/// DNS labels are case-insensitive.
+fn cidv0_to_cidv1_base32(cid: &str) -> Option<String> {
+    let multihash = decode_cidv0(cid)?;
+    let mut bytes = vec![CIDV1, DAG_PB];
+    bytes.extend_from_slice(&multihash);
+    Some(format!(
+        "b{}",
+        BASE32_NOPAD.encode(&bytes).to_ascii_lowercase()
+    ))
+}
+
+fn subdomain_label(cid: &str) -> String {
+    if is_cidv0(cid) {
+        cidv0_to_cidv1_base32(cid).unwrap_or_else(|| cid.to_string())
+    } else {
+        cid.to_string()
+    }
 }
 
 fn construct_gateway_url(ipfs_path: &str, gateway: &IpfsGatewayConfig) -> String {
@@ -31,14 +107,13 @@ fn construct_gateway_url(ipfs_path: &str, gateway: &IpfsGatewayConfig) -> String
             format!("{}/ipfs/{}", gateway.url.trim_end_matches('/'), ipfs_path)
         }
         IpfsGatewayType::Subdomain => {
-            let hash = ipfs_path.split('/').next().unwrap_or(ipfs_path);
-            let path_part = if let Some((_, path)) = ipfs_path.split_once('/') {
-                format!("/{}", path)
-            } else {
-                String::new()
+            let (cid, path_part) = match ipfs_path.split_once('/') {
+                Some((cid, path)) => (cid, format!("/{path}")),
+                None => (ipfs_path, String::new()),
             };
+            let label = subdomain_label(cid);
             let base_domain = gateway.url.trim_start_matches("https://");
-            format!("https://{hash}.ipfs.{base_domain}{path_part}")
+            format!("https://{label}.ipfs.{base_domain}{path_part}")
         }
     }
 }
@@ -306,6 +381,27 @@ mod tests {
         use super::*;
 
         #[test]
+        fn subdomain_gateway_converts_cidv0_to_cidv1_base32() {
+            let urls =
+                get_ipfs_gateway_urls("ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco");
+            assert!(urls.contains(
+                &"https://bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq.ipfs.4everland.io"
+                    .to_string()
+            ));
+            // path gateways keep the original CIDv0
+            assert!(urls.contains(
+                &"https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco".to_string()
+            ));
+        }
+
+        #[test]
+        fn subdomain_gateway_keeps_cidv1_unchanged() {
+            let cid = "bafkreicrxtc2cws6ci7bqgtygx4cvvro3szoq5sn27mhu4wdzjmwlmcesa";
+            let urls = get_ipfs_gateway_urls(&format!("ipfs://{cid}"));
+            assert!(urls.contains(&format!("https://{cid}.ipfs.4everland.io")));
+        }
+
+        #[test]
         fn returns_expected_variants() {
             let valid_qm = "bafybeifx7yeb55armcsxwwitkymga5xf53dxiarykms3ygqic223w5sk3m";
             let expected: Vec<String> = vec![
@@ -331,7 +427,7 @@ mod tests {
         fn supports_subdomain_and_path_in_urls() {
             let ipfs_url = "ipfs://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png";
             let urls = get_ipfs_gateway_urls(ipfs_url);
-            let expected_subdomain = "https://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco.ipfs.4everland.io/images/logo.png";
+            let expected_subdomain = "https://bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq.ipfs.4everland.io/images/logo.png";
             assert!(urls.contains(&expected_subdomain.to_string()));
             let expected_path =
                 "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png";
@@ -349,7 +445,7 @@ mod tests {
         fn supports_http_ipfs_input() {
             let url = "https://foo.com/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png?v=1";
             let urls = get_ipfs_gateway_urls(url);
-            let expected_subdomain = "https://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco.ipfs.4everland.io/images/logo.png";
+            let expected_subdomain = "https://bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq.ipfs.4everland.io/images/logo.png";
             assert!(urls.contains(&expected_subdomain.to_string()));
             let expected_path =
                 "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png";
@@ -368,7 +464,7 @@ mod tests {
             assert_eq!(urls.len(), IPFS_GATEWAYS.len());
             let expected_urls = vec![
                 "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/123".to_string(),
-                "https://QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco.ipfs.4everland.io/123".to_string(),
+                "https://bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq.ipfs.4everland.io/123".to_string(),
                 "https://gateway.pinata.cloud/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/123".to_string(),
             ];
             for expected_url in &expected_urls {
@@ -382,6 +478,14 @@ mod tests {
                     .is_none()
             );
             assert!(generate_url_for_gateways("", IPFS_GATEWAYS).is_none());
+        }
+
+        #[test]
+        fn builds_all_from_raw_codec_cidv1_url() {
+            let url =
+                "https://ipfs.io/ipfs/bafkreicrxtc2cws6ci7bqgtygx4cvvro3szoq5sn27mhu4wdzjmwlmcesa";
+            let urls = generate_url_for_gateways(url, IPFS_GATEWAYS).unwrap();
+            assert_eq!(urls.len(), IPFS_GATEWAYS.len());
         }
 
         #[test]
@@ -411,6 +515,29 @@ mod tests {
         }
     }
 
+    mod read_uvarint_tests {
+        use super::*;
+
+        #[test]
+        fn decodes_single_and_multi_byte_values() {
+            assert_eq!(read_uvarint(&[0x01, 0xff]), Some((1, &[0xff][..])));
+            assert_eq!(read_uvarint(&[0x80, 0x01]), Some((128, &[][..])));
+        }
+
+        #[test]
+        fn decodes_ten_byte_u64_max() {
+            let max = [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01];
+            assert_eq!(read_uvarint(&max), Some((u64::MAX, &[][..])));
+        }
+
+        #[test]
+        fn rejects_truncated_and_overlong_input() {
+            assert_eq!(read_uvarint(&[]), None);
+            assert_eq!(read_uvarint(&[0x80]), None);
+            assert_eq!(read_uvarint(&[0x80; 11]), None);
+        }
+    }
+
     mod is_valid_cid_tests {
         use super::*;
 
@@ -428,8 +555,32 @@ mod tests {
         }
 
         #[test]
+        fn accepts_any_base32_cidv1_prefix() {
+            // raw codec (bafk), dag-cbor (bafyr), and libp2p-key (bafz)
+            assert!(is_valid_cid(
+                "bafkreicrxtc2cws6ci7bqgtygx4cvvro3szoq5sn27mhu4wdzjmwlmcesa"
+            ));
+            assert!(is_valid_cid(
+                "bafyreigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+            ));
+            assert!(is_valid_cid(
+                "bafzbeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi"
+            ));
+        }
+
+        #[test]
         fn rejects_obviously_invalid_values() {
             assert!(!is_valid_cid(""));
+            // right length and alphabet, but not a sha2-256 multihash
+            assert!(!is_valid_cid(
+                "Qm11111111111111111111111111111111111111111111"
+            ));
+            assert!(!is_valid_cid(
+                "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6ucO"
+            )); // 'O' not base58
+            assert!(!is_valid_cid("bafy"));
+            assert!(!is_valid_cid("bafkrei"));
+            assert!(!is_valid_cid("bafkrei0189")); // 0,1,8,9 are not base32
             assert!(!is_valid_cid("1"));
             assert!(!is_valid_cid("http"));
             assert!(!is_valid_cid("ipfs"));
@@ -476,8 +627,9 @@ mod tests {
                 assert!(gateway_strings
                     .iter()
                     .any(|url| url.contains("gateway.pinata.cloud")));
-                assert!(gateway_strings.iter().any(|url| url
-                    .contains("QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco.ipfs.4everland.io")));
+                assert!(gateway_strings.iter().any(|url| url.contains(
+                    "bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq.ipfs.4everland.io"
+                )));
             } else {
                 panic!("all_ipfs_gateway_urls should return Some for IPFS URLs");
             }

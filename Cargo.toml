@@ -27,9 +27,11 @@ async-compression = { version = "0.4", features = ["tokio", "futures-io", "gzip"
 async-trait = "0.1.88"
 axum = "0.8"
 base64 = "0.21"
+bs58 = "0.5"
 chrono = { version = "0.4.39", features = ["serde"] }
 clap = { version = "4.3", features = ["derive", "env"] }
 ctrlc = "3"
+data-encoding = "2"
 dotenvy = "0.15"
 flate2 = "1.0"
 fs2 = "0.4"
