@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use tracing::{debug, error, info, warn};
 
 use crate::content::extra::fetch_and_write_extra;
-use crate::content::{write_metadata, Options};
+use crate::content::{read_metadata, write_metadata, Options};
 use crate::ipfs::url::extract_ipfs_cid;
 use crate::ipfs::{IpfsPinningProvider, PinRequest};
 
@@ -301,6 +301,41 @@ pub trait NFTChainProcessor {
     fn http_client(&self) -> &crate::httpclient::HttpClient;
 }
 
+/// Fetch metadata from `token_uri`; if that fails and a previous run saved
+/// metadata.json for this token, use that copy instead. The fetch error is
+/// returned when neither is available or the local copy cannot be parsed.
+async fn fetch_metadata_or_local<C>(
+    processor: &C,
+    token_uri: &str,
+    token: &C::ContractTokenId,
+) -> anyhow::Result<C::Metadata>
+where
+    C: NFTChainProcessor,
+    C::Metadata: serde::de::DeserializeOwned,
+{
+    let fetch_error = match processor.fetch_metadata(token_uri).await {
+        Ok(metadata) => return Ok(metadata),
+        Err(e) => e,
+    };
+
+    let Some(output_path) = processor.output_path() else {
+        return Err(fetch_error);
+    };
+    match read_metadata(token, output_path).await {
+        Ok(Some(metadata)) => {
+            warn!(
+                "Failed to fetch metadata for {token}, using previously saved copy: {fetch_error}"
+            );
+            Ok(metadata)
+        }
+        Ok(None) => Err(fetch_error),
+        Err(read_error) => {
+            warn!("Could not read previously saved metadata for {token}: {read_error}");
+            Err(fetch_error)
+        }
+    }
+}
+
 pub async fn process_nfts<C, FExtraUri>(
     processor: std::sync::Arc<C>,
     tokens: Vec<C::ContractTokenId>,
@@ -311,7 +346,7 @@ pub async fn process_nfts<C, FExtraUri>(
 where
     C: NFTChainProcessor + Sync + Send + 'static,
     C::ContractTokenId: ContractTokenInfo,
-    C::Metadata: serde::Serialize,
+    C::Metadata: serde::Serialize + serde::de::DeserializeOwned,
     FExtraUri: Fn(&C::Metadata) -> Option<&str>,
 {
     let mut files = Vec::new();
@@ -343,9 +378,11 @@ where
             }
         };
 
-        // Fetch metadata using the token URI
+        // Fetch metadata using the token URI, falling back to the copy a previous
+        // run saved so a transient gateway failure does not fail a token whose
+        // content is already on disk.
         let metadata = match process(
-            processor.fetch_metadata(&token_uri).await,
+            fetch_metadata_or_local(&*processor, &token_uri, &token).await,
             format!("Failed to fetch metadata for {token}"),
             config.exit_on_error,
             &mut archive_errors,
@@ -721,7 +758,7 @@ mod process_nfts_tests {
     };
 
     // Mock metadata type for testing
-    #[derive(Debug, Clone, serde::Serialize)]
+    #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
     struct MockMetadata {
         name: String,
         image: String,
@@ -1436,6 +1473,87 @@ mod process_nfts_tests {
 
         // Verify that both error messages are identical
         assert_eq!(archive_out.errors[0], ipfs_out.errors[0]);
+    }
+
+    /// Writes metadata.json for `create_test_token()` the way a previous run would have.
+    async fn save_local_metadata(output_path: &std::path::Path, metadata: &MockMetadata) {
+        crate::content::write_metadata(
+            "ipfs://QmTestMetadataHash",
+            &create_test_token(),
+            output_path,
+            metadata,
+        )
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_process_nfts_uses_local_metadata_when_fetch_fails() {
+        let temp_dir = TempDir::new().unwrap();
+        let local_metadata = MockMetadata {
+            name: "Saved earlier".to_string(),
+            image: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==".to_string(),
+            animation_url: None,
+        };
+        save_local_metadata(temp_dir.path(), &local_metadata).await;
+
+        let processor = Arc::new(
+            MockProcessor::new()
+                .with_output_path(temp_dir.path().to_path_buf())
+                .with_fetch_metadata_error(anyhow!("504 Gateway Timeout")),
+        );
+        let tokens = vec![create_test_token()];
+        let config = create_test_config(true); // would abort if the failure were reported
+        let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
+
+        let (archive_out, ipfs_out) =
+            process_nfts(processor, tokens, config, get_extra_content_uri, None)
+                .await
+                .unwrap();
+
+        assert!(archive_out.errors.is_empty(), "{:?}", archive_out.errors);
+        assert!(ipfs_out.errors.is_empty(), "{:?}", ipfs_out.errors);
+        // metadata.json (already present) plus the image from the local metadata
+        assert_eq!(archive_out.files.len(), 2);
+        assert!(archive_out
+            .files
+            .iter()
+            .any(|f| f.file_name().unwrap() == "metadata.json"));
+    }
+
+    #[tokio::test]
+    async fn test_process_nfts_reports_fetch_error_when_local_metadata_is_unreadable() {
+        let temp_dir = TempDir::new().unwrap();
+        let token = create_test_token();
+        let token_dir = temp_dir
+            .path()
+            .join(token.chain_name())
+            .join(token.address())
+            .join(token.token_id());
+        tokio::fs::create_dir_all(&token_dir).await.unwrap();
+        tokio::fs::write(token_dir.join("metadata.json"), b"not json")
+            .await
+            .unwrap();
+
+        let processor = Arc::new(
+            MockProcessor::new()
+                .with_output_path(temp_dir.path().to_path_buf())
+                .with_fetch_metadata_error(anyhow!("Network timeout")),
+        );
+        let tokens = vec![token];
+        let config = create_test_config(false);
+        let get_extra_content_uri = get_no_extra_content_uri::<MockMetadata>;
+
+        let (archive_out, ipfs_out) =
+            process_nfts(processor, tokens, config, get_extra_content_uri, None)
+                .await
+                .unwrap();
+
+        assert!(archive_out.files.is_empty());
+        assert_eq!(archive_out.errors.len(), 1);
+        assert!(archive_out.errors[0].contains("Failed to fetch metadata"));
+        assert!(archive_out.errors[0].contains("Network timeout"));
+        assert_eq!(archive_out.errors, ipfs_out.errors);
     }
 
     #[tokio::test]
