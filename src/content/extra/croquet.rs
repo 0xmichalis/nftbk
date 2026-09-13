@@ -69,9 +69,11 @@ async fn fetch_croquet_challenge_content_with_base_url(
         ("bb0101.wasm.gz", "bb0101_uncompressed.wasm"),
     ];
 
-    // The .gz files are decompressed by stream_gzip_http_to_file, so reqwest
-    // must hand over the body as served, whatever Content-Encoding says.
-    let client = reqwest::Client::builder()
+    let client = reqwest::Client::new();
+    // The .gz files are decompressed by stream_gzip_http_to_file, so for them
+    // reqwest must hand over the body as served, whatever Content-Encoding
+    // says.
+    let raw_client = reqwest::Client::builder()
         .no_gzip()
         .no_brotli()
         .no_deflate()
@@ -89,7 +91,11 @@ async fn fetch_croquet_challenge_content_with_base_url(
             continue;
         }
 
-        let response = client.get(&url).send().await?;
+        let is_gzipped = source_file.ends_with(".gz");
+        let response = if is_gzipped { &raw_client } else { &client }
+            .get(&url)
+            .send()
+            .await?;
         let status = response.status();
         if !status.is_success() {
             return Err(anyhow::anyhow!(
@@ -98,7 +104,7 @@ async fn fetch_croquet_challenge_content_with_base_url(
                 status
             ));
         }
-        if source_file.ends_with(".gz") {
+        if is_gzipped {
             stream_gzip_http_to_file(response, &file_path).await?;
         } else {
             stream_http_to_file(response, &file_path).await?;
@@ -121,6 +127,16 @@ mod tests {
         TempDir::new().expect("Failed to create temp dir")
     }
 
+    fn gzip(content: &[u8]) -> Vec<u8> {
+        use flate2::write::GzEncoder;
+        use flate2::Compression;
+        use std::io::Write;
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(content).unwrap();
+        encoder.finish().unwrap()
+    }
+
     fn gz_response(body: Vec<u8>, content_encoding: Option<&str>) -> ResponseTemplate {
         let response = ResponseTemplate::new(200).set_body_bytes(body);
         match content_encoding {
@@ -129,26 +145,19 @@ mod tests {
         }
     }
 
+    /// Serves the build files. With a `content_encoding` the server behaves
+    /// like one that gzips every response and labels it, so the .gz files
+    /// carry the header and the loader is gzipped on the wire.
     async fn setup_mock_server(content_encoding: Option<&str>) -> MockServer {
         let mock_server = MockServer::start().await;
 
-        // Mock the HTTP responses for the croquet challenge content
-        // Create proper gzipped data
-        use flate2::write::GzEncoder;
-        use flate2::Compression;
-        use std::io::Write;
-
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(b"fake data content").unwrap();
-        let gzipped_data = encoder.finish().unwrap();
-
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(b"fake js content").unwrap();
-        let gzipped_js = encoder.finish().unwrap();
-
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
-        encoder.write_all(b"fake wasm content").unwrap();
-        let gzipped_wasm = encoder.finish().unwrap();
+        let gzipped_data = gzip(b"fake data content");
+        let gzipped_js = gzip(b"fake js content");
+        let gzipped_wasm = gzip(b"fake wasm content");
+        let loader = match content_encoding {
+            None => b"fake loader js".to_vec(),
+            Some(_) => gzip(b"fake loader js"),
+        };
 
         Mock::given(method("GET"))
             .and(path("/bb0101/Build/bb0101.data.gz"))
@@ -164,7 +173,7 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/bb0101/Build/bb0101.loader.js"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"fake loader js"))
+            .respond_with(gz_response(loader, content_encoding))
             .mount(&mock_server)
             .await;
 
@@ -205,7 +214,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_croquet_challenge_decompresses_gz_files_served_with_content_encoding() {
+    async fn test_fetch_croquet_challenge_decompresses_files_served_with_content_encoding() {
         let mock_server = setup_mock_server(Some("gzip")).await;
         let temp_dir = setup_test_dir().await;
 
@@ -218,11 +227,22 @@ mod tests {
         .await
         .unwrap();
 
-        let data = files
-            .iter()
-            .find(|f| f.ends_with("bb0101_uncompressed.data"))
-            .expect("data file should be returned");
-        assert_eq!(fs::read_to_string(data).await.unwrap(), "fake data content");
+        let content = |name: &str| {
+            let file = files
+                .iter()
+                .find(|f| f.ends_with(name))
+                .unwrap_or_else(|| panic!("{name} should be returned"))
+                .clone();
+            async move { fs::read_to_string(file).await.unwrap() }
+        };
+        assert_eq!(
+            content("bb0101_uncompressed.data").await,
+            "fake data content"
+        );
+        assert_eq!(
+            content("bb0101_uncompressed.loader.js").await,
+            "fake loader js"
+        );
     }
 
     #[tokio::test]
