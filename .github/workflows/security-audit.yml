@@ -81,6 +81,11 @@ jobs:
 
     # One rolling issue, reused across runs: a daily cron that opens a fresh issue
     # every morning trains you to ignore it.
+    #
+    # GitHub rejects issue bodies over 65536 characters, and the dependency tree
+    # cargo audit prints under each finding runs to thousands of lines on this
+    # graph. The body carries the findings without the trees, capped as a
+    # backstop; the full log stays in the workflow run.
     - name: Open or update issue on findings
       if: steps.audit.outputs.exit_code != '0'
       env:
@@ -90,14 +95,21 @@ jobs:
       run: |
         set -euo pipefail
 
+        awk '
+          /^Dependency tree:/ { skip = 1; next }
+          skip && /^$/        { skip = 0 }
+          skip                { next }
+          { size += length($0) + 1; if (size > 60000) { print "[truncated]"; exit } print }
+        ' audit.log > findings.log
+
         {
           echo "\`cargo audit\` found vulnerable dependencies on \`$AUDITED_SHA\` (default branch)."
           echo
           echo "\`\`\`"
-          cat audit.log
+          cat findings.log
           echo "\`\`\`"
           echo
-          echo "[Workflow run]($RUN_URL)"
+          echo "[Workflow run]($RUN_URL) (full output, including dependency trees)"
           echo
           echo "_Exclusions are configured in \`[advisories] ignore\` in .cargo/audit.toml._"
         } > issue-body.md

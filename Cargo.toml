@@ -45,7 +45,7 @@ lru = "0.12"
 prettytable = "0.10"
 rand = "0.8"
 regex = "1"
-reqwest = { version = "0.11", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 scraper = "0.17"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -81,7 +81,7 @@ pkcs8 = "0.10"
 rand_core = "0.6"
 tempfile = "3.8"
 tokio-test = "0.4"
-wiremock = "0.5"
+wiremock = "0.6"
 
 [patch.crates-io]
 # Pin rustls-webpki to a version patched against:
