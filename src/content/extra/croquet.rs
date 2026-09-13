@@ -69,8 +69,14 @@ async fn fetch_croquet_challenge_content_with_base_url(
         ("bb0101.wasm.gz", "bb0101_uncompressed.wasm"),
     ];
 
-    // Download each file
-    let client = reqwest::Client::new();
+    // The .gz files are decompressed by stream_gzip_http_to_file, so reqwest
+    // must hand over the body as served, whatever Content-Encoding says.
+    let client = reqwest::Client::builder()
+        .no_gzip()
+        .no_brotli()
+        .no_deflate()
+        .no_zstd()
+        .build()?;
     let mut files_created = Vec::new();
     for (source_file, target_file) in files {
         let url = format!("{base_url}/bb0101/Build/{source_file}");
@@ -115,7 +121,15 @@ mod tests {
         TempDir::new().expect("Failed to create temp dir")
     }
 
-    async fn setup_mock_server() -> MockServer {
+    fn gz_response(body: Vec<u8>, content_encoding: Option<&str>) -> ResponseTemplate {
+        let response = ResponseTemplate::new(200).set_body_bytes(body);
+        match content_encoding {
+            None => response,
+            Some(encoding) => response.insert_header("Content-Encoding", encoding),
+        }
+    }
+
+    async fn setup_mock_server(content_encoding: Option<&str>) -> MockServer {
         let mock_server = MockServer::start().await;
 
         // Mock the HTTP responses for the croquet challenge content
@@ -138,13 +152,13 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/bb0101/Build/bb0101.data.gz"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(gzipped_data))
+            .respond_with(gz_response(gzipped_data, content_encoding))
             .mount(&mock_server)
             .await;
 
         Mock::given(method("GET"))
             .and(path("/bb0101/Build/bb0101.framework.js.gz"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(gzipped_js))
+            .respond_with(gz_response(gzipped_js, content_encoding))
             .mount(&mock_server)
             .await;
 
@@ -156,7 +170,7 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/bb0101/Build/bb0101.wasm.gz"))
-            .respond_with(ResponseTemplate::new(200).set_body_bytes(gzipped_wasm))
+            .respond_with(gz_response(gzipped_wasm, content_encoding))
             .mount(&mock_server)
             .await;
 
@@ -165,7 +179,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_croquet_challenge_in_range() {
-        let mock_server = setup_mock_server().await;
+        let mock_server = setup_mock_server(None).await;
         let temp_dir = setup_test_dir().await;
         let output_path = temp_dir.path();
 
@@ -188,6 +202,27 @@ mod tests {
             4,
             "Should return exactly 4 files for croquet challenge content"
         );
+    }
+
+    #[tokio::test]
+    async fn test_fetch_croquet_challenge_decompresses_gz_files_served_with_content_encoding() {
+        let mock_server = setup_mock_server(Some("gzip")).await;
+        let temp_dir = setup_test_dir().await;
+
+        let files = fetch_croquet_challenge(
+            temp_dir.path(),
+            "0x2A86C5466f088caEbf94e071a77669BAe371CD87",
+            "25811853076941608055270457512038717433705462539422789705262203111341130500780",
+            Some(&mock_server.uri()),
+        )
+        .await
+        .unwrap();
+
+        let data = files
+            .iter()
+            .find(|f| f.ends_with("bb0101_uncompressed.data"))
+            .expect("data file should be returned");
+        assert_eq!(fs::read_to_string(data).await.unwrap(), "fake data content");
     }
 
     #[tokio::test]
@@ -228,7 +263,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_fetch_croquet_challenge_at_range_boundaries() {
-        let mock_server = setup_mock_server().await;
+        let mock_server = setup_mock_server(None).await;
         let temp_dir = setup_test_dir().await;
         let output_path = temp_dir.path();
 

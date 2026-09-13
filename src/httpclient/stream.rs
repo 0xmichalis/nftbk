@@ -243,11 +243,7 @@ mod stream_gzip_http_to_file_tests {
 
         Mock::given(method("GET"))
             .and(path("/gz"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_bytes(gzipped)
-                    .insert_header("Content-Encoding", "gzip"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(gzipped))
             .mount(&mock_server)
             .await;
 
