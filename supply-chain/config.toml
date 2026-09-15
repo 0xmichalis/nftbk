@@ -27,9 +27,6 @@ url = "https://raw.githubusercontent.com/zcash/rust-ecosystem/main/supply-chain/
 
 [policy."rustls-webpki:0.101.7"]
 
-[policy."rustls-webpki:0.103.13@git:2879b2ce7a476181ac3050f73fe0835f04728e86"]
-audit-as-crates-io = true
-
 [[exemptions.aead]]
 version = "0.5.2"
 criteria = "safe-to-deploy"
@@ -1659,7 +1656,7 @@ version = "0.21.12"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls]]
-version = "0.23.35"
+version = "0.23.45"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-native-certs]]
@@ -1683,7 +1680,7 @@ version = "0.101.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-webpki]]
-version = "0.103.13@git:2879b2ce7a476181ac3050f73fe0835f04728e86"
+version = "0.103.15"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty-fork]]

@@ -82,15 +82,3 @@ rand_core = "0.6"
 tempfile = "3.8"
 tokio-test = "0.4"
 wiremock = "0.6"
-
-[patch.crates-io]
-# Pin rustls-webpki to a version patched against:
-# - RUSTSEC-2026-0049: CRLs not considered authoritative by Distribution Point
-# - RUSTSEC-2026-0098: name constraints for URI names incorrectly accepted
-# - RUSTSEC-2026-0099: name constraints accepted for wildcard names
-# - RUSTSEC-2026-0104: reachable panic in CRL parsing
-# Note: this only affects the 0.103.x copy. The transitive 0.101.7 copy
-# (pulled in by solana-pubsub-client -> tungstenite 0.20 -> rustls 0.21) is
-# ignored in .cargo/audit.toml since we can't upgrade that path without
-# forking the solana-client stack.
-rustls-webpki = { git = "https://github.com/rustls/webpki", tag = "v/0.103.13" }

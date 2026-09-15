@@ -69,6 +69,4 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/0xmichalis/tezos-rust-sdk",
-    # rustls-webpki security patch pinned via [patch.crates-io] in Cargo.toml.
-    "https://github.com/rustls/webpki",
 ]
