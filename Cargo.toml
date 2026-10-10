@@ -53,10 +53,10 @@ sha2 = "0.10"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "chrono", "json"] }
 subtle = "2"
 tar = "0.4"
-tezos-contract = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
-tezos-core = { git = "https://github.com/0xmichalis/tezos-rust-sdk", features = ["full_crypto"] }
-tezos-michelson = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
-tezos-rpc = { git = "https://github.com/0xmichalis/tezos-rust-sdk" }
+tezos-contract = { git = "https://github.com/0xmichalis/tezos-rust-sdk", rev = "3741420f575ae9d2ac7c687c4bb25bc393890e09" }
+tezos-core = { git = "https://github.com/0xmichalis/tezos-rust-sdk", rev = "3741420f575ae9d2ac7c687c4bb25bc393890e09", features = ["full_crypto"] }
+tezos-michelson = { git = "https://github.com/0xmichalis/tezos-rust-sdk", rev = "3741420f575ae9d2ac7c687c4bb25bc393890e09" }
+tezos-rpc = { git = "https://github.com/0xmichalis/tezos-rust-sdk", rev = "3741420f575ae9d2ac7c687c4bb25bc393890e09" }
 time = { version = "0.3", features = ["macros", "formatting"] }
 tokio = { version = "1.28", features = ["full"] }
 tokio-util = "0.7"
