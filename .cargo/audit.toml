@@ -21,4 +21,13 @@ ignore = [
     "RUSTSEC-2026-0099",
     # RUSTSEC-2026-0104: reachable panic in certificate revocation list parsing
     "RUSTSEC-2026-0104",
+    # rustls 0.21.12 (same x402-rs -> solana-pubsub-client -> tungstenite 0.20 chain).
+    # Fixed only in 0.23.46; the 0.23 copy is bumped. nftbk never opens the Solana
+    # pubsub websocket that uses 0.21 (facilitator calls go through reqwest/0.23).
+    # Dropping it means migrating to x402-rs 0.12 / x402-axum 0.8 (solana-client 3.x),
+    # which removed the `types`/`network` modules and dynamic pricing API we use.
+    # RUSTSEC-2026-0346: `Debug` impls for client session values expose TLS secrets
+    "RUSTSEC-2026-0346",
+    # RUSTSEC-2026-0349: unauthenticated ServerHello can downgrade key exchange
+    "RUSTSEC-2026-0349",
 ]
