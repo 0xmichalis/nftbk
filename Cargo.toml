@@ -71,7 +71,7 @@ utoipa-swagger-ui = { version = "9", features = ["axum"] }
 uuid = { version = "1.4", features = ["v4"] }
 x402-axum = { version = "0.6.2" }
 x402-rs = { version = "0.10" }
-zip = "0.6"
+zip = { version = "9", default-features = false, features = ["deflate-flate2", "time"] }
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
