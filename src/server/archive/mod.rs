@@ -9,7 +9,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
-use zip::write::FileOptions;
+use zip::write::SimpleFileOptions;
 
 use crate::server::hashing::compute_file_sha256;
 
@@ -80,7 +80,7 @@ fn zip_backup_zip(
     let zip_file =
         fs::File::create(zip_path_str).map_err(|e| format!("Failed to create zip: {e}"))?;
     let mut zip = zip::ZipWriter::new(zip_file);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
     if let Err(e) = add_dir_to_zip(&mut zip, out_path, out_path, options, shutdown_flag) {
         return Err(format!("Failed to zip dir: {e}"));
     }
@@ -109,7 +109,7 @@ fn add_dir_to_zip<W: Write + Seek>(
     zip: &mut zip::ZipWriter<W>,
     src_dir: &StdPath,
     base: &StdPath,
-    options: FileOptions,
+    options: SimpleFileOptions,
     shutdown_flag: Option<Arc<AtomicBool>>,
 ) -> io::Result<()> {
     for entry in fs::read_dir(src_dir)? {
@@ -390,5 +390,38 @@ mod archive_helpers_tests {
         // Test that no flag at all returns Ok
         let result = check_shutdown_signal(None);
         assert!(result.is_ok());
+    }
+}
+
+#[cfg(test)]
+mod zip_backup_tests {
+    use std::fs;
+    use std::io::{Cursor, Read};
+
+    use sha2::{Digest, Sha256};
+    use tempfile::TempDir;
+    use zip::{CompressionMethod, ZipArchive};
+
+    use super::zip_backup;
+
+    #[test]
+    fn zip_format_writes_deflated_nested_entries_and_returns_their_checksum() {
+        let src = TempDir::new().unwrap();
+        fs::create_dir(src.path().join("nested")).unwrap();
+        fs::write(src.path().join("nested/token.json"), "{\"name\":\"nft\"}").unwrap();
+        let out = TempDir::new().unwrap();
+        let zip_path = out.path().join("backup.zip");
+
+        let checksum = zip_backup(src.path(), &zip_path, "zip".to_string(), None).unwrap();
+
+        let bytes = fs::read(&zip_path).unwrap();
+        assert_eq!(checksum, format!("{:x}", Sha256::digest(&bytes)));
+        let mut archive = ZipArchive::new(Cursor::new(bytes)).unwrap();
+        assert!(archive.by_name("nested/").unwrap().is_dir());
+        let mut file = archive.by_name("nested/token.json").unwrap();
+        assert_eq!(file.compression(), CompressionMethod::Deflated);
+        let mut content = String::new();
+        file.read_to_string(&mut content).unwrap();
+        assert_eq!(content, "{\"name\":\"nft\"}");
     }
 }

@@ -30,4 +30,15 @@ ignore = [
     "RUSTSEC-2026-0346",
     # RUSTSEC-2026-0349: unauthenticated ServerHello can downgrade key exchange
     "RUSTSEC-2026-0349",
+    # zip 3.0.0 - needs >=9.0.0 (build-dependency of utoipa-swagger-ui 9; the
+    # latest, 10.0.1, still requires zip ^8.6). Our direct zip dependency is on 9.
+    # All three advisories are in ZipArchive::extract() / ZipStreamReader::extract().
+    # The build script never calls either: it walks entries itself to unpack the
+    # pinned Swagger UI release archive at build time, and zip is not in the binary.
+    # RUSTSEC-2026-0367: SUID/SGID bits preserved during extraction
+    "RUSTSEC-2026-0367",
+    # RUSTSEC-2026-0368: extracted symlinks may point outside the destination
+    "RUSTSEC-2026-0368",
+    # RUSTSEC-2026-0369: permissions applied through symlinks outside the destination
+    "RUSTSEC-2026-0369",
 ]

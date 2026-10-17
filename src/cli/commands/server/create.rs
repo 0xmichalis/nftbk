@@ -750,7 +750,7 @@ async fn download_backup(
                     Some(path) => output_path.join(path),
                     None => continue,
                 };
-                if file.name().ends_with('/') {
+                if file.is_dir() {
                     std::fs::create_dir_all(&outpath)
                         .context("Failed to create directory from zip")?;
                 } else {
@@ -1213,9 +1213,11 @@ mod tests {
             {
                 use std::io::Write;
                 let mut zip = zip::ZipWriter::new(std::io::Cursor::new(&mut zip_data));
-                zip.start_file("test.txt", zip::write::FileOptions::default())
+                zip.start_file("test.txt", zip::write::SimpleFileOptions::default())
                     .unwrap();
                 zip.write_all(b"Hello, World!").unwrap();
+                zip.add_directory("empty/", zip::write::SimpleFileOptions::default())
+                    .unwrap();
                 zip.finish().unwrap();
             }
 
@@ -1245,6 +1247,7 @@ mod tests {
             assert!(extracted_file.exists());
             let content = std::fs::read_to_string(&extracted_file).unwrap();
             assert_eq!(content, "Hello, World!");
+            assert!(output_path.join("empty").is_dir());
         }
 
         #[tokio::test]
