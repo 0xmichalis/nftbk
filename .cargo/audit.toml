@@ -1,3 +1,8 @@
+# GHSA-w9wp-h8wv-79jx (opentelemetry_sdk 0.30, from x402-rs) is not in RustSec.
+# nftbk does not initialize x402 telemetry or extract inbound baggage headers,
+# so the affected BaggagePropagator is unused. x402-rs 0.10 requires SDK 0.30;
+# there is no compatible upgrade to the patched SDK 0.32.1.
+
 [advisories]
 # Critical vulnerabilities - ignoring until dependencies are updated upstream
 ignore = [
@@ -8,8 +13,8 @@ ignore = [
     # rsa 0.9.8 - no fix available (from sqlx-mysql, but we use postgres)
     "RUSTSEC-2023-0071",
     # rustls-webpki 0.101.7 (from x402-rs -> solana-pubsub-client -> tungstenite 0.20
-    # / tokio-rustls 0.24 / rustls 0.21). We patch the 0.103.x copy up to 0.103.13
-    # via [patch.crates-io] in Cargo.toml, but the 0.101.7 copy is locked in by
+    # / tokio-rustls 0.24 / rustls 0.21). The 0.103.x copy is updated to 0.103.16
+    # in Cargo.lock, but the 0.101.7 copy is locked in by
     # rustls 0.21 / webpki-roots 0.24 (semver ^0.101). The solana-client 2.3.x
     # chain still requires those older versions, so there's no viable upgrade path
     # short of forking the solana-client / tungstenite stack.
@@ -30,15 +35,14 @@ ignore = [
     "RUSTSEC-2026-0346",
     # RUSTSEC-2026-0349: unauthenticated ServerHello can downgrade key exchange
     "RUSTSEC-2026-0349",
-    # zip 3.0.0 - needs >=9.0.0 (build-dependency of utoipa-swagger-ui 9; the
-    # latest, 10.0.1, still requires zip ^8.6). Our direct zip dependency is on 9.
-    # All three advisories are in ZipArchive::extract() / ZipStreamReader::extract().
-    # The build script never calls either: it walks entries itself to unpack the
-    # pinned Swagger UI release archive at build time, and zip is not in the binary.
-    # RUSTSEC-2026-0367: SUID/SGID bits preserved during extraction
-    "RUSTSEC-2026-0367",
-    # RUSTSEC-2026-0368: extracted symlinks may point outside the destination
-    "RUSTSEC-2026-0368",
-    # RUSTSEC-2026-0369: permissions applied through symlinks outside the destination
-    "RUSTSEC-2026-0369",
+    # Same unused Solana pubsub chain: rustls-webpki 0.101.7 and webpki-roots
+    # 0.24.0 / 0.25.4 have no compatible emSign distrust fixes. nftbk uses remote
+    # facilitators over reqwest, not the local Solana facilitator or its websocket.
+    # The active TLS stack uses rustls-webpki 0.103.16; webpki-roots 1.x and
+    # webpki-root-certs are updated to 1.0.10. Removing the old copies requires
+    # the breaking x402 migration described above.
+    # RUSTSEC-2026-0381: bundled roots trust distrusted emSign intermediates
+    "RUSTSEC-2026-0381",
+    # RUSTSEC-2026-0382: certificate verification accepts distrusted intermediates
+    "RUSTSEC-2026-0382",
 ]

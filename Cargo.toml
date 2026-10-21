@@ -1,6 +1,6 @@
 [package]
 name = "nftbk"
-version = "1.2.2"
+version = "1.2.3"
 edition = "2021"
 description = "A library, server, and CLI tool for backing up NFT metadata and content from EVM and Tezos NFT contracts."
 license = "Apache-2.0"
@@ -41,7 +41,7 @@ hex = "0.4.3"
 httpdate = "1.0"
 josekit = "0.10.3"
 libc = "0.2"
-lru = "0.12"
+lru = "0.18.2"
 prettytable = "0.10"
 rand = "0.8"
 regex = "1"
@@ -66,8 +66,8 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "time"] }
 url = "2.4"
 urlencoding = "2.1"
-utoipa = { version = "5", features = ["axum_extras", "chrono", "uuid"] }
-utoipa-swagger-ui = { version = "9", features = ["axum"] }
+utoipa = { version = "6", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-swagger-ui = { version = "10.0.2", features = ["axum"] }
 uuid = { version = "1.4", features = ["v4"] }
 x402-axum = { version = "0.6.2" }
 x402-rs = { version = "0.10" }

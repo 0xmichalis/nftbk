@@ -255,6 +255,10 @@ criteria = "safe-to-deploy"
 version = "3.0.11"
 criteria = "safe-to-deploy"
 
+[[exemptions.anyhow]]
+version = "1.0.103"
+criteria = "safe-to-deploy"
+
 [[exemptions.ark-bn254]]
 version = "0.4.0"
 criteria = "safe-to-deploy"
@@ -417,6 +421,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.base64]]
 version = "0.12.3"
+criteria = "safe-to-deploy"
+
+[[exemptions.base64]]
+version = "0.23.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.base64ct]]
@@ -864,7 +872,7 @@ version = "2.5.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.event-listener]]
-version = "5.4.1"
+version = "5.4.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.event-listener-strategy]]
@@ -993,6 +1001,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.hashbrown]]
 version = "0.14.5"
+criteria = "safe-to-deploy"
+
+[[exemptions.hashbrown]]
+version = "0.17.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.hashlink]]
@@ -1204,11 +1216,11 @@ version = "0.4.14"
 criteria = "safe-to-deploy"
 
 [[exemptions.lru]]
-version = "0.12.5"
+version = "0.13.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.lru]]
-version = "0.13.0"
+version = "0.18.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.lru-slab]]
@@ -1647,18 +1659,6 @@ criteria = "safe-to-deploy"
 version = "1.2.1"
 criteria = "safe-to-deploy"
 
-[[exemptions.rust-embed]]
-version = "8.9.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.rust-embed-impl]]
-version = "8.9.0"
-criteria = "safe-to-deploy"
-
-[[exemptions.rust-embed-utils]]
-version = "8.9.0"
-criteria = "safe-to-deploy"
-
 [[exemptions.rust_decimal]]
 version = "1.43.0"
 criteria = "safe-to-deploy"
@@ -1708,7 +1708,7 @@ version = "0.101.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.rustls-webpki]]
-version = "0.103.15"
+version = "0.103.16"
 criteria = "safe-to-deploy"
 
 [[exemptions.rusty-fork]]
@@ -2495,6 +2495,10 @@ criteria = "safe-to-deploy"
 version = "2.0.113"
 criteria = "safe-to-deploy"
 
+[[exemptions.syn]]
+version = "3.0.9"
+criteria = "safe-to-deploy"
+
 [[exemptions.syn-solidity]]
 version = "1.5.2"
 criteria = "safe-to-deploy"
@@ -2708,15 +2712,15 @@ version = "2.1.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.utoipa]]
-version = "5.4.0"
+version = "6.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.utoipa-gen]]
-version = "5.4.0"
+version = "6.0.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.utoipa-swagger-ui]]
-version = "9.0.2"
+version = "10.0.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.uuid]]
@@ -2784,7 +2788,7 @@ version = "1.1.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.webpki-root-certs]]
-version = "1.0.5"
+version = "1.0.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.webpki-roots]]
@@ -2796,7 +2800,7 @@ version = "0.26.11"
 criteria = "safe-to-deploy"
 
 [[exemptions.webpki-roots]]
-version = "1.0.5"
+version = "1.0.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.whoami]]
@@ -3025,10 +3029,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.zerovec]]
 version = "0.11.5"
-criteria = "safe-to-deploy"
-
-[[exemptions.zip]]
-version = "3.0.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.zip]]
