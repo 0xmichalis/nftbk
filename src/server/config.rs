@@ -348,13 +348,13 @@ bearer_token_env = "FILEBASE_TOKEN"
             assert!(config
                 .chain_config
                 .0
-                .get("ethereum")
+                .get("eip155:1")
                 .unwrap()
                 .contains("test-key"));
             assert!(config
                 .chain_config
                 .0
-                .get("polygon")
+                .get("eip155:137")
                 .unwrap()
                 .contains("test-key"));
 
@@ -435,7 +435,7 @@ network = "base-sepolia"
             let config = result.unwrap();
             assert!(config.x402_config.is_some());
             let x402_config = config.x402_config.unwrap();
-            use x402_rs::network::Network;
+            use crate::server::x402::Network;
             assert_eq!(x402_config.facilitator.network, Network::BaseSepolia);
             assert_eq!(x402_config.facilitator.url, "https://x402.org/facilitator");
         }

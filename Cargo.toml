@@ -1,6 +1,6 @@
 [package]
 name = "nftbk"
-version = "1.2.4"
+version = "2.0.0"
 edition = "2021"
 description = "A library, server, and CLI tool for backing up NFT metadata and content from EVM and Tezos NFT contracts."
 license = "Apache-2.0"
@@ -19,8 +19,8 @@ name = "nftbk-server"
 path = "src/bin/server.rs"
 
 [dependencies]
-alloy = { version = "1.2", features = ["full"] }
-alloy-contract = { version = "1.2" }
+alloy-primitives = { version = "1.5", features = ["serde"] }
+alloy-rpc-client = { version = "1.2", features = ["ws", "ipc"] }
 alloy-sol-types = "1.2"
 anyhow = "1.0"
 async-compression = { version = "0.4", features = ["tokio", "futures-io", "gzip"] }
@@ -38,14 +38,15 @@ fs2 = "0.4"
 futures = "0.3"
 futures-util = "0.3"
 hex = "0.4.3"
+hmac = "0.12.1"
 httpdate = "1.0"
 josekit = "0.10.3"
+k256 = { version = "0.14", features = ["ecdsa"] }
 libc = "0.2"
-lru = "0.18.2"
 prettytable = "0.10"
 rand = "0.8"
 regex = "1"
-reqwest = { version = "0.12", features = ["json", "stream"] }
+reqwest = { version = "0.12", features = ["json", "stream", "gzip"] }
 scraper = "0.17"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -61,7 +62,6 @@ time = { version = "0.3", features = ["macros", "formatting"] }
 tokio = { version = "1.53.3", features = ["full"] }
 tokio-util = "0.7"
 toml = "0.7"
-tower = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "time"] }
 url = "2.4"
@@ -69,16 +69,22 @@ urlencoding = "2.1"
 utoipa = { version = "6", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui = { version = "10.0.2", features = ["axum"] }
 uuid = { version = "1.4", features = ["v4"] }
-x402-axum = { version = "0.6.2" }
-x402-rs = { version = "0.10" }
+x402-axum = "=1.0.0"
+x402-types = "=1.0.0"
 zip = { version = "9", default-features = false, features = ["deflate-flate2", "time"] }
 
 [dev-dependencies]
 cargo-husky = { version = "1", default-features = false, features = ["user-hooks"] }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
-p256 = { version = "0.13", features = ["pkcs8"] }
-pkcs8 = "0.10"
+p256 = { version = "0.14", features = ["pkcs8"] }
 rand_core = "0.6"
 tempfile = "3.8"
 tokio-test = "0.4"
+tower = { version = "0.4", features = ["util"] }
 wiremock = "0.6"
+
+# Temporary upstream k256 0.14 migration until Alloy publishes it:
+# https://github.com/alloy-rs/core/pull/1147
+# Older primitives retain crypto-bigint 0.5 in Cargo.lock through optional k256.
+[patch.crates-io]
+alloy-primitives = { git = "https://github.com/alloy-rs/core", rev = "13dd0788817029241f11fd30f3b197da46e396fe" }

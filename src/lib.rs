@@ -1,6 +1,7 @@
 pub mod backup;
 pub mod chain;
 pub mod cli;
+pub mod client;
 pub mod consts;
 pub mod content;
 pub mod envvar;
@@ -8,6 +9,7 @@ mod errors;
 pub mod httpclient;
 pub mod ipfs;
 pub mod logging;
+pub mod model;
 pub mod prune;
 pub mod server;
 pub mod size;

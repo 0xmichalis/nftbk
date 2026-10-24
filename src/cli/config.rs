@@ -17,8 +17,18 @@ pub async fn load_token_config(path: &PathBuf) -> Result<TokenConfig> {
     let tokens_content = fs::read_to_string(path)
         .await
         .context("Failed to read tokens config file")?;
-    let token_config: TokenConfig =
+    let mut token_config: TokenConfig =
         toml::from_str(&tokens_content).context("Failed to parse tokens config file")?;
+    let mut normalized = std::collections::HashMap::new();
+    for (chain, tokens) in token_config.chains {
+        let chain = crate::chain::id::canonical_chain_id(&chain).to_string();
+        crate::chain::id::validate_chain_id(&chain)?;
+        normalized
+            .entry(chain)
+            .or_insert_with(Vec::new)
+            .extend(tokens);
+    }
+    token_config.chains = normalized;
     Ok(token_config)
 }
 
@@ -97,8 +107,8 @@ tezos = ["KT1ABC:1"]
 
             let config = result.unwrap();
             assert_eq!(config.chains.len(), 2);
-            assert_eq!(config.chains.get("ethereum").unwrap().len(), 2);
-            assert_eq!(config.chains.get("tezos").unwrap().len(), 1);
+            assert_eq!(config.chains.get("eip155:1").unwrap().len(), 2);
+            assert_eq!(config.chains.get("tezos:NetXdQprcVkpaWU").unwrap().len(), 1);
         }
 
         #[tokio::test]
@@ -158,11 +168,11 @@ tezos = "https://tezos.publicnode.com"
             let config = result.unwrap();
             assert_eq!(config.0.len(), 2);
             assert_eq!(
-                config.0.get("ethereum").unwrap(),
+                config.0.get("eip155:1").unwrap(),
                 "https://ethereum.publicnode.com"
             );
             assert_eq!(
-                config.0.get("tezos").unwrap(),
+                config.0.get("tezos:NetXdQprcVkpaWU").unwrap(),
                 "https://tezos.publicnode.com"
             );
         }
@@ -182,7 +192,7 @@ ethereum = "${TEST_RPC_URL}"
 
             let config = result.unwrap();
             assert_eq!(
-                config.0.get("ethereum").unwrap(),
+                config.0.get("eip155:1").unwrap(),
                 "https://test.example.com"
             );
 

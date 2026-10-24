@@ -51,6 +51,7 @@ pub struct PinataListPinsResponse {
 #[derive(Debug, Deserialize)]
 pub struct PinataListData {
     #[serde(default)]
+    #[serde(alias = "rows")]
     pub jobs: Option<Vec<PinataPinJob>>,
     #[serde(default, alias = "nextPageToken")]
     pub next_page_token: Option<String>,
@@ -77,6 +78,8 @@ impl PinataClient {
     pub fn new<T: Into<String>>(base_url: T, bearer_token: String) -> Self {
         let http = Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("Failed to create reqwest client - this should never fail");
         Self {
@@ -188,31 +191,31 @@ impl IpfsPinningProvider for PinataClient {
     async fn list_pins(&self) -> Result<Vec<PinResponse>> {
         let url = format!("{}/v3/files/public/pin_by_cid", self.base_url);
 
-        let res = self
-            .http
-            .get(&url)
-            .bearer_auth(&self.bearer_token)
-            .send()
-            .await
-            .context("GET /v3/files/public/pin_by_cid failed")?;
+        let mut pins = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut page_token = None;
+        loop {
+            let mut request = self.http.get(&url).bearer_auth(&self.bearer_token);
+            if let Some(token) = &page_token {
+                request = request.query(&[("pageToken", token)]);
+            }
+            let res = request
+                .send()
+                .await
+                .context("GET /v3/files/public/pin_by_cid failed")?;
 
-        let status_code = res.error_for_status_ref().map(|_| ()).err();
-        let text = res.text().await.context("reading response body")?;
+            let status_code = res.error_for_status_ref().map(|_| ()).err();
+            let text = res.text().await.context("reading response body")?;
 
-        if let Some(err) = status_code {
-            return Err(anyhow::anyhow!("{}: {}", err, text));
-        }
+            if let Some(err) = status_code {
+                return Err(anyhow::anyhow!("{}: {}", err, text));
+            }
 
-        let parsed: PinataListPinsResponse = serde_json::from_str(&text)
-            .with_context(|| format!("decoding PinataListPinsResponse: {text}"))?;
+            let parsed: PinataListPinsResponse = serde_json::from_str(&text)
+                .with_context(|| format!("decoding PinataListPinsResponse: {text}"))?;
 
-        // Convert all pins to unified PinResponse
-        let pins = parsed
-            .data
-            .jobs
-            .unwrap_or_default()
-            .into_iter()
-            .map(|job| {
+            // Convert all pins to unified PinResponse
+            pins.extend(parsed.data.jobs.unwrap_or_default().into_iter().map(|job| {
                 let status = Self::convert_status(&job.status, &job.cid);
                 PinResponse {
                     id: job.id,
@@ -226,10 +229,20 @@ impl IpfsPinningProvider for PinataClient {
                     },
                     size: None, // Pinata doesn't provide size information
                 }
-            })
-            .collect();
-
-        Ok(pins)
+            }));
+            let Some(next) = parsed
+                .data
+                .next_page_token
+                .filter(|token| !token.is_empty())
+            else {
+                return Ok(pins);
+            };
+            anyhow::ensure!(
+                seen.insert(next.clone()),
+                "Provider pagination did not advance"
+            );
+            page_token = Some(next);
+        }
     }
 
     // TODO: This is currently broken for me and Pinata are not smart enough to provide a timely fix.
@@ -531,7 +544,7 @@ mod tests {
                         "date_queued": "2024-01-02T00:00:00Z"
                     }
                 ],
-                "next_page_token": "next-token-123"
+                "next_page_token": null
             }
         });
 
@@ -808,5 +821,48 @@ mod tests {
         let result = client.delete_pin("pin-id-456").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("401"));
+    }
+}
+
+#[cfg(test)]
+mod list_pins_tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::{
+        matchers::{method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    #[tokio::test]
+    async fn follows_queue_page_tokens() {
+        let server = MockServer::start().await;
+        let job = |id: &str| json!({"id":id,"cid":"bafy-test","status":"prechecking","keyvalues":{"nftbk_pin_id":"local"}});
+        Mock::given(method("GET"))
+            .and(path("/v3/files/public/pin_by_cid"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    json!({"data":{"rows":[job("first")],"next_page_token":"next"}}),
+                ),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/v3/files/public/pin_by_cid"))
+            .and(query_param("pageToken", "next"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(json!({"data":{"jobs":[job("second")],"nextPageToken":null}})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = PinataClient::new(server.uri(), "test-token".into());
+        let pins = client.list_pins().await.unwrap();
+        assert_eq!(
+            pins.iter().map(|pin| pin.id.as_str()).collect::<Vec<_>>(),
+            vec!["first", "second"]
+        );
     }
 }

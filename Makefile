@@ -96,8 +96,7 @@ run-cli-server-test:
 	--bin nftbk-cli \
 	-- server create \
 	--tokens-config-path config_tokens_test.toml \
-	--output-path nft_backup_test \
-	--force true
+	--output-path nft_backup_test
 
 .PHONY: run
 run: start-db run-server

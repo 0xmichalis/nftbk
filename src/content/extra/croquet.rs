@@ -57,7 +57,7 @@ async fn fetch_croquet_challenge_content_with_base_url(
 
     // Create Build directory
     let build_dir = output_path
-        .join("ethereum")
+        .join("eip155:1")
         .join(contract)
         .join(token_id)
         .join("Build");

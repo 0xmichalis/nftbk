@@ -38,6 +38,16 @@ impl ChainConfig {
     /// Resolves environment variable references in the form ${VAR_NAME} in all values.
     /// Returns an error if any referenced environment variable is not set.
     pub fn resolve_env_vars(&mut self) -> Result<()> {
+        let mut normalized = HashMap::new();
+        for (chain, endpoint) in self.0.drain() {
+            let canonical = crate::chain::id::canonical_chain_id(&chain).to_string();
+            crate::chain::id::validate_chain_id(&canonical)
+                .with_context(|| format!("Invalid chain configuration key: {chain}"))?;
+            if normalized.insert(canonical, endpoint).is_some() {
+                anyhow::bail!("Duplicate chain configuration after CAIP-2 normalization");
+            }
+        }
+        self.0 = normalized;
         for (key, value) in self.0.iter_mut() {
             let resolved = resolve_env_placeholders(value).with_context(|| {
                 format!("Failed resolving env vars referenced in '{value}' for chain '{key}'")

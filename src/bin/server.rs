@@ -38,14 +38,6 @@ struct Args {
     #[arg(long, default_value_t = 3)]
     pruner_retention_days: u64,
 
-    /// Pruner interval in seconds
-    #[arg(long, default_value_t = 3600)]
-    pruner_interval_seconds: u64,
-
-    /// Pruner regex pattern for file names to prune
-    #[arg(long, default_value = "^nftbk-")]
-    pruner_pattern: String,
-
     /// Pin monitor interval in seconds
     #[arg(long, default_value_t = 120)]
     pin_monitor_interval_seconds: u64,
@@ -54,24 +46,13 @@ struct Args {
     #[arg(long, default_value_t = 4)]
     backup_parallelism: usize,
 
-    /// Maximum number of backup tasks to queue before blocking
+    /// Maximum number of queued operations to admit
     #[arg(long, default_value_t = 10000)]
     backup_queue_size: usize,
 
     /// Disable colored log output. NO_COLOR and FORCE_COLOR environment variables take precedence.
     #[arg(long, default_value_t = false, action = clap::ArgAction::Set)]
     no_color: bool,
-
-    /// Maximum number of quotes to cache in memory for dynamic pricing.
-    /// When the cache is full, the least recently used quotes are evicted.
-    /// This cache stores quote IDs (UUID string, ~36 bytes) and their associated data
-    /// (price string ~10 bytes + task_id SHA256 hex string ~64 bytes) for x402 dynamic pricing.
-    /// Each entry uses approximately ~220 bytes including overhead, so:
-    /// - 100 entries ≈ 22 KB
-    /// - 1000 entries ≈ 220 KB (default)
-    /// - 10000 entries ≈ 2.2 MB
-    #[arg(long, default_value_t = 1000)]
-    quote_cache_size: usize,
 
     /// Maximum number of retries for HTTP content requests (GET/HEAD) before failing the task.
     #[arg(
@@ -124,7 +105,6 @@ async fn main() {
         unsafe_skip_checksum_check: args.unsafe_skip_checksum_check,
         auth_token,
         pruner_retention_days: args.pruner_retention_days,
-        pruner_interval_seconds: args.pruner_interval_seconds,
         pin_monitor_interval_seconds: args.pin_monitor_interval_seconds,
         backup_parallelism: args.backup_parallelism,
         backup_queue_size: args.backup_queue_size,
@@ -132,7 +112,6 @@ async fn main() {
         jwt_credentials,
         x402_config,
         ipfs_pinning_configs,
-        quote_cache_size: args.quote_cache_size,
         max_content_request_retries: args.max_content_request_retries,
     };
 

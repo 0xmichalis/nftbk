@@ -1,21 +1,42 @@
 use std::str::FromStr;
 
-use alloy::primitives::Address as EvmAddress;
+use alloy_primitives::Address as EvmAddress;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 use url::Url;
-use x402_axum::{price::PriceTag, IntoPriceTag, X402Middleware};
-use x402_rs::network::{Network, USDCDeployment};
-use x402_rs::types::{MixedAddress, TokenAmount};
+use x402_types::proto::v1::PriceTag;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Network {
+    Base,
+    BaseSepolia,
+}
+
+impl Network {
+    pub fn chain_id(self) -> &'static str {
+        match self {
+            Self::Base => "eip155:8453",
+            Self::BaseSepolia => "eip155:84532",
+        }
+    }
+}
+
+impl std::fmt::Display for Network {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Base => "base",
+            Self::BaseSepolia => "base-sepolia",
+        })
+    }
+}
 
 use crate::server::x402::coinbase_facilitator::CoinbaseFacilitator;
 use crate::server::x402::either_facilitator::EitherFacilitator;
-pub use dynamic_price::create_dynamic_price_callback;
 pub use dynamic_price::parse_usdc_price_to_wei;
 
 mod coinbase_facilitator;
 mod dynamic_price;
-mod either_facilitator;
+pub mod either_facilitator;
 mod error_handling;
 mod shared_facilitator;
 
@@ -67,7 +88,7 @@ pub struct X402FacilitatorConfig {
 pub struct X402Config {
     pub asset_symbol: String,
     pub base_url: String,
-    pub recipient: MixedAddress,
+    pub recipient: EvmAddress,
     pub max_timeout_seconds: u64,
     pub facilitator: X402FacilitatorConfig,
     pub pricing: PricingConfig,
@@ -108,7 +129,7 @@ impl X402Config {
         }
         let recipient_evm = EvmAddress::from_str(&raw.recipient_address)
             .map_err(|_| anyhow::anyhow!("invalid EVM recipient address"))?;
-        let recipient = MixedAddress::from(recipient_evm);
+        let recipient = recipient_evm;
         if raw.facilitator.url.is_empty() {
             return Err(anyhow::anyhow!("facilitator.url cannot be empty"));
         }
@@ -116,14 +137,6 @@ impl X402Config {
             return Err(anyhow::anyhow!("facilitator.network cannot be empty"));
         }
         let network = parse_network(&raw.facilitator.network)?;
-        match network {
-            Network::Base | Network::BaseSepolia => {}
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "only Base and Base Sepolia are supported for now"
-                ))
-            }
-        }
 
         let pricing = PricingConfig::from_raw(&raw.pricing)?;
 
@@ -142,18 +155,15 @@ impl X402Config {
         })
     }
 
-    /// Build a preconfigured X402 middleware using this configuration.
-    /// Sets base_url, description, mime type and max timeout.
-    pub fn to_middleware(&self) -> anyhow::Result<X402Middleware<EitherFacilitator>> {
-        let base_url = Url::parse(self.base_url.as_str())?;
-
+    pub fn facilitator_client(&self) -> anyhow::Result<EitherFacilitator> {
         // Choose facilitator: simple client if no API creds, dynamic otherwise
         let facilitator = if self.facilitator.api_key_id_env.is_none()
             || self.facilitator.api_key_secret_env.is_none()
         {
             let client = x402_axum::facilitator_client::FacilitatorClient::try_from(
                 self.facilitator.url.as_str(),
-            )?;
+            )?
+            .with_timeout(std::time::Duration::from_secs(15));
             EitherFacilitator::from(client)
         } else {
             info!("x402 Coinbase facilitator authentication enabled");
@@ -165,50 +175,25 @@ impl X402Config {
             EitherFacilitator::from(client)
         };
 
-        // Use a default placeholder price since dynamic pricing will override it per request
-        let default_price = "0.01";
-        let default_price_wei =
-            parse_usdc_price_to_wei(default_price).map_err(|e| anyhow::anyhow!(e))?;
-        let price_tag = self
-            .usdc_price_tag_for_token_amount(default_price_wei)
-            .map_err(|e| anyhow::anyhow!("Failed to build initial price tag: {}", e))?;
-
-        let middleware = X402Middleware::new(facilitator)
-            .with_base_url(base_url)
-            .with_mime_type("application/json")
-            .with_max_timeout_seconds(self.max_timeout_seconds)
-            .with_price_tag(price_tag);
-        Ok(middleware)
-    }
-
-    /// Prepare a USDC price tag builder with the configured network and recipient.
-    /// Call `.amount("...")?` on the returned builder and pass to `with_price_tag`.
-    fn usdc_price_tag_builder(
-        &self,
-    ) -> anyhow::Result<x402_axum::price::PriceTagBuilder<(), MixedAddress>> {
-        // Validate symbol
-        if self.asset_symbol.to_uppercase() != "USDC" {
-            return Err(anyhow::anyhow!("only USDC is supported for now"));
-        }
-        let network = self.facilitator.network;
-        match network {
-            Network::Base | Network::BaseSepolia => {}
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "only Base and Base Sepolia are supported for now"
-                ))
-            }
-        }
-        let builder = USDCDeployment::by_network(network).pay_to(self.recipient.clone());
-        Ok(builder)
+        Ok(facilitator)
     }
 
     /// Build a ready PriceTag for a given token-denominated amount (wei).
     pub fn usdc_price_tag_for_token_amount(&self, amount_wei: u64) -> anyhow::Result<PriceTag> {
-        let builder = self.usdc_price_tag_builder()?;
-        let builder = builder.token_amount(TokenAmount::from(amount_wei));
-        let price_tag = builder.build().map_err(|e| anyhow::anyhow!(e))?;
-        Ok(price_tag)
+        let (asset, name) = match self.facilitator.network {
+            Network::Base => ("0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", "USD Coin"),
+            Network::BaseSepolia => ("0x036CbD53842c5426634e7929541eC2318f3dCF7e", "USDC"),
+        };
+        Ok(PriceTag {
+            scheme: "exact".into(),
+            pay_to: self.recipient.to_string(),
+            asset: asset.into(),
+            network: self.facilitator.network.to_string(),
+            amount: amount_wei.to_string(),
+            max_timeout_seconds: self.max_timeout_seconds,
+            extra: Some(serde_json::json!({"name":name,"version":"2"})),
+            enricher: None,
+        })
     }
 }
 
@@ -244,8 +229,8 @@ fn normalize_base_url(input: &str) -> anyhow::Result<String> {
 
 fn parse_network(input: &str) -> anyhow::Result<Network> {
     match input {
-        "base-sepolia" => Ok(Network::BaseSepolia),
-        "base" => Ok(Network::Base),
+        "eip155:84532" | "base-sepolia" => Ok(Network::BaseSepolia),
+        "eip155:8453" | "base" => Ok(Network::Base),
         other => Err(anyhow::anyhow!("unsupported network: {}", other)),
     }
 }
@@ -677,9 +662,8 @@ mod tests {
         let config = X402Config::compile(raw).expect("should compile successfully");
         assert_eq!(config.asset_symbol, "USDC");
         assert_eq!(config.base_url, "http://localhost:8080/");
-        let expected_recipient = MixedAddress::from(
-            EvmAddress::from_str("0x1234567890123456789012345678901234567890").unwrap(),
-        );
+        let expected_recipient =
+            EvmAddress::from_str("0x1234567890123456789012345678901234567890").unwrap();
         assert_eq!(config.recipient, expected_recipient);
         assert_eq!(config.max_timeout_seconds, 300);
         assert_eq!(

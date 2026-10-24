@@ -1,48 +1,5 @@
-# GHSA-w9wp-h8wv-79jx (opentelemetry_sdk 0.30, from x402-rs) is not in RustSec.
-# nftbk does not initialize x402 telemetry or extract inbound baggage headers,
-# so the affected BaggagePropagator is unused. x402-rs 0.10 requires SDK 0.30;
-# there is no compatible upgrade to the patched SDK 0.32.1.
-
 [advisories]
-# Critical vulnerabilities - ignoring until dependencies are updated upstream
 ignore = [
-    # curve25519-dalek 3.2.0 - needs >=4.1.3 (from the x402 Solana dependencies)
-    "RUSTSEC-2024-0344",
-    # ed25519-dalek 1.0.1 - needs >=2 (from the x402 Solana dependencies)
-    "RUSTSEC-2022-0093",
     # rsa 0.9.8 - no fix available (from sqlx-mysql, but we use postgres)
     "RUSTSEC-2023-0071",
-    # rustls-webpki 0.101.7 (from x402-rs -> solana-pubsub-client -> tungstenite 0.20
-    # / tokio-rustls 0.24 / rustls 0.21). The 0.103.x copy is updated to 0.103.16
-    # in Cargo.lock, but the 0.101.7 copy is locked in by
-    # rustls 0.21 / webpki-roots 0.24 (semver ^0.101). The solana-client 2.3.x
-    # chain still requires those older versions, so there's no viable upgrade path
-    # short of forking the solana-client / tungstenite stack.
-    # RUSTSEC-2026-0049: CRLs not considered authoritative by Distribution Point
-    "RUSTSEC-2026-0049",
-    # RUSTSEC-2026-0098: name constraints for URI names incorrectly accepted
-    "RUSTSEC-2026-0098",
-    # RUSTSEC-2026-0099: name constraints accepted for certificates asserting a wildcard name
-    "RUSTSEC-2026-0099",
-    # RUSTSEC-2026-0104: reachable panic in certificate revocation list parsing
-    "RUSTSEC-2026-0104",
-    # rustls 0.21.12 (same x402-rs -> solana-pubsub-client -> tungstenite 0.20 chain).
-    # Fixed only in 0.23.46; the 0.23 copy is bumped. nftbk never opens the Solana
-    # pubsub websocket that uses 0.21 (facilitator calls go through reqwest/0.23).
-    # Dropping it means migrating to x402-rs 0.12 / x402-axum 0.8 (solana-client 3.x),
-    # which removed the `types`/`network` modules and dynamic pricing API we use.
-    # RUSTSEC-2026-0346: `Debug` impls for client session values expose TLS secrets
-    "RUSTSEC-2026-0346",
-    # RUSTSEC-2026-0349: unauthenticated ServerHello can downgrade key exchange
-    "RUSTSEC-2026-0349",
-    # Same unused Solana pubsub chain: rustls-webpki 0.101.7 and webpki-roots
-    # 0.24.0 / 0.25.4 have no compatible emSign distrust fixes. nftbk uses remote
-    # facilitators over reqwest, not the local Solana facilitator or its websocket.
-    # The active TLS stack uses rustls-webpki 0.103.16; webpki-roots 1.x and
-    # webpki-root-certs are updated to 1.0.10. Removing the old copies requires
-    # the breaking x402 migration described above.
-    # RUSTSEC-2026-0381: bundled roots trust distrusted emSign intermediates
-    "RUSTSEC-2026-0381",
-    # RUSTSEC-2026-0382: certificate verification accepts distrusted intermediates
-    "RUSTSEC-2026-0382",
 ]

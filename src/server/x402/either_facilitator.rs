@@ -1,7 +1,7 @@
 use x402_axum::facilitator_client::FacilitatorClient;
-use x402_rs::facilitator::Facilitator;
-use x402_rs::types::{
-    SettleRequest, SettleResponse, SupportedPaymentKindsResponse, VerifyRequest, VerifyResponse,
+use x402_types::facilitator::Facilitator;
+use x402_types::proto::{
+    SettleRequest, SettleResponse, SupportedResponse, VerifyRequest, VerifyResponse,
 };
 
 use super::coinbase_facilitator::CoinbaseFacilitator;
@@ -58,8 +58,7 @@ impl Facilitator for EitherFacilitator {
 
     fn supported(
         &self,
-    ) -> impl std::future::Future<Output = Result<SupportedPaymentKindsResponse, Self::Error>> + Send
-    {
+    ) -> impl std::future::Future<Output = Result<SupportedResponse, Self::Error>> + Send {
         let this = self.clone();
         async move {
             match this {

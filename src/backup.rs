@@ -67,40 +67,41 @@ impl BackupConfig {
                 let tokens = ContractTokenId::parse_tokens(tokens, chain_name);
                 nft_count += tokens.len();
 
-                let (archive_out, ipfs_out) = if chain_name == "tezos" {
-                    let processor = Arc::new(TezosChainProcessor::new(
-                        rpc_url,
-                        cfg.storage_config.clone(),
-                        cfg.process_config.max_content_request_retries,
-                    )?);
-                    let process_config = cfg.process_config.clone();
-                    process_nfts(
-                        processor,
-                        tokens,
-                        process_config,
-                        |metadata| metadata.artifact_uri.as_deref(),
-                        cfg.task_id.clone(),
-                    )
-                    .await?
-                } else {
-                    let processor = Arc::new(
-                        EvmChainProcessor::new(
+                let (archive_out, ipfs_out) =
+                    if crate::chain::id::canonical_chain_id(chain_name).starts_with("tezos:") {
+                        let processor = Arc::new(TezosChainProcessor::new(
                             rpc_url,
                             cfg.storage_config.clone(),
                             cfg.process_config.max_content_request_retries,
+                        )?);
+                        let process_config = cfg.process_config.clone();
+                        process_nfts(
+                            processor,
+                            tokens,
+                            process_config,
+                            |metadata| metadata.artifact_uri.as_deref(),
+                            cfg.task_id.clone(),
                         )
-                        .await?,
-                    );
-                    let process_config = cfg.process_config.clone();
-                    process_nfts(
-                        processor,
-                        tokens,
-                        process_config,
-                        |_metadata| None,
-                        cfg.task_id.clone(),
-                    )
-                    .await?
-                };
+                        .await?
+                    } else {
+                        let processor = Arc::new(
+                            EvmChainProcessor::new(
+                                rpc_url,
+                                cfg.storage_config.clone(),
+                                cfg.process_config.max_content_request_retries,
+                            )
+                            .await?,
+                        );
+                        let process_config = cfg.process_config.clone();
+                        process_nfts(
+                            processor,
+                            tokens,
+                            process_config,
+                            |_metadata| None,
+                            cfg.task_id.clone(),
+                        )
+                        .await?
+                    };
                 all_files.extend(archive_out.files);
                 all_archive_errors.extend(archive_out.errors);
                 all_ipfs_errors.extend(ipfs_out.errors);
@@ -183,30 +184,31 @@ impl BackupConfig {
                 let tokens = ContractTokenId::parse_tokens(tokens, chain_name);
                 nft_count += tokens.len();
 
-                let chain_total = if chain_name == "tezos" {
-                    let processor = Arc::new(TezosChainProcessor::new(
-                        rpc_url,
-                        cfg.storage_config.clone(),
-                        cfg.process_config.max_content_request_retries,
-                    )?);
-                    size_nfts(processor, tokens, cfg.process_config.clone(), |metadata| {
-                        metadata.artifact_uri.as_deref()
-                    })
-                    .await?
-                } else {
-                    let processor = Arc::new(
-                        EvmChainProcessor::new(
+                let chain_total =
+                    if crate::chain::id::canonical_chain_id(chain_name).starts_with("tezos:") {
+                        let processor = Arc::new(TezosChainProcessor::new(
                             rpc_url,
                             cfg.storage_config.clone(),
                             cfg.process_config.max_content_request_retries,
-                        )
-                        .await?,
-                    );
-                    size_nfts(processor, tokens, cfg.process_config.clone(), |_metadata| {
-                        None
-                    })
-                    .await?
-                };
+                        )?);
+                        size_nfts(processor, tokens, cfg.process_config.clone(), |metadata| {
+                            metadata.artifact_uri.as_deref()
+                        })
+                        .await?
+                    } else {
+                        let processor = Arc::new(
+                            EvmChainProcessor::new(
+                                rpc_url,
+                                cfg.storage_config.clone(),
+                                cfg.process_config.max_content_request_retries,
+                            )
+                            .await?,
+                        );
+                        size_nfts(processor, tokens, cfg.process_config.clone(), |_metadata| {
+                            None
+                        })
+                        .await?
+                    };
 
                 total_size = total_size
                     .checked_add(chain_total)
