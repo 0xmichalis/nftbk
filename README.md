@@ -42,8 +42,10 @@ allow large NFT media while bounding memory, disk use and stalled requests.
 Failed downloads remove partial files. Larger artwork needs another backup
 method.
 
-Backup error messages omit HTTP(S) and WebSocket endpoint URLs, including
-error logs stored by earlier versions, to keep RPC credentials private.
+Backup error messages omit HTTP(S) and WebSocket endpoint URLs to keep RPC
+credentials private. API responses also redact URLs in error logs stored by
+earlier versions. Those stored rows are not rewritten; remove credentials
+from them manually if needed.
 
 ### Generate config from gallery.so
 

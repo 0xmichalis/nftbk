@@ -4,15 +4,55 @@ use regex::Regex;
 
 pub(crate) fn redact_urls(message: &str) -> String {
     static URL: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?i)\b(?:https?|wss?)://[^\s<>"']+"#)
+        Regex::new(r#"(?i)'?\b(?:https?|wss?)://[^\s<>"]+"#)
             .expect("Static URL pattern should always be valid")
     });
-    URL.replace_all(message, "[redacted URL]").into_owned()
+    URL.replace_all(message, |captures: &regex::Captures<'_>| {
+        let url = &captures[0];
+        match (url.starts_with('\''), url.ends_with('\'')) {
+            (true, true) => "'[redacted URL]'",
+            (true, false) => "'[redacted URL]",
+            (false, _) => "[redacted URL]",
+        }
+    })
+    .into_owned()
 }
 
 #[cfg(test)]
 mod redact_urls_tests {
     use super::*;
+
+    #[test]
+    fn removes_apostrophes_inside_urls_and_preserves_outer_quotes() {
+        for (message, expected) in [
+            (
+                "RPC https://user:'not-a-real-key@example.invalid/",
+                "RPC [redacted URL]",
+            ),
+            (
+                "RPC https://example.invalid/not'a-real-key",
+                "RPC [redacted URL]",
+            ),
+            (
+                "RPC https://example.invalid/not'a-real-key'",
+                "RPC [redacted URL]",
+            ),
+            (
+                "RPC 'https://user:'not-a-real-key@example.invalid/'",
+                "RPC '[redacted URL]'",
+            ),
+            (
+                "RPC 'https://example.invalid/not'a-real-key",
+                "RPC '[redacted URL]",
+            ),
+            (
+                "RPC \"https://user:'not-a-real-key@example.invalid/\"",
+                "RPC \"[redacted URL]\"",
+            ),
+        ] {
+            assert_eq!(redact_urls(message), expected);
+        }
+    }
 
     #[test]
     fn removes_endpoint_credentials_paths_and_queries() {

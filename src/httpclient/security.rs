@@ -335,7 +335,7 @@ mod client_builder_tests {
 
     #[tokio::test(start_paused = true)]
     async fn bounds_dns_resolution_by_connect_timeout() {
-        let url = "http://never-resolves.invalid/";
+        let url = "https://never-resolves.invalid/";
         let client = client_builder(url)
             .unwrap()
             .dns_resolver(Arc::new(PendingResolver))
@@ -351,7 +351,7 @@ mod client_builder_tests {
 
     #[tokio::test(start_paused = true)]
     async fn bounds_the_total_request_time() {
-        let url = "http://never-resolves.invalid/";
+        let url = "https://never-resolves.invalid/";
         let client = client_builder(url)
             .unwrap()
             .dns_resolver(Arc::new(PendingResolver))

@@ -397,14 +397,19 @@ pub async fn run_backup_task(state: AppState, task: BackupTask) {
 mod persist_error_logs_tests {
     use super::persist_non_fatal_error_logs;
     use crate::server::database::r#trait::MockDatabase;
+    use std::time::Duration;
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
 
     #[tokio::test]
     async fn removes_rpc_keys_from_all_persisted_error_log_scopes() {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(60)))
+            .mount(&server)
+            .await;
         let error = reqwest::Client::new()
-            .get(format!("http://{address}/v2/not-a-real-key"))
+            .get(format!("{}/v2/not-a-real-key", server.uri()))
+            .timeout(Duration::from_millis(100))
             .send()
             .await
             .unwrap_err()
