@@ -16,6 +16,7 @@ use crate::url::{get_data_url, is_data_url, resolve_url_with_gateways};
 
 pub mod fetch;
 pub mod retry;
+pub(crate) mod security;
 pub mod stream;
 
 #[derive(Clone, Debug)]

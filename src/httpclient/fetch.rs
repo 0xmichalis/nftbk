@@ -9,9 +9,7 @@ async fn send_request(
     url: &str,
     bearer_token: Option<String>,
 ) -> anyhow::Result<reqwest::Response> {
-    let client = reqwest::Client::builder()
-        .user_agent(crate::USER_AGENT)
-        .build()?;
+    let client = super::security::client_builder(url)?.build()?;
 
     let mut req = client.request(method, url);
     if let Some(token) = bearer_token {
@@ -752,6 +750,47 @@ mod fetch_url_tests {
         matchers::{header, method, path},
         Mock, MockServer, ResponseTemplate,
     };
+
+    #[tokio::test]
+    async fn rejects_redirect_to_loopback() {
+        let origin = MockServer::start().await;
+        let internal = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("internal secret"))
+            .mount(&internal)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(302).insert_header("Location", internal.uri()))
+            .mount(&origin)
+            .await;
+
+        let result = super::fetch_url(&origin.uri(), None).await;
+
+        assert!(result.is_err());
+        assert_eq!(internal.received_requests().await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn rejects_redirect_to_a_private_hostname() {
+        let origin = MockServer::start().await;
+        let internal = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("internal secret"))
+            .mount(&internal)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", internal.uri().replace("127.0.0.1", "localhost")),
+            )
+            .mount(&origin)
+            .await;
+
+        let result = super::fetch_url(&origin.uri(), None).await;
+
+        assert!(result.is_err());
+        assert_eq!(internal.received_requests().await.unwrap().len(), 0);
+    }
 
     #[tokio::test]
     async fn test_fetch_url_without_bearer_token() {
