@@ -7,10 +7,7 @@ use x402_rs::types::{
     SettleRequest, SettleResponse, SupportedPaymentKindsResponse, VerifyRequest, VerifyResponse,
 };
 
-use super::error_handling::{
-    handle_result, tolerant_parse_supported, tolerant_recover_payment_required,
-    tolerant_recover_verify,
-};
+use super::error_handling::{handle_result, tolerant_parse_supported, tolerant_recover_verify};
 use crate::server::auth::jwt::generate_cdp_jwt;
 
 #[derive(Clone, Debug)]
@@ -26,8 +23,9 @@ impl CoinbaseFacilitator {
         api_key_id_env: Option<&str>,
         api_key_secret_env: Option<&str>,
     ) -> Self {
-        let client =
-            FacilitatorClient::try_from(facilitator_url).expect("valid facilitator base url");
+        let client = FacilitatorClient::try_from(facilitator_url)
+            .expect("valid facilitator base url")
+            .with_timeout(std::time::Duration::from_secs(15));
         let api_key_id = api_key_id_env.and_then(|k| std::env::var(k).ok());
         let api_key_secret = api_key_secret_env.and_then(|k| std::env::var(k).ok());
         Self {
@@ -94,29 +92,10 @@ impl Facilitator for CoinbaseFacilitator {
         &self,
         request: &SettleRequest,
     ) -> impl Future<Output = Result<SettleResponse, Self::Error>> + Send {
-        let this = self.clone();
-        let req = request.clone();
-        async move {
-            let settle_path = this.base_client.settle_url().path();
-            let client = this.client_with_route_auth("POST", settle_path);
-            handle_result(
-                &client,
-                "POST /settle",
-                {
-                    let base_client = this.base_client.clone();
-                    let req = req.clone();
-                    move || {
-                        reqwest::Client::new()
-                            .post(base_client.settle_url().clone())
-                            .json(&req)
-                    }
-                },
-                |body| tolerant_recover_payment_required::<SettleResponse>("POST /settle", body),
-                client.settle(&req).await,
-                3, // Default max retries
-            )
-            .await
-        }
+        let client = self.client_with_route_auth("POST", self.base_client.settle_url().path());
+        let request = request.clone();
+        // Settlement retries cannot distinguish a lost response from an executed transfer.
+        async move { client.settle(&request).await }
     }
 
     fn supported(

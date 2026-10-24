@@ -1,805 +1,200 @@
 use async_trait::async_trait;
-use serde_json;
-use sqlx;
+use serde::{Deserialize, Serialize};
 
-use crate::server::database::{
-    ArchiveStatus, BackupTask, ExpiredBackup, IpfsStatus, PinRow, TokenWithPins,
-};
-use crate::types::TokenPinMapping;
+use crate::server::model::*;
 
-/// Unified database trait that consolidates all database operations
-#[async_trait]
-pub trait Database {
-    // Backup task operations
-    #[allow(clippy::too_many_arguments)]
-    async fn insert_backup_task(
-        &self,
-        task_id: &str,
-        requestor: &str,
-        nft_count: i32,
-        tokens: &serde_json::Value,
-        storage_mode: &str,
-        archive_format: Option<&str>,
-        retention_days: Option<u64>,
-    ) -> Result<(), sqlx::Error>;
+pub type Result<T> = std::result::Result<T, DatabaseError>;
 
-    async fn get_backup_task(&self, task_id: &str) -> Result<Option<BackupTask>, sqlx::Error>;
+#[derive(Debug)]
+pub enum DatabaseError {
+    NotFound,
+    Conflict(String),
+    Invalid(String),
+    LostLease,
+    Capacity,
+    Storage(sqlx::Error),
+}
+impl From<sqlx::Error> for DatabaseError {
+    fn from(error: sqlx::Error) -> Self {
+        Self::Storage(error)
+    }
+}
+impl std::fmt::Display for DatabaseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NotFound => write!(f, "Resource not found"),
+            Self::Conflict(s) | Self::Invalid(s) => f.write_str(s),
+            Self::Capacity => write!(f, "Work queue is at capacity; retry later"),
+            Self::LostLease => write!(f, "Operation lease lost"),
+            Self::Storage(e) => e.fmt(f),
+        }
+    }
+}
+impl std::error::Error for DatabaseError {}
 
-    /// Fetch a backup task and a paginated slice of its tokens
-    async fn get_backup_task_with_tokens(
-        &self,
-        task_id: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Option<(BackupTask, u32)>, sqlx::Error>;
-
-    async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error>;
-
-    async fn get_incomplete_backup_tasks(&self) -> Result<Vec<BackupTask>, sqlx::Error>;
-
-    async fn list_requestor_backup_tasks_paginated(
-        &self,
-        requestor: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<BackupTask>, u32), sqlx::Error>;
-
-    async fn list_unprocessed_expired_backups(&self) -> Result<Vec<ExpiredBackup>, sqlx::Error>;
-
-    // Backup task status and error operations
-    async fn clear_backup_errors(&self, task_id: &str, scope: &str) -> Result<(), sqlx::Error>;
-
-    async fn set_backup_error(&self, task_id: &str, error: &str) -> Result<(), sqlx::Error>;
-
-    async fn set_error_logs(
-        &self,
-        task_id: &str,
-        archive_error_log: Option<&str>,
-        ipfs_error_log: Option<&str>,
-    ) -> Result<(), sqlx::Error>;
-
-    async fn update_archive_request_error_log(
-        &self,
-        task_id: &str,
-        error_log: &str,
-    ) -> Result<(), sqlx::Error>;
-
-    async fn update_pin_request_error_log(
-        &self,
-        task_id: &str,
-        error_log: &str,
-    ) -> Result<(), sqlx::Error>;
-
-    async fn set_archive_request_error(
-        &self,
-        task_id: &str,
-        fatal_error: &str,
-    ) -> Result<(), sqlx::Error>;
-
-    async fn set_pin_request_error(
-        &self,
-        task_id: &str,
-        fatal_error: &str,
-    ) -> Result<(), sqlx::Error>;
-
-    // Status update operations
-    async fn update_archive_request_status(
-        &self,
-        task_id: &str,
-        status: &ArchiveStatus,
-    ) -> Result<(), sqlx::Error>;
-
-    async fn update_pin_request_status(
-        &self,
-        task_id: &str,
-        status: &IpfsStatus,
-    ) -> Result<(), sqlx::Error>;
-
-    async fn update_backup_statuses(
-        &self,
-        task_id: &str,
-        scope: &str,
-        archive_status: &ArchiveStatus,
-        ipfs_status: &IpfsStatus,
-    ) -> Result<(), sqlx::Error>;
-
-    async fn update_archive_request_statuses(
-        &self,
-        task_ids: &[String],
-        status: &ArchiveStatus,
-    ) -> Result<(), sqlx::Error>;
-
-    // Upgrade operations
-    async fn upgrade_backup_to_full(
-        &self,
-        task_id: &str,
-        add_archive: bool,
-        archive_format: Option<&str>,
-        retention_days: Option<u64>,
-    ) -> Result<(), sqlx::Error>;
-
-    // Deletion operations
-    async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
-
-    async fn start_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
-
-    async fn start_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
-
-    async fn complete_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
-
-    async fn complete_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error>;
-
-    // Retry operations
-    async fn retry_backup(
-        &self,
-        task_id: &str,
-        scope: &str,
-        retention_days: u64,
-    ) -> Result<(), sqlx::Error>;
-
-    // Pin operations
-    async fn insert_pins_with_tokens(
-        &self,
-        task_id: &str,
-        token_pin_mappings: &[TokenPinMapping],
-    ) -> Result<(), sqlx::Error>;
-
-    async fn get_pins_by_task_id(&self, task_id: &str) -> Result<Vec<PinRow>, sqlx::Error>;
-
-    async fn get_active_pins(&self) -> Result<Vec<PinRow>, sqlx::Error>;
-
-    async fn update_pin_statuses(&self, updates: &[(i64, String)]) -> Result<(), sqlx::Error>;
-
-    // Pinned tokens operations
-    async fn get_pinned_tokens_by_requestor(
-        &self,
-        requestor: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<TokenWithPins>, u32), sqlx::Error>;
-
-    async fn get_pinned_token_by_requestor(
-        &self,
-        requestor: &str,
-        chain: &str,
-        contract_address: &str,
-        token_id: &str,
-    ) -> Result<Option<TokenWithPins>, sqlx::Error>;
+#[derive(Debug, Clone, Default, Deserialize, utoipa::IntoParams)]
+#[serde(deny_unknown_fields)]
+pub struct Page {
+    pub cursor: Option<String>,
+    pub limit: Option<u16>,
+    pub state: Option<String>,
+    pub chain_id: Option<String>,
+    pub contract_address: Option<String>,
+    pub token_id: Option<String>,
+    pub cid: Option<String>,
+    pub backup_id: Option<String>,
+    pub pin_set_id: Option<String>,
+    pub ipfs_only: Option<bool>,
 }
 
-/// Configurable mock database implementation for testing
-/// Each method can be configured to return specific responses or errors
-#[derive(Default)]
-pub struct MockDatabase {
-    // Backup task operations
-    pub insert_backup_task_error: Option<String>,
-    pub get_backup_task_result: Option<BackupTask>,
-    pub get_backup_task_error: Option<String>,
-    pub delete_backup_task_error: Option<String>,
-    pub get_incomplete_backup_tasks_result: Vec<BackupTask>,
-    pub get_incomplete_backup_tasks_error: Option<String>,
-    pub list_requestor_backup_tasks_paginated_result: (Vec<BackupTask>, u32),
-    pub list_requestor_backup_tasks_paginated_error: Option<String>,
-    pub list_unprocessed_expired_backups_result: Vec<ExpiredBackup>,
-    pub list_unprocessed_expired_backups_error: Option<String>,
-
-    // Backup task status and error operations
-    pub clear_backup_errors_error: Option<String>,
-    pub set_backup_error_error: Option<String>,
-    pub set_error_logs_error: Option<String>,
-    pub update_archive_request_error_log_error: Option<String>,
-    pub update_pin_request_error_log_error: Option<String>,
-    pub set_archive_request_error_error: Option<String>,
-    pub set_pin_request_error_error: Option<String>,
-
-    // Status update operations
-    pub update_archive_request_status_error: Option<String>,
-    pub update_pin_request_status_error: Option<String>,
-    pub update_backup_statuses_error: Option<String>,
-    pub update_archive_request_statuses_error: Option<String>,
-
-    // Upgrade operations
-    pub upgrade_backup_to_full_error: Option<String>,
-
-    // Deletion operations
-    pub start_deletion_error: Option<String>,
-    pub start_archive_request_deletion_error: Option<String>,
-    pub start_pin_request_deletion_error: Option<String>,
-    pub complete_archive_request_deletion_error: Option<String>,
-    pub complete_pin_request_deletion_error: Option<String>,
-
-    // Retry operations
-    pub retry_backup_error: Option<String>,
-
-    // Pin operations
-    pub insert_pins_with_tokens_error: Option<String>,
-    pub get_pins_by_task_id_result: Vec<PinRow>,
-    pub get_pins_by_task_id_error: Option<String>,
-    pub get_active_pins_result: Vec<PinRow>,
-    pub get_active_pins_error: Option<String>,
-    pub update_pin_statuses_error: Option<String>,
-
-    // Pinned tokens operations
-    pub get_pinned_tokens_by_requestor_result: (Vec<TokenWithPins>, u32),
-    pub get_pinned_tokens_by_requestor_error: Option<String>,
-    pub get_pinned_token_by_requestor_result: Option<TokenWithPins>,
-    pub get_pinned_token_by_requestor_error: Option<String>,
-
-    // Call counters for verifying interactions in tests
-    pub get_active_pins_calls: std::sync::Mutex<u32>,
-    pub update_pin_statuses_calls: std::sync::Mutex<u32>,
-    pub get_incomplete_backup_tasks_calls: std::sync::Mutex<u32>,
-    pub set_backup_error_calls: std::sync::Mutex<u32>,
-    pub persisted_error_logs: std::sync::Mutex<Vec<String>>,
-    pub persisted_backup_errors: std::sync::Mutex<Vec<String>>,
+#[derive(Debug, Clone)]
+pub struct QuoteTerms {
+    pub asset_symbol: String,
+    pub chain_id: String,
+    pub asset_address: String,
+    pub asset_decimals: u8,
+    pub pricing_version: String,
+    pub lifetime_seconds: u32,
 }
 
-impl MockDatabase {
-    // Configuration methods for backup task operations
-    pub fn set_insert_backup_task_error(&mut self, error: Option<String>) {
-        self.insert_backup_task_error = error;
-    }
+#[derive(Debug, Clone)]
+pub enum Creation {
+    Backup {
+        specification: Specification,
+        quote_id: Option<String>,
+        pricing_version: Option<String>,
+        provider_ids: Vec<String>,
+    },
+    Quote {
+        specification: Specification,
+        terms: QuoteTerms,
+        backup_id: Option<String>,
+    },
+    Output {
+        backup_id: String,
+        output: OutputRequest,
+        provider_ids: Vec<String>,
+        quote_id: Option<String>,
+        pricing_version: Option<String>,
+        specification_hash: String,
+    },
+}
 
-    pub fn set_get_backup_task_result(&mut self, result: Option<BackupTask>) {
-        self.get_backup_task_result = result;
-    }
+#[derive(Debug, Clone)]
+pub struct Create {
+    pub owner_id: String,
+    pub key: String,
+    pub payload_hash: String,
+    pub resource: Resource,
+    pub creation: Creation,
+}
 
-    pub fn set_get_backup_task_error(&mut self, error: Option<String>) {
-        self.get_backup_task_error = error;
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Blob {
+    pub sha256: String,
+    pub size_bytes: u64,
+    pub storage_key: String,
+}
 
-    pub fn set_delete_backup_task_error(&mut self, error: Option<String>) {
-        self.delete_backup_task_error = error;
-    }
+#[derive(Debug, Clone)]
+pub enum Progress {
+    Items(Vec<Item>),
+    Captured {
+        manifest_sha256: String,
+        state: State,
+    },
+    Archived(Blob),
+    Quoted {
+        plan: Vec<Item>,
+        amount_atomic: String,
+        estimated_size_bytes: u64,
+        lifetime_seconds: u32,
+    },
+    Pinned {
+        state: State,
+    },
+    Deleted,
+    Failed(Failure),
+    Deferred,
+}
 
-    pub fn set_get_incomplete_backup_tasks_result(&mut self, result: Vec<BackupTask>) {
-        self.get_incomplete_backup_tasks_result = result;
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ManagedPin {
+    pub id: String,
+    pub provider_id: String,
+    pub cid: String,
+    pub request_id: Option<String>,
+    pub submitted_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub state: String,
+    pub operation_id: Option<String>,
+}
 
-    pub fn set_get_incomplete_backup_tasks_error(&mut self, error: Option<String>) {
-        self.get_incomplete_backup_tasks_error = error;
-    }
+#[derive(Debug, Clone)]
+pub enum PinUpdate {
+    Submitting {
+        pin_id: String,
+    },
+    Observed {
+        pin_id: String,
+        request_id: String,
+        state: String,
+    },
+    Failed {
+        pin_id: String,
+        failure: Failure,
+        ambiguous: bool,
+    },
+    Deleted {
+        pin_id: String,
+    },
+}
 
-    pub fn set_list_requestor_backup_tasks_paginated_result(
-        &mut self,
-        result: (Vec<BackupTask>, u32),
-    ) {
-        self.list_requestor_backup_tasks_paginated_result = result;
-    }
-
-    pub fn set_list_requestor_backup_tasks_paginated_error(&mut self, error: Option<String>) {
-        self.list_requestor_backup_tasks_paginated_error = error;
-    }
-
-    pub fn set_list_unprocessed_expired_backups_result(&mut self, result: Vec<ExpiredBackup>) {
-        self.list_unprocessed_expired_backups_result = result;
-    }
-
-    pub fn set_list_unprocessed_expired_backups_error(&mut self, error: Option<String>) {
-        self.list_unprocessed_expired_backups_error = error;
-    }
-
-    // Configuration methods for backup task status and error operations
-    pub fn set_clear_backup_errors_error(&mut self, error: Option<String>) {
-        self.clear_backup_errors_error = error;
-    }
-
-    pub fn set_set_backup_error_error(&mut self, error: Option<String>) {
-        self.set_backup_error_error = error;
-    }
-
-    pub fn set_set_error_logs_error(&mut self, error: Option<String>) {
-        self.set_error_logs_error = error;
-    }
-
-    pub fn set_update_archive_request_error_log_error(&mut self, error: Option<String>) {
-        self.update_archive_request_error_log_error = error;
-    }
-
-    pub fn set_update_pin_request_error_log_error(&mut self, error: Option<String>) {
-        self.update_pin_request_error_log_error = error;
-    }
-
-    pub fn set_set_archive_request_error_error(&mut self, error: Option<String>) {
-        self.set_archive_request_error_error = error;
-    }
-
-    pub fn set_set_pin_request_error_error(&mut self, error: Option<String>) {
-        self.set_pin_request_error_error = error;
-    }
-
-    // Configuration methods for status update operations
-    pub fn set_update_archive_request_status_error(&mut self, error: Option<String>) {
-        self.update_archive_request_status_error = error;
-    }
-
-    pub fn set_update_pin_request_status_error(&mut self, error: Option<String>) {
-        self.update_pin_request_status_error = error;
-    }
-
-    pub fn set_update_backup_statuses_error(&mut self, error: Option<String>) {
-        self.update_backup_statuses_error = error;
-    }
-
-    pub fn set_update_archive_request_statuses_error(&mut self, error: Option<String>) {
-        self.update_archive_request_statuses_error = error;
-    }
-
-    // Configuration methods for upgrade operations
-    pub fn set_upgrade_backup_to_full_error(&mut self, error: Option<String>) {
-        self.upgrade_backup_to_full_error = error;
-    }
-
-    // Configuration methods for deletion operations
-    pub fn set_start_deletion_error(&mut self, error: Option<String>) {
-        self.start_deletion_error = error;
-    }
-
-    pub fn set_start_archive_request_deletion_error(&mut self, error: Option<String>) {
-        self.start_archive_request_deletion_error = error;
-    }
-
-    pub fn set_start_pin_request_deletion_error(&mut self, error: Option<String>) {
-        self.start_pin_request_deletion_error = error;
-    }
-
-    pub fn set_complete_archive_request_deletion_error(&mut self, error: Option<String>) {
-        self.complete_archive_request_deletion_error = error;
-    }
-
-    pub fn set_complete_pin_request_deletion_error(&mut self, error: Option<String>) {
-        self.complete_pin_request_deletion_error = error;
-    }
-
-    // Configuration methods for retry operations
-    pub fn set_retry_backup_error(&mut self, error: Option<String>) {
-        self.retry_backup_error = error;
-    }
-
-    // Configuration methods for pin operations
-    pub fn set_insert_pins_with_tokens_error(&mut self, error: Option<String>) {
-        self.insert_pins_with_tokens_error = error;
-    }
-
-    pub fn set_get_pins_by_task_id_result(&mut self, result: Vec<PinRow>) {
-        self.get_pins_by_task_id_result = result;
-    }
-
-    pub fn set_get_pins_by_task_id_error(&mut self, error: Option<String>) {
-        self.get_pins_by_task_id_error = error;
-    }
-
-    pub fn set_get_active_pins_result(&mut self, result: Vec<PinRow>) {
-        self.get_active_pins_result = result;
-    }
-
-    pub fn set_get_active_pins_error(&mut self, error: Option<String>) {
-        self.get_active_pins_error = error;
-    }
-
-    pub fn set_update_pin_statuses_error(&mut self, error: Option<String>) {
-        self.update_pin_statuses_error = error;
-    }
-
-    // Configuration methods for pinned tokens operations
-    pub fn set_get_pinned_tokens_by_requestor_result(&mut self, result: (Vec<TokenWithPins>, u32)) {
-        self.get_pinned_tokens_by_requestor_result = result;
-    }
-
-    pub fn set_get_pinned_tokens_by_requestor_error(&mut self, error: Option<String>) {
-        self.get_pinned_tokens_by_requestor_error = error;
-    }
-
-    pub fn set_get_pinned_token_by_requestor_result(&mut self, result: Option<TokenWithPins>) {
-        self.get_pinned_token_by_requestor_result = result;
-    }
-
-    pub fn set_get_pinned_token_by_requestor_error(&mut self, error: Option<String>) {
-        self.get_pinned_token_by_requestor_error = error;
-    }
-
-    // Call counter getters
-    pub fn get_active_pins_calls(&self) -> u32 {
-        *self.get_active_pins_calls.lock().unwrap()
-    }
-
-    pub fn get_update_pin_statuses_calls(&self) -> u32 {
-        *self.update_pin_statuses_calls.lock().unwrap()
-    }
-
-    pub fn get_get_incomplete_backup_tasks_calls(&self) -> u32 {
-        *self.get_incomplete_backup_tasks_calls.lock().unwrap()
-    }
-
-    pub fn get_set_backup_error_calls(&self) -> u32 {
-        *self.set_backup_error_calls.lock().unwrap()
-    }
+#[derive(Debug, Clone)]
+pub enum PaymentUpdate {
+    Begin {
+        proof_hash: String,
+        settle_request: Document,
+    },
+    Settled(Document),
+    Failed {
+        detail: String,
+        ambiguous: bool,
+    },
 }
 
 #[async_trait]
-impl Database for MockDatabase {
-    // Backup task operations
-    async fn insert_backup_task(
+pub trait Database: Send + Sync {
+    async fn owner(&self, principal: &Principal) -> Result<String>;
+    async fn archive_storage(&self, owner: &str, id: &str) -> Result<String>;
+    async fn get(&self, resource: Resource, owner: &str, id: &str) -> Result<Option<Document>>;
+    async fn list(
         &self,
-        _task_id: &str,
-        _requestor: &str,
-        _nft_count: i32,
-        _tokens: &serde_json::Value,
-        _storage_mode: &str,
-        _archive_format: Option<&str>,
-        _retention_days: Option<u64>,
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.insert_backup_task_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn get_backup_task(&self, _task_id: &str) -> Result<Option<BackupTask>, sqlx::Error> {
-        if let Some(error) = &self.get_backup_task_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(self.get_backup_task_result.clone())
-        }
-    }
-
-    async fn get_backup_task_with_tokens(
+        resource: Resource,
+        owner: &str,
+        page: &Page,
+    ) -> Result<Collection<Document>>;
+    async fn create(&self, request: Create) -> Result<Document>;
+    async fn delete(&self, resource: Resource, owner: &str, id: &str) -> Result<Operation>;
+    async fn retry(&self, owner: &str, id: &str) -> Result<Attempt>;
+    async fn attempts(&self, owner: &str, id: &str) -> Result<Vec<Attempt>>;
+    async fn claim(&self) -> Result<Option<Claim>>;
+    async fn heartbeat(&self, claim: &Claim) -> Result<bool>;
+    async fn context(&self, claim: &Claim) -> Result<Document>;
+    async fn progress(&self, claim: &Claim, progress: Progress) -> Result<()>;
+    async fn put_blob(&self, claim: &Claim, blob: &Blob) -> Result<()>;
+    async fn reserve_pin(&self, claim: &Claim, asset: &Asset, provider: &str)
+        -> Result<ManagedPin>;
+    async fn update_pin(&self, claim: &Claim, update: PinUpdate) -> Result<()>;
+    async fn release_pins(&self, claim: &Claim) -> Result<Vec<ManagedPin>>;
+    async fn payment(
         &self,
-        task_id: &str,
-        _limit: i64,
-        _offset: i64,
-    ) -> Result<Option<(BackupTask, u32)>, sqlx::Error> {
-        // Reuse get_backup_task_result and synthesize a total count
-        match self.get_backup_task(task_id).await? {
-            Some(bt) => {
-                let total = bt
-                    .tokens
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .map(|v| {
-                                v.get("tokens")
-                                    .and_then(|t| t.as_array())
-                                    .map(|a| a.len())
-                                    .unwrap_or(0)
-                            })
-                            .sum::<usize>() as u32
-                    })
-                    .unwrap_or(0);
-                Ok(Some((bt, total)))
-            }
-            None => Ok(None),
-        }
-    }
-
-    async fn delete_backup_task(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.delete_backup_task_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn get_incomplete_backup_tasks(&self) -> Result<Vec<BackupTask>, sqlx::Error> {
-        *self.get_incomplete_backup_tasks_calls.lock().unwrap() += 1;
-        if let Some(error) = &self.get_incomplete_backup_tasks_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(self.get_incomplete_backup_tasks_result.clone())
-        }
-    }
-
-    async fn list_requestor_backup_tasks_paginated(
-        &self,
-        _requestor: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<BackupTask>, u32), sqlx::Error> {
-        if let Some(error) = &self.list_requestor_backup_tasks_paginated_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            let (all_records, total_count) = &self.list_requestor_backup_tasks_paginated_result;
-            let start = offset.max(0) as usize;
-            let end = (start + limit.max(0) as usize).min(all_records.len());
-            let page = if start < all_records.len() {
-                all_records[start..end].to_vec()
-            } else {
-                Vec::new()
-            };
-            Ok((page, *total_count))
-        }
-    }
-
-    async fn list_unprocessed_expired_backups(&self) -> Result<Vec<ExpiredBackup>, sqlx::Error> {
-        if let Some(error) = &self.list_unprocessed_expired_backups_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(self.list_unprocessed_expired_backups_result.clone())
-        }
-    }
-
-    // Backup task status and error operations
-    async fn clear_backup_errors(&self, _task_id: &str, _scope: &str) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.clear_backup_errors_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn set_backup_error(&self, _task_id: &str, _error: &str) -> Result<(), sqlx::Error> {
-        *self.set_backup_error_calls.lock().unwrap() += 1;
-        self.persisted_backup_errors
-            .lock()
-            .unwrap()
-            .push(_error.to_string());
-        if let Some(error) = &self.set_backup_error_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn set_error_logs(
-        &self,
-        _task_id: &str,
-        _archive_error_log: Option<&str>,
-        _ipfs_error_log: Option<&str>,
-    ) -> Result<(), sqlx::Error> {
-        self.persisted_error_logs.lock().unwrap().extend(
-            _archive_error_log
-                .into_iter()
-                .chain(_ipfs_error_log)
-                .map(str::to_string),
-        );
-        if let Some(error) = &self.set_error_logs_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn update_archive_request_error_log(
-        &self,
-        _task_id: &str,
-        _error_log: &str,
-    ) -> Result<(), sqlx::Error> {
-        self.persisted_error_logs
-            .lock()
-            .unwrap()
-            .push(_error_log.to_string());
-        if let Some(error) = &self.update_archive_request_error_log_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn update_pin_request_error_log(
-        &self,
-        _task_id: &str,
-        _error_log: &str,
-    ) -> Result<(), sqlx::Error> {
-        self.persisted_error_logs
-            .lock()
-            .unwrap()
-            .push(_error_log.to_string());
-        if let Some(error) = &self.update_pin_request_error_log_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn set_archive_request_error(
-        &self,
-        _task_id: &str,
-        _fatal_error: &str,
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.set_archive_request_error_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn set_pin_request_error(
-        &self,
-        _task_id: &str,
-        _fatal_error: &str,
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.set_pin_request_error_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    // Status update operations
-    async fn update_archive_request_status(
-        &self,
-        _task_id: &str,
-        _status: &ArchiveStatus,
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.update_archive_request_status_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn update_pin_request_status(
-        &self,
-        _task_id: &str,
-        _status: &IpfsStatus,
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.update_pin_request_status_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn update_backup_statuses(
-        &self,
-        _task_id: &str,
-        _scope: &str,
-        _archive_status: &ArchiveStatus,
-        _ipfs_status: &IpfsStatus,
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.update_backup_statuses_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn update_archive_request_statuses(
-        &self,
-        _task_ids: &[String],
-        _status: &ArchiveStatus,
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.update_archive_request_statuses_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn upgrade_backup_to_full(
-        &self,
-        _task_id: &str,
-        _add_archive: bool,
-        _archive_format: Option<&str>,
-        _retention_days: Option<u64>,
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.upgrade_backup_to_full_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    // Deletion operations
-    async fn start_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.start_deletion_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn start_archive_request_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.start_archive_request_deletion_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn start_pin_request_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.start_pin_request_deletion_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn complete_archive_request_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.complete_archive_request_deletion_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn complete_pin_request_deletion(&self, _task_id: &str) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.complete_pin_request_deletion_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    // Retry operations
-    async fn retry_backup(
-        &self,
-        _task_id: &str,
-        _scope: &str,
-        _retention_days: u64,
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.retry_backup_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    // Pin operations
-    async fn insert_pins_with_tokens(
-        &self,
-        _task_id: &str,
-        _token_pin_mappings: &[TokenPinMapping],
-    ) -> Result<(), sqlx::Error> {
-        if let Some(error) = &self.insert_pins_with_tokens_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    async fn get_pins_by_task_id(&self, _task_id: &str) -> Result<Vec<PinRow>, sqlx::Error> {
-        if let Some(error) = &self.get_pins_by_task_id_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(self.get_pins_by_task_id_result.clone())
-        }
-    }
-
-    async fn get_active_pins(&self) -> Result<Vec<PinRow>, sqlx::Error> {
-        *self.get_active_pins_calls.lock().unwrap() += 1;
-        if let Some(error) = &self.get_active_pins_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(self.get_active_pins_result.clone())
-        }
-    }
-
-    async fn update_pin_statuses(&self, _updates: &[(i64, String)]) -> Result<(), sqlx::Error> {
-        *self.update_pin_statuses_calls.lock().unwrap() += 1;
-        if let Some(error) = &self.update_pin_statuses_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(())
-        }
-    }
-
-    // Pinned tokens operations
-    async fn get_pinned_tokens_by_requestor(
-        &self,
-        _requestor: &str,
-        _limit: i64,
-        _offset: i64,
-    ) -> Result<(Vec<TokenWithPins>, u32), sqlx::Error> {
-        if let Some(error) = &self.get_pinned_tokens_by_requestor_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(self.get_pinned_tokens_by_requestor_result.clone())
-        }
-    }
-
-    async fn get_pinned_token_by_requestor(
-        &self,
-        _requestor: &str,
-        _chain: &str,
-        _contract_address: &str,
-        _token_id: &str,
-    ) -> Result<Option<TokenWithPins>, sqlx::Error> {
-        if let Some(error) = &self.get_pinned_token_by_requestor_error {
-            Err(sqlx::Error::Configuration(error.clone().into()))
-        } else {
-            Ok(self.get_pinned_token_by_requestor_result.clone())
-        }
-    }
+        resource: Resource,
+        owner: &str,
+        target_id: &str,
+        update: Option<PaymentUpdate>,
+    ) -> Result<Option<Document>>;
+    async fn maintenance(&self) -> Result<()>;
+    async fn active_leases(&self) -> Result<Vec<(String, String)>>;
+    async fn blob_deleting(&self, sha256: &str) -> Result<bool>;
+    async fn garbage(&self, finished: Option<&str>) -> Result<Vec<Blob>>;
 }

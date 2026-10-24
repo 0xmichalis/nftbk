@@ -27,8 +27,13 @@ async fn fetch_and_write_extra_with_base_url(
     artifact_url: Option<&str>,
     base_url: Option<&str>,
 ) -> Result<Vec<PathBuf>> {
-    match (token.chain_name(), token.address()) {
-        ("ethereum", "0x2A86C5466f088caEbf94e071a77669BAe371CD87") => {
+    match (
+        crate::chain::id::canonical_chain_id(token.chain_name()),
+        token.address(),
+    ) {
+        ("eip155:1", address)
+            if address.eq_ignore_ascii_case("0x2A86C5466f088caEbf94e071a77669BAe371CD87") =>
+        {
             croquet::fetch_croquet_challenge(
                 output_path,
                 token.address(),
@@ -37,7 +42,9 @@ async fn fetch_and_write_extra_with_base_url(
             )
             .await
         }
-        ("tezos", "KT1UcASzQxiWprSmsvpStsxtAZzaRJWR78gz") if artifact_url.is_some() => {
+        ("tezos:NetXdQprcVkpaWU", "KT1UcASzQxiWprSmsvpStsxtAZzaRJWR78gz")
+            if artifact_url.is_some() =>
+        {
             fisherman::fetch_fisherman(
                 output_path,
                 token.address(),

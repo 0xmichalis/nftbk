@@ -20,6 +20,8 @@ impl IpfsPinningClient {
     pub fn new<T: Into<String>>(base_url: T, bearer_token: Option<String>) -> Self {
         let http = Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("Failed to create reqwest client - this should never fail");
         Self {
@@ -209,6 +211,9 @@ impl IpfsPinningProvider for IpfsPinningClient {
             .send()
             .await
             .context("DELETE /pins/{id} failed")?;
+        if res.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(());
+        }
         let status = res.error_for_status_ref().map(|_| ()).err();
         let text = res.text().await.context("reading response body")?;
         if let Some(err) = status {

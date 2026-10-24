@@ -1,1938 +1,1114 @@
-use std::fmt;
 use std::time::Duration;
 
+use base64::Engine;
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
-use sqlx::{postgres::PgPoolOptions, PgPool, Row};
-use tracing::{info, warn};
+use serde_json::{json, Value};
+use sqlx::{postgres::PgPoolOptions, PgConnection, PgPool, Postgres, QueryBuilder, Row};
+use uuid::Uuid;
 
-use crate::ipfs::PinResponseStatus;
-use crate::server::database::r#trait::Database;
-use crate::server::StorageMode;
+use crate::server::model::*;
+use r#trait::*;
 
+#[cfg(test)]
+pub mod mock;
 pub mod r#trait;
-
-/// Status of an archive request (backup archive stored on disk)
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum ArchiveStatus {
-    InProgress,
-    Done,
-    Error,
-    Expired,
-}
-
-impl ArchiveStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ArchiveStatus::InProgress => "in_progress",
-            ArchiveStatus::Done => "done",
-            ArchiveStatus::Error => "error",
-            ArchiveStatus::Expired => "expired",
-        }
-    }
-}
-
-impl fmt::Display for ArchiveStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Status of an IPFS pin request
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum IpfsStatus {
-    InProgress,
-    Done,
-    Error,
-}
-
-impl IpfsStatus {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            IpfsStatus::InProgress => "in_progress",
-            IpfsStatus::Done => "done",
-            IpfsStatus::Error => "error",
-        }
-    }
-}
-
-impl fmt::Display for IpfsStatus {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-/// Parse an optional status string from the database into an enum variant.
-fn parse_archive_status(s: Option<String>) -> Option<ArchiveStatus> {
-    s.as_deref().and_then(|s| match s {
-        "in_progress" => Some(ArchiveStatus::InProgress),
-        "done" => Some(ArchiveStatus::Done),
-        "error" => Some(ArchiveStatus::Error),
-        "expired" => Some(ArchiveStatus::Expired),
-        _ => {
-            warn!("Unknown archive status string: {s}");
-            None
-        }
-    })
-}
-
-/// Parse an optional IPFS status string from the database into an enum variant.
-fn parse_ipfs_status(s: Option<String>) -> Option<IpfsStatus> {
-    s.as_deref().and_then(|s| match s {
-        "in_progress" => Some(IpfsStatus::InProgress),
-        "done" => Some(IpfsStatus::Done),
-        "error" => Some(IpfsStatus::Error),
-        _ => {
-            warn!("Unknown IPFS status string: {s}");
-            None
-        }
-    })
-}
-
-/// Parse a pin status string from the database into a PinResponseStatus.
-fn parse_pin_status(s: String) -> PinResponseStatus {
-    match s.as_str() {
-        "queued" => PinResponseStatus::Queued,
-        "pinning" => PinResponseStatus::Pinning,
-        "pinned" => PinResponseStatus::Pinned,
-        "failed" => PinResponseStatus::Failed,
-        other => {
-            warn!("Unknown pin status string: {other}");
-            // Default to a safe fallback
-            PinResponseStatus::Failed
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct BackupTask {
-    pub task_id: String,
-    pub created_at: DateTime<Utc>,
-    pub updated_at: DateTime<Utc>,
-    pub requestor: String,
-    pub nft_count: i32,
-    pub tokens: serde_json::Value,
-    pub archive_status: Option<ArchiveStatus>,
-    pub ipfs_status: Option<IpfsStatus>,
-    pub archive_error_log: Option<String>,
-    pub ipfs_error_log: Option<String>,
-    pub archive_fatal_error: Option<String>,
-    pub ipfs_fatal_error: Option<String>,
-    pub storage_mode: String,
-    pub archive_format: Option<String>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub archive_deleted_at: Option<DateTime<Utc>>,
-    pub pins_deleted_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
-#[schema(description = "IPFS pin information for a specific CID")]
-pub struct PinInfo {
-    /// Content Identifier (CID) of the pinned content
-    #[schema(example = "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG")]
-    pub cid: String,
-    /// IPFS provider type where the content is pinned
-    #[schema(example = "pinata")]
-    pub provider_type: String,
-    /// IPFS provider URL where the content is pinned
-    #[schema(example = "https://api.pinata.cloud")]
-    pub provider_url: String,
-    /// Pin status (pinned, pinning, failed, queued)
-    #[schema(example = "pinned")]
-    pub status: String,
-    /// When the pin was created (ISO 8601 timestamp)
-    #[schema(example = "2024-01-01T12:00:00Z")]
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
-#[schema(description = "Token information with associated pin requests")]
-pub struct TokenWithPins {
-    /// Blockchain identifier (e.g., ethereum, tezos)
-    #[schema(example = "ethereum")]
-    pub chain: String,
-    /// NFT contract address
-    #[schema(example = "0x1234567890123456789012345678901234567890")]
-    pub contract_address: String,
-    /// NFT token ID
-    #[schema(example = "123")]
-    pub token_id: String,
-    /// List of IPFS pins for this token
-    pub pins: Vec<PinInfo>,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct PinRow {
-    pub id: i64,
-    pub task_id: String,
-    pub provider_type: String,
-    pub provider_url: Option<String>,
-    pub cid: String,
-    pub request_id: String,
-    pub pin_status: PinResponseStatus,
-    pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ExpiredBackup {
-    pub task_id: String,
-    pub archive_format: String,
-}
 
 #[derive(Clone)]
 pub struct Db {
     pub pool: PgPool,
+    queue_capacity: usize,
+    pin_check_interval_seconds: u64,
+}
+
+fn uuid() -> String {
+    Uuid::new_v4().to_string()
+}
+fn decode<T: serde::de::DeserializeOwned>(value: Value) -> Result<T> {
+    serde_json::from_value(value).map_err(|e| DatabaseError::Invalid(e.to_string()))
+}
+fn view(resource: Resource) -> &'static str {
+    match resource {
+        Resource::Backup => "api_backups",
+        Resource::Archive => "api_archives",
+        Resource::PinSet => "api_pin_sets",
+        Resource::Quote => "api_quotes",
+        Resource::Operation => "api_operations",
+        Resource::Item => "api_items",
+        Resource::Pin => "api_pins",
+    }
+}
+async fn document(
+    connection: &mut PgConnection,
+    resource: Resource,
+    owner: &str,
+    id: &str,
+) -> Result<Option<Value>> {
+    let query = format!(
+        "SELECT document FROM {} WHERE owner_id=$1::text::uuid AND id=$2::text::uuid",
+        view(resource)
+    );
+    Ok(sqlx::query_scalar(&query)
+        .bind(owner)
+        .bind(id)
+        .fetch_optional(connection)
+        .await?)
+}
+async fn fence(connection: &mut PgConnection, claim: &Claim) -> Result<()> {
+    let active: Option<String> = sqlx::query_scalar("SELECT id::text FROM operations WHERE id=$1::text::uuid AND lease_token=$2::text::uuid AND state='running' AND lease_until>now() FOR UPDATE")
+        .bind(&claim.operation.id).bind(&claim.lease_token).fetch_optional(connection).await?;
+    if active.is_none() {
+        return Err(DatabaseError::LostLease);
+    }
+    Ok(())
+}
+async fn insert_operation(
+    connection: &mut PgConnection,
+    owner: &str,
+    kind: &str,
+    target: &str,
+    state: &str,
+) -> Result<String> {
+    let column = match kind {
+        "capture" | "delete_backup" => "backup_id",
+        "archive" | "delete_archive" => "archive_id",
+        "pin" | "delete_pin_set" => "pin_set_id",
+        "quote" => "quote_id",
+        _ => return Err(DatabaseError::Invalid("Unknown operation kind".into())),
+    };
+    let id = uuid();
+    sqlx::query(&format!("INSERT INTO operations(id,owner_id,kind,{column},state) VALUES($1::text::uuid,$2::text::uuid,$3,$4::text::uuid,$5)"))
+        .bind(&id).bind(owner).bind(kind).bind(target).bind(state).execute(connection).await?;
+    Ok(id)
 }
 
 impl Db {
-    pub async fn new(database_url: &str, max_connections: u32) -> Self {
-        let pool = Self::connect_with_retry(database_url, max_connections).await;
-        tracing::info!("Postgres connection is healthy");
-
-        // Apply any pending migrations so a fresh deployment self-provisions its
-        // schema. Migrations are embedded into the binary at compile time, so this
-        // works in the distroless runtime image without sqlx-cli or the migrations
-        // directory present. Already-applied migrations are skipped via the
-        // _sqlx_migrations table, so this is consistent with `sqlx migrate run`.
-        sqlx::migrate!("./migrations")
-            .run(&pool)
-            .await
-            .expect("Failed to run database migrations");
-        tracing::info!("Database migrations applied");
-
-        Db { pool }
+    pub fn from_pool(pool: PgPool) -> Self {
+        Self {
+            pool,
+            queue_capacity: 1024,
+            pin_check_interval_seconds: 3600,
+        }
     }
 
-    /// Connect to Postgres, retrying with a fixed backoff to tolerate a database
-    /// that is still starting up (e.g. `make run` brings up the DB container in
-    /// parallel with the server). Panics once attempts are exhausted.
-    async fn connect_with_retry(database_url: &str, max_connections: u32) -> PgPool {
-        const MAX_ATTEMPTS: u32 = 10;
-        const RETRY_DELAY: Duration = Duration::from_secs(1);
+    pub fn configure(mut self, queue_capacity: usize, pin_check_interval_seconds: u64) -> Self {
+        self.queue_capacity = queue_capacity;
+        self.pin_check_interval_seconds = pin_check_interval_seconds;
+        self
+    }
 
-        for attempt in 1..=MAX_ATTEMPTS {
-            match Self::try_connect(database_url, max_connections).await {
-                Ok(pool) => return pool,
-                Err(e) if attempt < MAX_ATTEMPTS => {
-                    warn!(
-                        "Postgres not ready (attempt {attempt}/{MAX_ATTEMPTS}): {e}. \
-                         Retrying in {RETRY_DELAY:?}..."
-                    );
-                    tokio::time::sleep(RETRY_DELAY).await;
+    pub async fn new(url: &str, max_connections: u32) -> anyhow::Result<Self> {
+        let mut last_error = None;
+        for _ in 0..10 {
+            match PgPoolOptions::new()
+                .max_connections(max_connections.max(4))
+                .connect(url)
+                .await
+            {
+                Ok(pool) => {
+                    sqlx::migrate!("./migrations").run(&pool).await?;
+                    return Ok(Self::from_pool(pool));
                 }
-                Err(e) => {
-                    panic!("Failed to connect to Postgres after {MAX_ATTEMPTS} attempts: {e}")
+                Err(error) => {
+                    last_error = Some(error);
+                    tokio::time::sleep(Duration::from_secs(1)).await;
                 }
             }
         }
-        unreachable!("loop either returns a pool or panics on the final attempt")
+        Err(last_error.expect("connection attempted").into())
     }
 
-    /// Open a pool and verify the connection is usable with a trivial query.
-    async fn try_connect(database_url: &str, max_connections: u32) -> Result<PgPool, sqlx::Error> {
-        let pool = PgPoolOptions::new()
-            .max_connections(max_connections)
-            .connect(database_url)
-            .await?;
-        sqlx::query("SELECT 1").execute(&pool).await?;
-        Ok(pool)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn insert_backup_task(
+    pub async fn register_provider(
         &self,
-        task_id: &str,
-        requestor: &str,
-        nft_count: i32,
-        tokens: &serde_json::Value,
-        storage_mode: &str,
-        archive_format: Option<&str>,
-        retention_days: Option<u64>,
-    ) -> Result<(), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
+        key: &str,
+        provider_type: &str,
+        url: &str,
+        credential_reference: Option<&str>,
+        adopt_legacy: bool,
+    ) -> Result<String> {
+        if adopt_legacy {
+            sqlx::query("UPDATE provider_instances SET instance_key=$1,credential_reference=$2 WHERE instance_key=$3 AND NOT EXISTS(SELECT 1 FROM provider_instances WHERE instance_key=$1)")
+                .bind(key).bind(credential_reference).bind(format!("legacy:{provider_type}:{url}")).execute(&self.pool).await?;
+        }
+        Ok(sqlx::query_scalar("INSERT INTO provider_instances(instance_key,provider_type,provider_url,credential_reference) VALUES($1,$2,$3,$4) ON CONFLICT(instance_key) DO UPDATE SET provider_url=EXCLUDED.provider_url,credential_reference=EXCLUDED.credential_reference RETURNING id::text")
+            .bind(key).bind(provider_type).bind(url).bind(credential_reference).fetch_one(&self.pool).await?)
+    }
 
-        // Insert into backup_tasks (tokens JSON removed; tokens are stored in tokens table)
-        sqlx::query(
-            r#"
-            INSERT INTO backup_tasks (
-                task_id, created_at, updated_at, requestor, nft_count, storage_mode
-            ) VALUES (
-                $1, NOW(), NOW(), $2, $3, $4
-            )
-            ON CONFLICT (task_id) DO UPDATE SET
-                updated_at = NOW(),
-                nft_count = EXCLUDED.nft_count,
-                storage_mode = EXCLUDED.storage_mode
-            "#,
+    pub async fn signing_key(&self) -> Result<Vec<u8>> {
+        use rand::RngCore;
+        let mut key = [0u8; 32];
+        rand::rngs::OsRng.fill_bytes(&mut key);
+        Ok(sqlx::query_scalar("INSERT INTO service_keys(name,key) VALUES('download',$1) ON CONFLICT(name) DO UPDATE SET name=EXCLUDED.name RETURNING key")
+            .bind(key.as_slice()).fetch_one(&self.pool).await?)
+    }
+
+    pub async fn adopt_legacy_issuer(&self, issuer: &str) -> Result<()> {
+        sqlx::query("UPDATE principals SET issuer=$1 WHERE issuer='legacy'")
+            .bind(issuer)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl Database for Db {
+    async fn owner(&self, principal: &Principal) -> Result<String> {
+        Ok(sqlx::query_scalar("INSERT INTO principals(issuer,subject) VALUES($1,$2) ON CONFLICT(issuer,subject) DO UPDATE SET issuer=EXCLUDED.issuer RETURNING id::text")
+            .bind(&principal.issuer).bind(&principal.subject).fetch_one(&self.pool).await?)
+    }
+
+    async fn archive_storage(&self, owner: &str, id: &str) -> Result<String> {
+        sqlx::query_scalar("SELECT storage_key FROM archives WHERE id=$1::text::uuid AND owner_id=$2::text::uuid AND storage_key IS NOT NULL").bind(id).bind(owner).fetch_optional(&self.pool).await?.ok_or(DatabaseError::NotFound)
+    }
+    async fn get(&self, resource: Resource, owner: &str, id: &str) -> Result<Option<Value>> {
+        document(&mut *self.pool.acquire().await?, resource, owner, id).await
+    }
+
+    async fn list(
+        &self,
+        resource: Resource,
+        owner: &str,
+        page: &Page,
+    ) -> Result<Collection<Value>> {
+        let limit = page.limit.unwrap_or(50).clamp(1, 100) as usize;
+        let mut query = QueryBuilder::<Postgres>::new(format!(
+            "SELECT document,created_at,id::text AS cursor_id FROM {} WHERE owner_id=",
+            view(resource)
+        ));
+        query.push_bind(owner).push("::text::uuid");
+        for (key, value) in [
+            ("state", &page.state),
+            ("chain_id", &page.chain_id),
+            ("contract_address", &page.contract_address),
+            ("token_id", &page.token_id),
+            ("cid", &page.cid),
+            ("backup_id", &page.backup_id),
+        ] {
+            if let Some(value) = value {
+                if matches!(resource, Resource::Pin)
+                    && matches!(key, "chain_id" | "contract_address" | "token_id")
+                {
+                    continue;
+                }
+                query
+                    .push(" AND document->>")
+                    .push_bind(key)
+                    .push("=")
+                    .push_bind(value);
+            }
+        }
+        if matches!(resource, Resource::Pin)
+            && [
+                page.chain_id.as_ref(),
+                page.contract_address.as_ref(),
+                page.token_id.as_ref(),
+            ]
+            .iter()
+            .any(|x| x.is_some())
+        {
+            query.push(" AND EXISTS(SELECT 1 FROM pin_memberships m JOIN backup_items i ON i.id=m.item_id JOIN pin_sets ps ON ps.id=m.pin_set_id WHERE m.pin_id=api_pins.id AND ps.owner_id=api_pins.owner_id");
+            for (column, value) in [
+                ("i.chain_id", &page.chain_id),
+                ("i.contract_address", &page.contract_address),
+                ("i.token_id", &page.token_id),
+            ] {
+                if let Some(value) = value {
+                    query.push(" AND ").push(column).push("=").push_bind(value);
+                }
+            }
+            query.push(")");
+        }
+        if matches!(resource, Resource::Item) && page.ipfs_only == Some(true) {
+            query.push(
+                " AND EXISTS(SELECT 1 FROM item_assets a WHERE a.item_id=api_items.id AND a.cid IS NOT NULL)",
+            );
+        }
+        if let Some(pin_set_id) = &page.pin_set_id {
+            query
+                .push(" AND id IN(SELECT pin_id FROM pin_memberships WHERE pin_set_id=")
+                .push_bind(pin_set_id)
+                .push("::text::uuid)");
+        }
+        if let Some(cursor) = &page.cursor {
+            let (created_at, id) = decode_cursor(cursor)?;
+            query
+                .push(" AND (created_at,id)<(")
+                .push_bind(created_at)
+                .push(",")
+                .push_bind(id)
+                .push("::text::uuid)");
+        }
+        query
+            .push(" ORDER BY created_at DESC,id DESC LIMIT ")
+            .push_bind((limit + 1) as i64);
+        let rows = query.build().fetch_all(&self.pool).await?;
+        let next_cursor = if rows.len() > limit {
+            let row = &rows[limit - 1];
+            Some(encode_cursor(row.get("created_at"), row.get("cursor_id")))
+        } else {
+            None
+        };
+        Ok(Collection {
+            data: rows
+                .into_iter()
+                .take(limit)
+                .map(|r| r.get("document"))
+                .collect(),
+            next_cursor,
+        })
+    }
+
+    async fn create(&self, request: Create) -> Result<Value> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM principals WHERE id=$1::text::uuid FOR UPDATE")
+            .bind(&request.owner_id)
+            .execute(&mut *tx)
+            .await?;
+        let endpoint = request.resource.collection();
+        if let Some(row)=sqlx::query("SELECT payload_hash,resource_id::text AS resource_id FROM idempotency_keys WHERE owner_id=$1::text::uuid AND endpoint=$2 AND key=$3")
+            .bind(&request.owner_id).bind(endpoint).bind(&request.key).fetch_optional(&mut *tx).await? {
+            if row.get::<String,_>("payload_hash")!=request.payload_hash { return Err(DatabaseError::Conflict("Idempotency-Key was already used with a different payload".into())); }
+            let result=document(&mut tx,request.resource,&request.owner_id,&row.get::<String,_>("resource_id")).await?.ok_or(DatabaseError::NotFound)?;
+            tx.commit().await?; return Ok(result);
+        }
+        sqlx::query("SELECT pg_advisory_xact_lock(881002)")
+            .execute(&mut *tx)
+            .await?;
+        let pending: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM operations WHERE state IN('awaiting_payment','queued','running')",
         )
-        .bind(task_id)
-        .bind(requestor)
-        .bind(nft_count)
-        .bind(storage_mode)
+        .fetch_one(&mut *tx)
+        .await?;
+        let added = match &request.creation {
+            Creation::Backup { specification, .. } => 1 + specification.outputs.len(),
+            _ => 1,
+        };
+        if pending as usize + added > self.queue_capacity {
+            return Err(DatabaseError::Capacity);
+        }
+        let id = uuid();
+        match request.creation {
+            Creation::Backup {
+                specification,
+                quote_id,
+                pricing_version,
+                provider_ids,
+            } => {
+                let mut plan = Vec::new();
+                let state = if let Some(version) = pricing_version {
+                    let quote_id = quote_id
+                        .as_deref()
+                        .ok_or_else(|| DatabaseError::Invalid("quote_id is required".into()))?;
+                    let quote=sqlx::query("SELECT specification_hash,pricing_version,state,expires_at,plan,source_backup_id::text AS source_backup_id FROM quotes WHERE id=$1::text::uuid AND owner_id=$2::text::uuid FOR UPDATE")
+                        .bind(quote_id).bind(&request.owner_id).fetch_optional(&mut *tx).await?.ok_or(DatabaseError::NotFound)?;
+                    if quote.get::<Option<String>, _>("source_backup_id").is_some()
+                        || quote.get::<String, _>("state") != "ready"
+                        || quote.get::<DateTime<Utc>, _>("expires_at") <= Utc::now()
+                        || quote.get::<String, _>("specification_hash") != specification.hash()
+                        || quote.get::<String, _>("pricing_version") != version
+                    {
+                        return Err(DatabaseError::Conflict("Quote is expired, incomplete, or belongs to a different specification or pricing policy".into()));
+                    }
+                    plan = decode(quote.get("plan"))?;
+                    "awaiting_payment"
+                } else {
+                    "queued"
+                };
+                sqlx::query("INSERT INTO backups(id,owner_id,state,specification,specification_hash) VALUES($1::text::uuid,$2::text::uuid,$3,$4,$5)")
+                    .bind(&id).bind(&request.owner_id).bind(state).bind(json!(specification)).bind(specification.hash()).execute(&mut *tx).await?;
+                for nft in &specification.nfts {
+                    let planned: Option<&Item> = plan.iter().find(|i: &&Item| i.nft == *nft);
+                    let item_id = uuid();
+                    sqlx::query("INSERT INTO backup_items(id,backup_id,chain_id,contract_address,token_id,metadata_uri,metadata_sha256,observed_at,block_reference) VALUES($1::text::uuid,$2::text::uuid,$3,$4,$5,$6,$7,$8,$9)")
+                        .bind(&item_id).bind(&id).bind(&nft.chain_id).bind(&nft.contract_address).bind(&nft.token_id)
+                        .bind(planned.and_then(|i|i.metadata_uri.as_deref())).bind(planned.and_then(|i|i.metadata_sha256.as_deref())).bind(planned.and_then(|i|i.observed_at)).bind(planned.and_then(|i|i.block_reference.as_deref())).execute(&mut *tx).await?;
+                    if let Some(item) = planned {
+                        for asset in &item.assets {
+                            let mut copied = asset.clone();
+                            copied.id = uuid();
+                            copied.item_id = item_id.clone();
+                            save_asset(&mut tx, &item_id, &copied).await?;
+                        }
+                    }
+                }
+                insert_operation(&mut tx, &request.owner_id, "capture", &id, state).await?;
+                for output in specification.outputs {
+                    insert_output(
+                        &mut tx,
+                        &request.owner_id,
+                        &id,
+                        &uuid(),
+                        output,
+                        &provider_ids,
+                        state,
+                    )
+                    .await?;
+                }
+                if let Some(quote_id) = quote_id.filter(|_| state == "awaiting_payment") {
+                    sqlx::query("INSERT INTO payments(backup_id,quote_id) VALUES($1::text::uuid,$2::text::uuid)").bind(&id).bind(quote_id).execute(&mut *tx).await?;
+                }
+            }
+            Creation::Quote {
+                specification,
+                terms,
+                backup_id,
+            } => {
+                sqlx::query("INSERT INTO quotes(id,owner_id,specification,specification_hash,pricing_version,state,asset_symbol,chain_id,asset_address,asset_decimals,expires_at,source_backup_id) VALUES($1::text::uuid,$2::text::uuid,$3,$4,$5,'calculating',$6,$7,$8,$9,now()+make_interval(secs=>$10::double precision),$11::text::uuid)")
+                    .bind(&id).bind(&request.owner_id).bind(json!(specification)).bind(specification.hash()).bind(terms.pricing_version).bind(terms.asset_symbol).bind(terms.chain_id).bind(terms.asset_address).bind(i16::from(terms.asset_decimals)).bind(f64::from(terms.lifetime_seconds)).bind(backup_id).execute(&mut *tx).await?;
+                insert_operation(&mut tx, &request.owner_id, "quote", &id, "queued").await?;
+            }
+            Creation::Output {
+                backup_id,
+                output,
+                provider_ids,
+                quote_id,
+                pricing_version,
+                specification_hash,
+            } => {
+                let backup = document(&mut tx, Resource::Backup, &request.owner_id, &backup_id)
+                    .await?
+                    .ok_or(DatabaseError::NotFound)?;
+                if !matches!(backup["state"].as_str(), Some("ready" | "partial")) {
+                    return Err(DatabaseError::Conflict(
+                        "Backup must be captured before adding outputs".into(),
+                    ));
+                }
+                let state = if let Some(version) = pricing_version {
+                    let quote_id = quote_id
+                        .as_deref()
+                        .ok_or_else(|| DatabaseError::Invalid("quote_id is required".into()))?;
+                    let hash=sqlx::query_scalar::<_,String>("SELECT specification_hash FROM quotes WHERE id=$1::text::uuid AND owner_id=$2::text::uuid AND source_backup_id=$3::text::uuid AND state='ready' AND expires_at>now() AND pricing_version=$4 FOR UPDATE").bind(quote_id).bind(&request.owner_id).bind(&backup_id).bind(version).fetch_optional(&mut *tx).await?.ok_or_else(||DatabaseError::Conflict("Valid output quote is required".into()))?;
+                    if hash != specification_hash {
+                        return Err(DatabaseError::Conflict(
+                            "Quote belongs to a different output specification".into(),
+                        ));
+                    }
+                    "awaiting_payment"
+                } else {
+                    "queued"
+                };
+                insert_output(
+                    &mut tx,
+                    &request.owner_id,
+                    &backup_id,
+                    &id,
+                    output,
+                    &provider_ids,
+                    state,
+                )
+                .await?;
+                if state == "awaiting_payment" {
+                    let column = match request.resource {
+                        Resource::Archive => "archive_id",
+                        Resource::PinSet => "pin_set_id",
+                        _ => return Err(DatabaseError::Invalid("Invalid output resource".into())),
+                    };
+                    sqlx::query(&format!("INSERT INTO payments({column},quote_id) VALUES($1::text::uuid,$2::text::uuid)")).bind(&id).bind(quote_id).execute(&mut *tx).await?;
+                }
+            }
+        }
+        sqlx::query("INSERT INTO idempotency_keys(owner_id,endpoint,key,payload_hash,resource_id) VALUES($1::text::uuid,$2,$3,$4,$5::text::uuid)")
+            .bind(&request.owner_id).bind(endpoint).bind(request.key).bind(request.payload_hash).bind(&id).execute(&mut *tx).await?;
+        let result = document(&mut tx, request.resource, &request.owner_id, &id)
+            .await?
+            .ok_or(DatabaseError::NotFound)?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    async fn delete(&self, resource: Resource, owner: &str, id: &str) -> Result<Operation> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM principals WHERE id=$1::text::uuid FOR UPDATE")
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
+        let target = document(&mut tx, resource, owner, id)
+            .await?
+            .ok_or(DatabaseError::NotFound)?;
+        let (kind, column) = match resource {
+            Resource::Backup => ("delete_backup", "backup_id"),
+            Resource::Archive => ("delete_archive", "archive_id"),
+            Resource::PinSet => ("delete_pin_set", "pin_set_id"),
+            _ => return Err(DatabaseError::Invalid("Resource cannot be deleted".into())),
+        };
+        if let Some(op_id)=sqlx::query_scalar::<_,String>(&format!("SELECT id::text FROM operations WHERE {column}=$1::text::uuid AND kind=$2 ORDER BY created_at DESC LIMIT 1")).bind(id).bind(kind).fetch_optional(&mut *tx).await? {
+            let result=decode(document(&mut tx,Resource::Operation,owner,&op_id).await?.ok_or(DatabaseError::NotFound)?)?;
+            tx.commit().await?;return Ok(result);
+        }
+        let active = sqlx::query(&format!(
+            "SELECT state FROM operations WHERE {column}=$1::text::uuid ORDER BY id FOR UPDATE"
+        ))
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+        if active
+            .iter()
+            .any(|r| matches!(r.get::<String, _>("state").as_str(), "queued" | "running"))
+            || matches!(target["state"].as_str(), Some("queued" | "running"))
+        {
+            return Err(DatabaseError::Conflict(
+                "Wait for the active operation to finish before deleting this resource".into(),
+            ));
+        }
+        let settling: bool = sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM payments p WHERE (p.{column}=$1::text::uuid{} ) AND p.state IN('settling','reconciliation_required'))",if matches!(resource,Resource::Backup) { " OR p.archive_id IN(SELECT id FROM archives WHERE backup_id=$1::text::uuid) OR p.pin_set_id IN(SELECT id FROM pin_sets WHERE backup_id=$1::text::uuid)" } else { "" })).bind(id).fetch_one(&mut *tx).await?;
+        if settling {
+            return Err(DatabaseError::Conflict(
+                "Payment settlement must be reconciled before deletion".into(),
+            ));
+        }
+        sqlx::query(&format!("UPDATE operations SET state='failed',error=$2,updated_at=now() WHERE {column}=$1::text::uuid AND state='awaiting_payment'")).bind(id).bind(json!({"code":"cancelled","message":"Resource deleted before payment","retryable":false})).execute(&mut *tx).await?;
+        if matches!(resource, Resource::Backup) {
+            let active:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM archives WHERE backup_id=$1::text::uuid AND state IN('queued','running','deleting') UNION ALL SELECT 1 FROM pin_sets WHERE backup_id=$1::text::uuid AND state IN('queued','running','deleting'))").bind(id).fetch_one(&mut *tx).await?;
+            if active {
+                return Err(DatabaseError::Conflict(
+                    "An output operation is active".into(),
+                ));
+            }
+        }
+        sqlx::query(&format!("UPDATE {} SET state='deleting',deletion_requested_at=COALESCE(deletion_requested_at,now()) WHERE id=$1::text::uuid",resource.table())).bind(id).execute(&mut *tx).await?;
+        let op_id = insert_operation(&mut tx, owner, kind, id, "queued").await?;
+        let result = decode(
+            document(&mut tx, Resource::Operation, owner, &op_id)
+                .await?
+                .ok_or(DatabaseError::NotFound)?,
+        )?;
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    async fn retry(&self, owner: &str, id: &str) -> Result<Attempt> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM principals WHERE id=$1::text::uuid FOR UPDATE")
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
+        let row=sqlx::query("SELECT kind,COALESCE(backup_id,archive_id,pin_set_id,quote_id)::text AS target,state FROM operations WHERE id=$1::text::uuid AND owner_id=$2::text::uuid FOR UPDATE").bind(id).bind(owner).fetch_optional(&mut *tx).await?.ok_or(DatabaseError::NotFound)?;
+        if row.get::<String, _>("state") != "failed" {
+            return Err(DatabaseError::Conflict(
+                "Only a failed operation can be retried".into(),
+            ));
+        }
+        let kind = row.get::<String, _>("kind");
+        let table = match kind.as_str() {
+            "capture" | "delete_backup" => "backups",
+            "archive" | "delete_archive" => "archives",
+            "pin" | "delete_pin_set" => "pin_sets",
+            "quote" => "quotes",
+            _ => return Err(DatabaseError::Invalid("Invalid operation".into())),
+        };
+        let target: String = row.get("target");
+        let state = if kind.starts_with("delete_") {
+            "deleting"
+        } else if kind == "quote" {
+            "calculating"
+        } else {
+            "queued"
+        };
+        let active:bool=sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id=$1::text::uuid AND state IN('deleting','deleted','expired'))")).bind(&target).fetch_one(&mut *tx).await?;
+        if active && !kind.starts_with("delete_") {
+            return Err(DatabaseError::Conflict(
+                "The target is deleting, deleted or expired; create a new output or quote".into(),
+            ));
+        }
+        if matches!(kind.as_str(), "archive" | "pin") {
+            let ready: bool = sqlx::query_scalar(&format!("SELECT EXISTS(SELECT 1 FROM {table} r JOIN backups b ON b.id=r.backup_id WHERE r.id=$1::text::uuid AND b.state IN('ready','partial'))")).bind(&target).fetch_one(&mut *tx).await?;
+            if !ready {
+                return Err(DatabaseError::Conflict(
+                    "Retry the snapshot capture operation before retrying this output".into(),
+                ));
+            }
+        }
+        sqlx::query(&format!(
+            "UPDATE {table} SET state=$2 WHERE id=$1::text::uuid"
+        ))
+        .bind(&target)
+        .bind(state)
         .execute(&mut *tx)
         .await?;
+        sqlx::query("UPDATE operations SET state='queued',available_at=now(),updated_at=now(),error=NULL WHERE id=$1::text::uuid").bind(id).execute(&mut *tx).await?;
+        let value: Value = sqlx::query_scalar("INSERT INTO operation_attempts(operation_id,number) SELECT id,attempts+1 FROM operations WHERE id=$1::text::uuid RETURNING jsonb_build_object('number',number,'requested_at',requested_at,'started_at',started_at,'finished_at',finished_at,'error',error)").bind(id).fetch_one(&mut *tx).await?;
+        tx.commit().await?;
+        decode(value)
+    }
 
-        // Replace tokens for this task with the provided list (idempotent)
-        // Expecting JSON shape: Vec<crate::server::api::Tokens>
-        let token_entries: Vec<crate::server::api::Tokens> =
-            serde_json::from_value(tokens.clone()).unwrap_or_default();
+    async fn attempts(&self, owner: &str, id: &str) -> Result<Vec<Attempt>> {
+        if self.get(Resource::Operation, owner, id).await?.is_none() {
+            return Err(DatabaseError::NotFound);
+        }
+        let rows:Vec<Value>=sqlx::query_scalar("SELECT jsonb_build_object('number',number,'requested_at',requested_at,'started_at',started_at,'finished_at',finished_at,'error',error) FROM operation_attempts WHERE operation_id=$1::text::uuid ORDER BY number").bind(id).fetch_all(&self.pool).await?;
+        rows.into_iter().map(decode).collect()
+    }
 
-        for entry in &token_entries {
-            for token_str in &entry.tokens {
-                if let Some((contract_address, token_id)) = token_str.split_once(':') {
+    async fn claim(&self) -> Result<Option<Claim>> {
+        let mut tx = self.pool.begin().await?;
+        let row=sqlx::query("SELECT o.id::text AS id,o.owner_id::text AS owner_id FROM operations o WHERE o.state='queued' AND o.available_at<=now() AND (o.kind NOT IN('archive','pin') OR EXISTS(SELECT 1 FROM backups b WHERE b.state IN('ready','partial') AND b.id=COALESCE((SELECT backup_id FROM archives WHERE id=o.archive_id),(SELECT backup_id FROM pin_sets WHERE id=o.pin_set_id)))) ORDER BY o.available_at,o.created_at,o.id FOR UPDATE OF o SKIP LOCKED LIMIT 1").fetch_optional(&mut *tx).await?;
+        let Some(row) = row else { return Ok(None) };
+        let id: String = row.get("id");
+        let owner: String = row.get("owner_id");
+        let lease_token = uuid();
+        sqlx::query("UPDATE operations SET state='running',attempts=CASE WHEN EXISTS(SELECT 1 FROM operation_attempts a WHERE a.operation_id=operations.id AND a.number=operations.attempts AND a.finished_at IS NULL) THEN attempts ELSE attempts+1 END,lease_token=$2::text::uuid,lease_until=now()+interval '90 seconds',updated_at=now() WHERE id=$1::text::uuid").bind(&id).bind(&lease_token).execute(&mut *tx).await?;
+        sqlx::query("INSERT INTO operation_attempts(operation_id,number,lease_token,started_at) SELECT id,attempts,lease_token,now() FROM operations WHERE id=$1::text::uuid ON CONFLICT(operation_id,number) DO UPDATE SET lease_token=EXCLUDED.lease_token,started_at=COALESCE(operation_attempts.started_at,EXCLUDED.started_at)").bind(&id).execute(&mut *tx).await?;
+        let operation: Operation = decode(
+            document(&mut tx, Resource::Operation, &owner, &id)
+                .await?
+                .ok_or(DatabaseError::NotFound)?,
+        )?;
+        let target_table = match operation.kind.as_str() {
+            "capture" => Some("backups"),
+            "archive" => Some("archives"),
+            "pin" => Some("pin_sets"),
+            _ => None,
+        };
+        if let Some(table) = target_table {
+            sqlx::query(&format!(
+                "UPDATE {table} SET state='running' WHERE id=$1::text::uuid AND state='queued'"
+            ))
+            .bind(&operation.target_id)
+            .execute(&mut *tx)
+            .await?;
+        }
+        let specification:Option<Value>=sqlx::query_scalar("SELECT COALESCE(q.specification,b.specification) FROM operations o LEFT JOIN backups b ON b.id=COALESCE(o.backup_id,(SELECT backup_id FROM archives WHERE id=o.archive_id),(SELECT backup_id FROM pin_sets WHERE id=o.pin_set_id)) LEFT JOIN quotes q ON q.id=o.quote_id WHERE o.id=$1::text::uuid").bind(&id).fetch_one(&mut *tx).await?;
+        let plan:Option<Value>=sqlx::query_scalar("SELECT q.plan FROM operations o JOIN quotes q ON q.id=o.quote_id WHERE o.id=$1::text::uuid").bind(&id).fetch_optional(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(Some(Claim {
+            operation,
+            owner_id: owner,
+            lease_token,
+            specification: specification.map(decode).transpose()?,
+            plan: decode(plan.unwrap_or_else(|| json!([])))?,
+        }))
+    }
+
+    async fn heartbeat(&self, claim: &Claim) -> Result<bool> {
+        Ok(sqlx::query("UPDATE operations SET lease_until=now()+interval '90 seconds',updated_at=now() WHERE id=$1::text::uuid AND lease_token=$2::text::uuid AND state='running' AND lease_until>now()")
+            .bind(&claim.operation.id).bind(&claim.lease_token).execute(&self.pool).await?.rows_affected()==1)
+    }
+
+    async fn context(&self, claim: &Claim) -> Result<Value> {
+        let mut tx = self.pool.begin().await?;
+        fence(&mut tx, claim).await?;
+        let row=sqlx::query("SELECT COALESCE(o.backup_id,a.backup_id,ps.backup_id,q.source_backup_id)::text AS backup_id,a.storage_key,a.retention_days,to_jsonb(ps.provider_ids) AS provider_ids FROM operations o LEFT JOIN archives a ON a.id=o.archive_id LEFT JOIN pin_sets ps ON ps.id=o.pin_set_id LEFT JOIN quotes q ON q.id=o.quote_id WHERE o.id=$1::text::uuid").bind(&claim.operation.id).fetch_one(&mut *tx).await?;
+        let backup_id: Option<String> = row.get("backup_id");
+        let items: Vec<Value> = if let Some(id) = &backup_id {
+            sqlx::query_scalar(
+                "SELECT document FROM api_items WHERE backup_id=$1::text::uuid ORDER BY id",
+            )
+            .bind(id)
+            .fetch_all(&mut *tx)
+            .await?
+        } else {
+            vec![]
+        };
+        let pins:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(p)-'error' FROM provider_pins p JOIN pin_memberships m ON m.pin_id=p.id WHERE m.pin_set_id=$1::text::uuid ORDER BY p.id").bind(&claim.operation.target_id).fetch_all(&mut *tx).await?;
+        let archive = if claim.operation.kind.ends_with("archive") {
+            document(
+                &mut tx,
+                Resource::Archive,
+                &claim.owner_id,
+                &claim.operation.target_id,
+            )
+            .await?
+        } else {
+            None
+        };
+        let pin_set = if matches!(claim.operation.kind.as_str(), "pin" | "delete_pin_set") {
+            document(
+                &mut tx,
+                Resource::PinSet,
+                &claim.owner_id,
+                &claim.operation.target_id,
+            )
+            .await?
+        } else {
+            None
+        };
+        let result = json!({"backup_id":backup_id,"items":items,"pins":pins,"archive":archive,"pin_set":pin_set,"storage_key":row.get::<Option<String>,_>("storage_key"),"retention_days":row.get::<Option<i32>,_>("retention_days"),"provider_ids":row.get::<Option<Value>,_>("provider_ids")});
+        tx.commit().await?;
+        Ok(result)
+    }
+
+    async fn progress(&self, claim: &Claim, progress: Progress) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        fence(&mut tx, claim).await?;
+        let mut finish = true;
+        let mut failure = None;
+        match progress {
+            Progress::Items(items) => {
+                for item in items {
+                    sqlx::query("UPDATE backup_items SET state=$3,metadata_uri=$4,metadata_sha256=$5,observed_at=$6,block_reference=$7,error=$8 WHERE id=$1::text::uuid AND backup_id=$2::text::uuid")
+                        .bind(&item.id).bind(&item.backup_id).bind(state_name(&item.state)).bind(&item.metadata_uri).bind(&item.metadata_sha256).bind(item.observed_at).bind(&item.block_reference).bind(json!(item.error)).execute(&mut *tx).await?;
+                    sqlx::query("DELETE FROM item_assets WHERE item_id=$1::text::uuid")
+                        .bind(&item.id)
+                        .execute(&mut *tx)
+                        .await?;
+                    for asset in item.assets {
+                        save_asset(&mut tx, &item.id, &asset).await?;
+                    }
+                }
+                finish = false;
+            }
+            Progress::Captured {
+                manifest_sha256,
+                state,
+            } => {
+                sqlx::query("UPDATE backups SET state=$2,manifest_sha256=$3,updated_at=now() WHERE id=$1::text::uuid").bind(&claim.operation.target_id).bind(state_name(&state)).bind(manifest_sha256).execute(&mut *tx).await?;
+            }
+            Progress::Archived(blob) => {
+                sqlx::query("UPDATE archives SET state=CASE WHEN EXISTS(SELECT 1 FROM backup_items i WHERE i.backup_id=archives.backup_id AND i.state IN('failed','partial','unsupported')) THEN 'partial' ELSE 'ready' END,sha256=$2,storage_key=$3,size_bytes=$4,expires_at=now()+make_interval(days=>retention_days),error=NULL WHERE id=$1::text::uuid")
+                    .bind(&claim.operation.target_id).bind(blob.sha256).bind(blob.storage_key).bind(to_i64(blob.size_bytes)?).execute(&mut *tx).await?;
+            }
+            Progress::Quoted {
+                plan,
+                amount_atomic,
+                estimated_size_bytes,
+                lifetime_seconds,
+            } => {
+                sqlx::query("UPDATE quotes SET state='ready',plan=$2,amount_atomic=$3::text::numeric,estimated_size_bytes=$4,expires_at=now()+make_interval(secs=>$5::double precision),error=NULL WHERE id=$1::text::uuid")
+                    .bind(&claim.operation.target_id).bind(json!(plan)).bind(amount_atomic).bind(to_i64(estimated_size_bytes)?).bind(f64::from(lifetime_seconds)).execute(&mut *tx).await?;
+            }
+            Progress::Pinned { state } => {
+                sqlx::query("UPDATE pin_sets SET state=$2,error=NULL WHERE id=$1::text::uuid")
+                    .bind(&claim.operation.target_id)
+                    .bind(state_name(&state))
+                    .execute(&mut *tx)
+                    .await?;
+            }
+            Progress::Deleted => {
+                let table = match claim.operation.kind.as_str() {
+                    "delete_backup" => "backups",
+                    "delete_archive" => "archives",
+                    "delete_pin_set" => "pin_sets",
+                    _ => return Err(DatabaseError::Invalid("Not a deletion operation".into())),
+                };
+                let state = if table == "archives" {
+                    "CASE WHEN deletion_requested_at IS NULL AND expires_at<=now() THEN 'expired' ELSE 'deleted' END"
+                } else {
+                    "'deleted'"
+                };
+                sqlx::query(&format!(
+                    "UPDATE {table} SET state={state},deleted_at=now() WHERE id=$1::text::uuid"
+                ))
+                .bind(&claim.operation.target_id)
+                .execute(&mut *tx)
+                .await?;
+            }
+            Progress::Failed(error) => {
+                failure = Some(json!(error));
+                let table = match claim.operation.kind.as_str() {
+                    "capture" | "delete_backup" => "backups",
+                    "archive" | "delete_archive" => "archives",
+                    "pin" | "delete_pin_set" => "pin_sets",
+                    "quote" => "quotes",
+                    _ => return Err(DatabaseError::Invalid("Unknown operation".into())),
+                };
+                let target_state = if claim.operation.kind.starts_with("delete_") {
+                    "deleting"
+                } else {
+                    "failed"
+                };
+                if table == "backups" {
                     sqlx::query(
-                        r#"INSERT INTO tokens (task_id, chain, contract_address, token_id)
-                           VALUES ($1, $2, $3, $4)
-                           ON CONFLICT (task_id, chain, contract_address, token_id) DO NOTHING"#,
+                        "UPDATE backups SET state=$2,updated_at=now() WHERE id=$1::text::uuid",
                     )
-                    .bind(task_id)
-                    .bind(&entry.chain)
-                    .bind(contract_address)
-                    .bind(token_id)
+                    .bind(&claim.operation.target_id)
+                    .bind(target_state)
+                    .execute(&mut *tx)
+                    .await?;
+                } else {
+                    sqlx::query(&format!(
+                        "UPDATE {table} SET state=$2,error=$3 WHERE id=$1::text::uuid"
+                    ))
+                    .bind(&claim.operation.target_id)
+                    .bind(target_state)
+                    .bind(&failure)
                     .execute(&mut *tx)
                     .await?;
                 }
             }
-        }
-
-        // Insert into archive_requests if storage mode includes archive
-        if storage_mode == "archive" || storage_mode == "full" {
-            let archive_fmt = archive_format.unwrap_or("zip");
-
-            if let Some(days) = retention_days {
-                sqlx::query(
-                    r#"
-                    INSERT INTO archive_requests (task_id, archive_format, expires_at, status)
-                    VALUES ($1, $2, NOW() + make_interval(days => $3::int), 'in_progress')
-                    ON CONFLICT (task_id) DO UPDATE SET
-                        archive_format = EXCLUDED.archive_format,
-                        expires_at = EXCLUDED.expires_at
-                    "#,
-                )
-                .bind(task_id)
-                .bind(archive_fmt)
-                .bind(days as i64)
-                .execute(&mut *tx)
-                .await?;
-            } else {
-                sqlx::query(
-                    r#"
-                    INSERT INTO archive_requests (task_id, archive_format, expires_at, status)
-                    VALUES ($1, $2, NULL, 'in_progress')
-                    ON CONFLICT (task_id) DO UPDATE SET
-                        archive_format = EXCLUDED.archive_format,
-                        expires_at = EXCLUDED.expires_at
-                    "#,
-                )
-                .bind(task_id)
-                .bind(archive_fmt)
-                .execute(&mut *tx)
-                .await?;
+            Progress::Deferred => {
+                if claim.operation.kind == "pin" {
+                    sqlx::query("UPDATE pin_sets SET state='running' WHERE id=$1::text::uuid")
+                        .bind(&claim.operation.target_id)
+                        .execute(&mut *tx)
+                        .await?;
+                }
+                sqlx::query("UPDATE operations SET state='queued',available_at=now()+interval '5 seconds',lease_until=NULL,lease_token=NULL,updated_at=now() WHERE id=$1::text::uuid").bind(&claim.operation.id).execute(&mut *tx).await?;
+                finish = false;
             }
         }
-
-        // Insert into pin_requests if storage mode includes IPFS
-        if storage_mode == "ipfs" || storage_mode == "full" {
+        if finish {
+            sqlx::query("UPDATE operations SET state=$2,error=$3,updated_at=now(),lease_until=NULL,lease_token=NULL WHERE id=$1::text::uuid").bind(&claim.operation.id).bind(if failure.is_some(){"failed"}else{"succeeded"}).bind(&failure).execute(&mut *tx).await?;
+            sqlx::query("UPDATE operation_attempts SET finished_at=now(),error=$3 WHERE operation_id=$1::text::uuid AND number=$2").bind(&claim.operation.id).bind(claim.operation.attempts as i32).bind(&failure).execute(&mut *tx).await?;
             sqlx::query(
-                r#"
-                INSERT INTO pin_requests (task_id, status)
-                VALUES ($1, 'in_progress')
-                ON CONFLICT (task_id) DO UPDATE SET
-                    status = EXCLUDED.status
-                "#,
+                "INSERT INTO operation_events(operation_id,event) VALUES($1::text::uuid,$2)",
             )
-            .bind(task_id)
+            .bind(&claim.operation.id)
+            .bind(json!({"state":if failure.is_some(){"failed"}else{"succeeded"},"error":failure}))
             .execute(&mut *tx)
             .await?;
         }
-
         tx.commit().await?;
         Ok(())
     }
 
-    pub async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        // CASCADE will delete associated archive_requests row if it exists
-        sqlx::query!("DELETE FROM backup_tasks WHERE task_id = $1", task_id)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn set_error_logs(
-        &self,
-        task_id: &str,
-        archive_error_log: Option<&str>,
-        ipfs_error_log: Option<&str>,
-    ) -> Result<(), sqlx::Error> {
+    async fn put_blob(&self, claim: &Claim, blob: &Blob) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        if let Some(a) = archive_error_log {
-            sqlx::query("UPDATE archive_requests SET error_log = $2 WHERE task_id = $1")
-                .bind(task_id)
-                .bind(a)
-                .execute(&mut *tx)
-                .await?;
-        }
-        if let Some(i) = ipfs_error_log {
-            sqlx::query(
-                r#"
-                    UPDATE pin_requests
-                    SET error_log = $2
-                    WHERE task_id = $1
-                    "#,
-            )
-            .bind(task_id)
-            .bind(i)
-            .execute(&mut *tx)
-            .await?;
-        }
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub async fn update_archive_request_error_log(
-        &self,
-        task_id: &str,
-        error_log: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            UPDATE archive_requests
-            SET error_log = $2
-            WHERE task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(error_log)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub async fn update_pin_request_error_log(
-        &self,
-        task_id: &str,
-        error_log: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            UPDATE pin_requests
-            SET error_log = $2
-            WHERE task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(error_log)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    /// Log a human-friendly backup status based on a machine status value and storage mode
-    fn log_status(task_id: &str, status: &str, mode: &StorageMode) {
-        match status {
-            "done" => info!("Backup {} ready (storage: {})", task_id, mode.as_str()),
-            "error" => warn!("Backup {} errored (storage: {})", task_id, mode.as_str()),
-            _ => (),
-        }
-    }
-
-    pub async fn update_pin_request_status(
-        &self,
-        task_id: &str,
-        status: &IpfsStatus,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            UPDATE pin_requests
-            SET status = $2
-            WHERE task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(status.as_str())
-        .execute(&self.pool)
-        .await?;
-
-        Self::log_status(task_id, status.as_str(), &StorageMode::Ipfs);
-
-        Ok(())
-    }
-
-    pub async fn update_archive_request_status(
-        &self,
-        task_id: &str,
-        status: &ArchiveStatus,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            UPDATE archive_requests
-            SET status = $2
-            WHERE task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(status.as_str())
-        .execute(&self.pool)
-        .await?;
-
-        Self::log_status(task_id, status.as_str(), &StorageMode::Archive);
-
-        Ok(())
-    }
-
-    pub async fn update_archive_request_statuses(
-        &self,
-        task_ids: &[String],
-        status: &ArchiveStatus,
-    ) -> Result<(), sqlx::Error> {
-        if task_ids.is_empty() {
-            return Ok(());
-        }
-
-        // Use a transaction for atomicity
-        let mut tx = self.pool.begin().await?;
-
-        // Update each task_id individually with a prepared statement
-        for task_id in task_ids {
-            sqlx::query("UPDATE archive_requests SET status = $1 WHERE task_id = $2")
-                .bind(status.as_str())
-                .bind(task_id)
-                .execute(&mut *tx)
-                .await?;
-        }
-
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub async fn retry_backup(
-        &self,
-        task_id: &str,
-        scope: &str,
-        retention_days: u64,
-    ) -> Result<(), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-
-        // Reset statuses per requested scope
-        if scope == "archive" || scope == "full" {
-            sqlx::query(
-                r#"
-                UPDATE archive_requests
-                SET status = 'in_progress', fatal_error = NULL, error_log = NULL
-                WHERE task_id = $1
-                "#,
-            )
-            .bind(task_id)
-            .execute(&mut *tx)
-            .await?;
-            sqlx::query(
-                r#"
-                UPDATE archive_requests
-                SET expires_at = NOW() + make_interval(days => $2::int)
-                WHERE task_id = $1
-                "#,
-            )
-            .bind(task_id)
-            .bind(retention_days as i64)
-            .execute(&mut *tx)
-            .await?;
-        }
-        if scope == "ipfs" || scope == "full" {
-            sqlx::query(
-                r#"
-                UPDATE pin_requests
-                SET status = 'in_progress', fatal_error = NULL, error_log = NULL
-                WHERE task_id = $1
-                "#,
-            )
-            .bind(task_id)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub async fn clear_backup_errors(&self, task_id: &str, scope: &str) -> Result<(), sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-        // Clear archive errors if scope includes archive
-        sqlx::query(
-            r#"
-            UPDATE archive_requests
-            SET error_log = NULL, fatal_error = NULL
-            WHERE task_id = $1 AND ($2 IN ('archive', 'full'))
-            "#,
-        )
-        .bind(task_id)
-        .bind(scope)
-        .execute(&mut *tx)
-        .await?;
-        // Clear IPFS errors if scope includes ipfs
-        sqlx::query(
-            r#"
-            UPDATE pin_requests
-            SET error_log = NULL, fatal_error = NULL
-            WHERE task_id = $1 AND ($2 IN ('ipfs', 'full'))
-            "#,
-        )
-        .bind(task_id)
-        .bind(scope)
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
-        Ok(())
-    }
-
-    pub async fn set_archive_request_error(
-        &self,
-        task_id: &str,
-        fatal_error: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            UPDATE archive_requests
-            SET status = 'error', fatal_error = $2
-            WHERE task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(fatal_error)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub async fn set_pin_request_error(
-        &self,
-        task_id: &str,
-        fatal_error: &str,
-    ) -> Result<(), sqlx::Error> {
-        sqlx::query(
-            r#"
-            UPDATE pin_requests
-            SET status = 'error', fatal_error = $2
-            WHERE task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .bind(fatal_error)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
-    }
-
-    pub async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        let sql = r#"
-            WITH task_mode AS (
-                SELECT storage_mode FROM backup_tasks WHERE task_id = $1
-            ),
-            touch AS (
-                UPDATE backup_tasks SET updated_at = NOW() WHERE task_id = $1 RETURNING 1
-            ),
-            ar_inprog AS (
-                SELECT 1 FROM archive_requests ar, task_mode tm
-                WHERE ar.task_id = $1 AND ar.status = 'in_progress'
-                  AND tm.storage_mode IN ('archive','full')
-                LIMIT 1
-            ),
-            pr_inprog AS (
-                SELECT 1 FROM pin_requests pr, task_mode tm
-                WHERE pr.task_id = $1 AND pr.status = 'in_progress'
-                  AND tm.storage_mode IN ('ipfs','full')
-                LIMIT 1
-            ),
-            upd_archive AS (
-                UPDATE archive_requests ar
-                SET deleted_at = NOW()
-                WHERE ar.task_id = $1 AND ar.deleted_at IS NULL
-                  AND EXISTS (SELECT 1 FROM task_mode tm WHERE tm.storage_mode IN ('archive','full'))
-                  AND NOT EXISTS (SELECT 1 FROM ar_inprog)
-                RETURNING 1
-            ),
-            upd_pins AS (
-                UPDATE pin_requests pr
-                SET deleted_at = NOW()
-                WHERE pr.task_id = $1 AND pr.deleted_at IS NULL
-                  AND EXISTS (SELECT 1 FROM task_mode tm WHERE tm.storage_mode IN ('ipfs','full'))
-                  AND NOT EXISTS (SELECT 1 FROM pr_inprog)
-                RETURNING 1
-            )
-            SELECT EXISTS(SELECT 1 FROM ar_inprog) AS ar_blocked,
-                   EXISTS(SELECT 1 FROM pr_inprog) AS pr_blocked
-        "#;
-
-        let row = sqlx::query(sql).bind(task_id).fetch_one(&self.pool).await?;
-        let ar_blocked: bool = row.get("ar_blocked");
-        let pr_blocked: bool = row.get("pr_blocked");
-        if ar_blocked || pr_blocked {
-            return Err(sqlx::Error::Protocol(
-                "in_progress task cannot be deleted".into(),
+        fence(&mut tx, claim).await?;
+        let inserted:Option<String>=sqlx::query_scalar("INSERT INTO blobs(sha256,size_bytes,storage_key) VALUES($1,$2,$3) ON CONFLICT(sha256) DO UPDATE SET deleted_at=NULL,state='ready' WHERE blobs.state<>'deleting' RETURNING sha256")
+            .bind(&blob.sha256).bind(to_i64(blob.size_bytes)?).bind(&blob.storage_key).fetch_optional(&mut *tx).await?;
+        if inserted.is_none() {
+            return Err(DatabaseError::Conflict(
+                "Blob cleanup is in progress; retry the operation".into(),
             ));
         }
+        sqlx::query("INSERT INTO blob_leases(sha256,operation_id) VALUES($1,$2::text::uuid) ON CONFLICT DO NOTHING").bind(&blob.sha256).bind(&claim.operation.id).execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(())
     }
 
-    /// Mark archive as being deleted (similar to start_deletion but for archive subresource)
-    pub async fn start_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        let row = sqlx::query(
-            r#"
-            WITH ar_inprog AS (
-                SELECT 1 FROM archive_requests WHERE task_id = $1 AND status = 'in_progress' LIMIT 1
-            ), upd AS (
-                UPDATE archive_requests
-                SET deleted_at = NOW()
-                WHERE task_id = $1 AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM ar_inprog)
-                RETURNING 1
-            )
-            SELECT EXISTS(SELECT 1 FROM ar_inprog) AS blocked
-            "#,
-        )
-        .bind(task_id)
-        .fetch_one(&self.pool)
-        .await?;
-        let blocked: bool = row.get("blocked");
-        if blocked {
-            return Err(sqlx::Error::Protocol(
-                "in_progress task cannot be deleted".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    /// Mark IPFS pins as being deleted (similar to start_deletion but for IPFS pins subresource)
-    pub async fn start_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        let row = sqlx::query(
-            r#"
-            WITH pr_inprog AS (
-                SELECT 1 FROM pin_requests WHERE task_id = $1 AND status = 'in_progress' LIMIT 1
-            ), upd AS (
-                UPDATE pin_requests
-                SET deleted_at = NOW()
-                WHERE task_id = $1 AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM pr_inprog)
-                RETURNING 1
-            )
-            SELECT EXISTS(SELECT 1 FROM pr_inprog) AS blocked
-            "#,
-        )
-        .bind(task_id)
-        .fetch_one(&self.pool)
-        .await?;
-        let blocked: bool = row.get("blocked");
-        if blocked {
-            return Err(sqlx::Error::Protocol(
-                "in_progress task cannot be deleted".into(),
-            ));
-        }
-        Ok(())
-    }
-
-    pub async fn get_backup_task(&self, task_id: &str) -> Result<Option<BackupTask>, sqlx::Error> {
-        let row = sqlx::query(
-            r#"
-            SELECT 
-                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count,
-                ar.status as archive_status, ar.fatal_error, b.storage_mode,
-                ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
-                ar.error_log as archive_error_log,
-                pr.status as ipfs_status,
-                pr.error_log as ipfs_error_log,
-                pr.fatal_error as ipfs_fatal_error,
-                pr.deleted_at as pins_deleted_at
-            FROM backup_tasks b
-            LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
-            LEFT JOIN pin_requests pr ON b.task_id = pr.task_id
-            WHERE b.task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        if let Some(row) = row {
-            // Fetch tokens for this task from tokens table and aggregate by chain
-            let token_rows = sqlx::query(
-                r#"
-                SELECT chain, contract_address, token_id
-                FROM tokens
-                WHERE task_id = $1
-                ORDER BY chain, contract_address, token_id
-                "#,
-            )
-            .bind(task_id)
-            .fetch_all(&self.pool)
-            .await?;
-
-            use std::collections::BTreeMap;
-            let mut by_chain: BTreeMap<String, Vec<String>> = BTreeMap::new();
-            for r in token_rows {
-                let chain: String = r.get("chain");
-                let contract_address: String = r.get("contract_address");
-                let token_id: String = r.get("token_id");
-                by_chain
-                    .entry(chain)
-                    .or_default()
-                    .push(format!("{}:{}", contract_address, token_id));
-            }
-            let tokens_json = serde_json::json!(by_chain
-                .into_iter()
-                .map(|(chain, toks)| serde_json::json!({
-                    "chain": chain,
-                    "tokens": toks,
-                }))
-                .collect::<Vec<_>>());
-
-            Ok(Some(BackupTask {
-                task_id: row.get("task_id"),
-                created_at: row.get("created_at"),
-                updated_at: row.get("updated_at"),
-                requestor: row.get("requestor"),
-                nft_count: row.get("nft_count"),
-                tokens: tokens_json,
-                archive_status: parse_archive_status(
-                    row.try_get::<Option<String>, _>("archive_status")
-                        .ok()
-                        .flatten(),
-                ),
-                ipfs_status: parse_ipfs_status(
-                    row.try_get::<Option<String>, _>("ipfs_status")
-                        .ok()
-                        .flatten(),
-                ),
-                archive_error_log: row.get("archive_error_log"),
-                ipfs_error_log: row.get("ipfs_error_log"),
-                archive_fatal_error: row.get("fatal_error"),
-                ipfs_fatal_error: row
-                    .try_get::<Option<String>, _>("ipfs_fatal_error")
-                    .ok()
-                    .flatten(),
-                storage_mode: row.get("storage_mode"),
-                archive_format: row.get("archive_format"),
-                expires_at: row.get("expires_at"),
-                archive_deleted_at: row.get("archive_deleted_at"),
-                pins_deleted_at: row.get("pins_deleted_at"),
-            }))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// Fetch backup task plus a paginated slice of its tokens; returns (meta, total_token_count)
-    pub async fn get_backup_task_with_tokens(
+    async fn reserve_pin(
         &self,
-        task_id: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Option<(BackupTask, u32)>, sqlx::Error> {
-        // Base metadata (same as get_backup_task)
-        let row = sqlx::query(
-            r#"
-            SELECT 
-                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count,
-                ar.status as archive_status, ar.fatal_error, b.storage_mode,
-                ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
-                ar.error_log as archive_error_log,
-                pr.status as ipfs_status,
-                pr.error_log as ipfs_error_log,
-                pr.fatal_error as ipfs_fatal_error,
-                pr.deleted_at as pins_deleted_at
-            FROM backup_tasks b
-            LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
-            LEFT JOIN pin_requests pr ON b.task_id = pr.task_id
-            WHERE b.task_id = $1
-            "#,
-        )
-        .bind(task_id)
-        .fetch_optional(&self.pool)
-        .await?;
-
-        let Some(row) = row else { return Ok(None) };
-
-        // Total tokens for pagination
-        let total_row = sqlx::query!(
-            r#"SELECT COUNT(*) as count FROM tokens WHERE task_id = $1"#,
-            task_id
-        )
-        .fetch_one(&self.pool)
-        .await?;
-        let total: u32 = total_row.count.unwrap_or(0) as u32;
-
-        // Page of tokens
-        let token_rows = sqlx::query(
-            r#"
-            SELECT chain, contract_address, token_id
-            FROM tokens
-            WHERE task_id = $1
-            ORDER BY chain, contract_address, token_id
-            LIMIT $2 OFFSET $3
-            "#,
-        )
-        .bind(task_id)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
-
-        use std::collections::BTreeMap;
-        let mut by_chain: BTreeMap<String, Vec<String>> = BTreeMap::new();
-        for r in token_rows {
-            let chain: String = r.get("chain");
-            let contract_address: String = r.get("contract_address");
-            let token_id: String = r.get("token_id");
-            by_chain
-                .entry(chain)
-                .or_default()
-                .push(format!("{}:{}", contract_address, token_id));
-        }
-        let tokens_json = serde_json::json!(by_chain
-            .into_iter()
-            .map(|(chain, toks)| serde_json::json!({ "chain": chain, "tokens": toks }))
-            .collect::<Vec<_>>());
-
-        let meta = BackupTask {
-            task_id: row.get("task_id"),
-            created_at: row.get("created_at"),
-            updated_at: row.get("updated_at"),
-            requestor: row.get("requestor"),
-            nft_count: row.get("nft_count"),
-            tokens: tokens_json,
-            archive_status: parse_archive_status(
-                row.try_get::<Option<String>, _>("archive_status")
-                    .ok()
-                    .flatten(),
-            ),
-            ipfs_status: parse_ipfs_status(
-                row.try_get::<Option<String>, _>("ipfs_status")
-                    .ok()
-                    .flatten(),
-            ),
-            archive_error_log: row.get("archive_error_log"),
-            ipfs_error_log: row.get("ipfs_error_log"),
-            archive_fatal_error: row.get("fatal_error"),
-            ipfs_fatal_error: row
-                .try_get::<Option<String>, _>("ipfs_fatal_error")
-                .ok()
-                .flatten(),
-            storage_mode: row.get("storage_mode"),
-            archive_format: row.get("archive_format"),
-            expires_at: row.get("expires_at"),
-            archive_deleted_at: row.get("archive_deleted_at"),
-            pins_deleted_at: row.get("pins_deleted_at"),
+        claim: &Claim,
+        asset: &Asset,
+        provider: &str,
+    ) -> Result<ManagedPin> {
+        let cid = asset
+            .cid
+            .as_deref()
+            .ok_or_else(|| DatabaseError::Invalid("Asset has no CID".into()))?;
+        let mut tx = self.pool.begin().await?;
+        fence(&mut tx, claim).await?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+            .bind(format!("{provider}:{cid}"))
+            .execute(&mut *tx)
+            .await?;
+        let pin_id=if let Some(id)=sqlx::query_scalar::<_,String>("SELECT id::text FROM provider_pins WHERE provider_id=$1::text::uuid AND cid=$2 AND state IN('queued','pinning','pinned','reconciliation_required') ORDER BY CASE state WHEN 'pinned' THEN 0 ELSE 1 END,created_at,id FOR UPDATE LIMIT 1").bind(provider).bind(cid).fetch_optional(&mut *tx).await? { id }else{
+            let id=uuid();
+            sqlx::query("INSERT INTO provider_pins(id,provider_id,cid,state,operation_id) VALUES($1::text::uuid,$2::text::uuid,$3,'queued',$4::text::uuid)").bind(&id).bind(provider).bind(cid).bind(&claim.operation.id).execute(&mut *tx).await?;id
         };
-
-        Ok(Some((meta, total)))
+        sqlx::query("INSERT INTO pin_memberships(pin_set_id,backup_id,item_id,asset_id,pin_id) SELECT $1::text::uuid,i.backup_id,i.id,$2::text::uuid,$3::text::uuid FROM backup_items i WHERE i.id=$4::text::uuid ON CONFLICT DO NOTHING")
+            .bind(&claim.operation.target_id).bind(&asset.id).bind(&pin_id).bind(&asset.item_id).execute(&mut *tx).await?;
+        let value: Value =
+            sqlx::query_scalar("SELECT to_jsonb(p) FROM provider_pins p WHERE id=$1::text::uuid")
+                .bind(&pin_id)
+                .fetch_one(&mut *tx)
+                .await?;
+        tx.commit().await?;
+        decode(value)
     }
 
-    pub async fn list_requestor_backup_tasks_paginated(
-        &self,
-        requestor: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<BackupTask>, u32), sqlx::Error> {
-        // Total count
-        let total_row = sqlx::query!(
-            r#"SELECT COUNT(*) as count FROM backup_tasks b WHERE b.requestor = $1"#,
-            requestor
-        )
-        .fetch_one(&self.pool)
-        .await?;
-        let total: u32 = total_row.count.unwrap_or(0) as u32;
-
-        let rows = sqlx::query(
-            r#"
-            SELECT 
-                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count,
-                ar.status as archive_status, ar.fatal_error, b.storage_mode,
-                ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
-                ar.error_log as archive_error_log,
-                pr.status as ipfs_status,
-                pr.error_log as ipfs_error_log,
-                pr.fatal_error as ipfs_fatal_error,
-                pr.deleted_at as pins_deleted_at
-            FROM backup_tasks b
-            LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
-            LEFT JOIN pin_requests pr ON b.task_id = pr.task_id
-            WHERE b.requestor = $1
-            ORDER BY b.created_at DESC
-            LIMIT $2 OFFSET $3
-            "#,
-        )
-        .bind(requestor)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
-
-        let recs = rows
-            .into_iter()
-            .map(|row| {
-                let task_id: String = row.get("task_id");
-
-                BackupTask {
-                    task_id,
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
-                    requestor: row.get("requestor"),
-                    nft_count: row.get("nft_count"),
-                    // Client should use get_backup_task to get tokens so the tokens
-                    // can be properly paginated.
-                    tokens: serde_json::Value::Null,
-                    archive_status: parse_archive_status(
-                        row.try_get::<Option<String>, _>("archive_status")
-                            .ok()
-                            .flatten(),
-                    ),
-                    ipfs_status: parse_ipfs_status(
-                        row.try_get::<Option<String>, _>("ipfs_status")
-                            .ok()
-                            .flatten(),
-                    ),
-                    archive_error_log: row.get("archive_error_log"),
-                    ipfs_error_log: row.get("ipfs_error_log"),
-                    archive_fatal_error: row.get("fatal_error"),
-                    ipfs_fatal_error: row
-                        .try_get::<Option<String>, _>("ipfs_fatal_error")
-                        .ok()
-                        .flatten(),
-                    storage_mode: row.get("storage_mode"),
-                    archive_format: row.get("archive_format"),
-                    expires_at: row.get("expires_at"),
-                    archive_deleted_at: row.get("archive_deleted_at"),
-                    pins_deleted_at: row.get("pins_deleted_at"),
+    async fn update_pin(&self, claim: &Claim, update: PinUpdate) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        fence(&mut tx, claim).await?;
+        match update {
+            PinUpdate::Submitting { pin_id } => {
+                let changed = sqlx::query("UPDATE provider_pins SET state='pinning',submitted_at=now(),updated_at=now() WHERE id=$1::text::uuid AND submitted_at IS NULL AND operation_id=$2::text::uuid").bind(pin_id).bind(&claim.operation.id).execute(&mut *tx).await?.rows_affected();
+                if changed != 1 {
+                    return Err(DatabaseError::Conflict(
+                        "Pin submission has already started".into(),
+                    ));
                 }
-            })
-            .collect();
-
-        Ok((recs, total))
-    }
-
-    pub async fn list_unprocessed_expired_backups(
-        &self,
-    ) -> Result<Vec<ExpiredBackup>, sqlx::Error> {
-        let rows = sqlx::query(
-            r#"
-            SELECT b.task_id, ar.archive_format 
-            FROM backup_tasks b
-            JOIN archive_requests ar ON b.task_id = ar.task_id
-            WHERE ar.expires_at IS NOT NULL AND ar.expires_at < NOW() AND ar.status != 'expired'
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-        let recs = rows
-            .into_iter()
-            .map(|row| ExpiredBackup {
-                task_id: row.get("task_id"),
-                archive_format: row.get("archive_format"),
-            })
-            .collect();
-        Ok(recs)
-    }
-
-    /// Retrieve all backup tasks that are in 'in_progress' status
-    /// This is used to recover incomplete tasks on server restart
-    pub async fn get_incomplete_backup_tasks(&self) -> Result<Vec<BackupTask>, sqlx::Error> {
-        let rows = sqlx::query(
-            r#"
-            SELECT 
-                b.task_id, b.created_at, b.updated_at, b.requestor, b.nft_count,
-                ar.status as archive_status, ar.fatal_error, b.storage_mode,
-                ar.archive_format, ar.expires_at, ar.deleted_at as archive_deleted_at,
-                ar.error_log as archive_error_log,
-                pr.status as ipfs_status,
-                pr.error_log as ipfs_error_log,
-                pr.deleted_at as pins_deleted_at
-            FROM backup_tasks b
-            LEFT JOIN archive_requests ar ON b.task_id = ar.task_id
-            LEFT JOIN pin_requests pr ON b.task_id = pr.task_id
-            WHERE (
-                -- Archive-only mode: check archive status (record must exist and be in_progress)
-                (b.storage_mode = 'archive' AND ar.status = 'in_progress')
-                OR
-                -- IPFS-only mode: check IPFS status (record must exist and be in_progress)
-                (b.storage_mode = 'ipfs' AND pr.status = 'in_progress')
-                OR
-                -- Full mode: check both archive and IPFS status (task is incomplete if either is in_progress)
-                (b.storage_mode = 'full' AND (ar.status = 'in_progress' OR pr.status = 'in_progress'))
-            )
-            ORDER BY b.created_at ASC
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        // If no incomplete tasks, return early
-        if rows.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        // Collect task_ids to fetch tokens in bulk
-        let task_ids: Vec<String> = rows.iter().map(|r| r.get::<String, _>("task_id")).collect();
-
-        // Fetch all tokens for these tasks and aggregate by task_id and chain
-        use std::collections::BTreeMap;
-        let mut tokens_by_task: BTreeMap<String, BTreeMap<String, Vec<String>>> = BTreeMap::new();
-
-        let token_rows = sqlx::query(
-            r#"
-            SELECT task_id, chain, contract_address, token_id
-            FROM tokens
-            WHERE task_id = ANY($1)
-            ORDER BY chain, contract_address, token_id
-            "#,
-        )
-        .bind(&task_ids)
-        .fetch_all(&self.pool)
-        .await?;
-
-        for r in token_rows {
-            let task_id: String = r.get("task_id");
-            let chain: String = r.get("chain");
-            let contract_address: String = r.get("contract_address");
-            let token_id: String = r.get("token_id");
-            tokens_by_task
-                .entry(task_id)
-                .or_default()
-                .entry(chain)
-                .or_default()
-                .push(format!("{}:{}", contract_address, token_id));
-        }
-
-        let recs = rows
-            .into_iter()
-            .map(|row| {
-                let task_id: String = row.get("task_id");
-                let tokens_json = if let Some(by_chain) = tokens_by_task.get(&task_id) {
-                    serde_json::json!(by_chain
-                        .iter()
-                        .map(|(chain, toks)| serde_json::json!({
-                            "chain": chain,
-                            "tokens": toks,
-                        }))
-                        .collect::<Vec<_>>())
-                } else {
-                    // No tokens recorded for this task
-                    serde_json::json!([])
-                };
-
-                BackupTask {
-                    task_id,
-                    created_at: row.get("created_at"),
-                    updated_at: row.get("updated_at"),
-                    requestor: row.get("requestor"),
-                    nft_count: row.get("nft_count"),
-                    tokens: tokens_json,
-                    archive_status: parse_archive_status(
-                        row.try_get::<Option<String>, _>("archive_status")
-                            .ok()
-                            .flatten(),
-                    ),
-                    ipfs_status: parse_ipfs_status(
-                        row.try_get::<Option<String>, _>("ipfs_status")
-                            .ok()
-                            .flatten(),
-                    ),
-                    archive_error_log: row.get("archive_error_log"),
-                    ipfs_error_log: row.get("ipfs_error_log"),
-                    archive_fatal_error: row.get("fatal_error"),
-                    ipfs_fatal_error: None,
-                    storage_mode: row.get("storage_mode"),
-                    archive_format: row.get("archive_format"),
-                    expires_at: row.get("expires_at"),
-                    archive_deleted_at: row.get("archive_deleted_at"),
-                    pins_deleted_at: row.get("pins_deleted_at"),
-                }
-            })
-            .collect();
-
-        Ok(recs)
-    }
-
-    /// Insert pins and their associated tokens in a single atomic transaction
-    pub async fn insert_pins_with_tokens(
-        &self,
-        task_id: &str,
-        token_pin_mappings: &[crate::TokenPinMapping],
-    ) -> Result<(), sqlx::Error> {
-        // Collect all pin responses and prepare token data
-        let mut all_pin_responses = Vec::new();
-        let mut all_token_data = Vec::new(); // (index_in_pin_responses, chain, contract_address, token_id)
-
-        for mapping in token_pin_mappings {
-            for pin_response in &mapping.pin_responses {
-                let index = all_pin_responses.len();
-                all_pin_responses.push(pin_response);
-                all_token_data.push((
-                    index,
-                    mapping.chain.clone(),
-                    mapping.contract_address.clone(),
-                    mapping.token_id.clone(),
-                ));
+            }
+            PinUpdate::Observed {
+                pin_id,
+                request_id,
+                state,
+            } => {
+                sqlx::query("UPDATE provider_pins SET request_id=$2,state=$3,updated_at=now(),error=NULL WHERE id=$1::text::uuid AND state<>'deleted'").bind(pin_id).bind(request_id).bind(state).execute(&mut *tx).await?;
+            }
+            PinUpdate::Failed {
+                pin_id,
+                failure,
+                ambiguous,
+            } => {
+                sqlx::query("UPDATE provider_pins SET state=$2,error=$3,updated_at=now() WHERE id=$1::text::uuid").bind(pin_id).bind(if ambiguous{"reconciliation_required"}else{"failed"}).bind(json!(failure)).execute(&mut *tx).await?;
+            }
+            PinUpdate::Deleted { pin_id } => {
+                sqlx::query("UPDATE provider_pins SET state='deleted',updated_at=now(),error=NULL WHERE id=$1::text::uuid AND NOT EXISTS(SELECT 1 FROM pin_memberships WHERE pin_id=provider_pins.id)").bind(pin_id).execute(&mut *tx).await?;
             }
         }
-
-        // If no pin responses to insert, that's an error condition
-        if all_pin_responses.is_empty() {
-            return Err(sqlx::Error::RowNotFound);
-        }
-
-        // Start a transaction for atomicity
-        let mut tx = self.pool.begin().await?;
-
-        // Insert pins with token_id from the start
-        for (index, chain, contract_address, token_id) in &all_token_data {
-            let pin_response = all_pin_responses[*index];
-
-            // Map status enum to lowercase string to satisfy CHECK constraint
-            let status = match pin_response.status {
-                crate::ipfs::PinResponseStatus::Queued => "queued",
-                crate::ipfs::PinResponseStatus::Pinning => "pinning",
-                crate::ipfs::PinResponseStatus::Pinned => "pinned",
-                crate::ipfs::PinResponseStatus::Failed => "failed",
-            };
-
-            // Ensure token row exists and fetch its id
-            let inserted = sqlx::query(
-                r#"INSERT INTO tokens (task_id, chain, contract_address, token_id)
-                   VALUES ($1, $2, $3, $4)
-                   ON CONFLICT (task_id, chain, contract_address, token_id) DO NOTHING
-                   RETURNING id"#,
-            )
-            .bind(task_id)
-            .bind(chain)
-            .bind(contract_address)
-            .bind(token_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-
-            let tok_id: i64 = if let Some(row) = inserted {
-                row.get("id")
-            } else {
-                sqlx::query("SELECT id FROM tokens WHERE task_id = $1 AND chain = $2 AND contract_address = $3 AND token_id = $4")
-                    .bind(task_id)
-                    .bind(chain)
-                    .bind(contract_address)
-                    .bind(token_id)
-                    .fetch_one(&mut *tx)
-                    .await?
-                    .get("id")
-            };
-
-            // Insert pin with token_id from the start
-            sqlx::query(
-                "INSERT INTO pins (task_id, token_id, provider_type, provider_url, cid, request_id, pin_status) VALUES ($1, $2, $3, $4, $5, $6, $7)"
-            )
-            .bind(task_id)
-            .bind(tok_id)
-            .bind(&pin_response.provider_type)
-            .bind(&pin_response.provider_url)
-            .bind(&pin_response.cid)
-            .bind(&pin_response.id)
-            .bind(status)
-            .execute(&mut *tx)
-            .await?;
-        }
-
-        // Commit the transaction
         tx.commit().await?;
         Ok(())
     }
 
-    /// Get all pins for a specific backup task
-    pub async fn get_pins_by_task_id(&self, task_id: &str) -> Result<Vec<PinRow>, sqlx::Error> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, task_id, provider_type, provider_url, cid, request_id, pin_status, created_at
-            FROM pins
-            WHERE task_id = $1
-            ORDER BY id
-            "#,
+    async fn release_pins(&self, claim: &Claim) -> Result<Vec<ManagedPin>> {
+        let mut tx = self.pool.begin().await?;
+        fence(&mut tx, claim).await?;
+        let ids: Vec<String> = sqlx::query_scalar(
+            "SELECT DISTINCT pin_id::text FROM pin_memberships WHERE pin_set_id=$1::text::uuid",
         )
-        .bind(task_id)
-        .fetch_all(&self.pool)
+        .bind(&claim.operation.target_id)
+        .fetch_all(&mut *tx)
         .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| PinRow {
-                id: row.get("id"),
-                task_id: row.get("task_id"),
-                provider_type: row.get("provider_type"),
-                provider_url: row
-                    .try_get::<Option<String>, _>("provider_url")
-                    .ok()
-                    .flatten(),
-                cid: row.get("cid"),
-                request_id: row.get("request_id"),
-                pin_status: parse_pin_status(row.get("pin_status")),
-                created_at: row.get("created_at"),
-            })
-            .collect())
+        sqlx::query("SELECT id FROM provider_pins WHERE id IN(SELECT x::uuid FROM unnest($1::text[]) x) ORDER BY id FOR UPDATE").bind(&ids).execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM pin_memberships WHERE pin_set_id=$1::text::uuid")
+            .bind(&claim.operation.target_id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO pin_deletions(operation_id,pin_id) SELECT $1::text::uuid,p.id FROM provider_pins p WHERE p.id IN(SELECT x::uuid FROM unnest($2::text[]) x) AND NOT EXISTS(SELECT 1 FROM pin_memberships WHERE pin_id=p.id) ON CONFLICT DO NOTHING").bind(&claim.operation.id).bind(&ids).execute(&mut *tx).await?;
+        sqlx::query("UPDATE provider_pins SET state='deleting',updated_at=now() WHERE id IN(SELECT pin_id FROM pin_deletions WHERE operation_id=$1::text::uuid) AND state<>'deleted' AND NOT EXISTS(SELECT 1 FROM pin_memberships WHERE pin_id=provider_pins.id)").bind(&claim.operation.id).execute(&mut *tx).await?;
+        let rows:Vec<Value>=sqlx::query_scalar("SELECT to_jsonb(p) FROM provider_pins p JOIN pin_deletions d ON d.pin_id=p.id WHERE d.operation_id=$1::text::uuid AND p.state<>'deleted' ORDER BY p.id").bind(&claim.operation.id).fetch_all(&mut *tx).await?;
+        tx.commit().await?;
+        rows.into_iter().map(decode).collect()
     }
 
-    /// Paginated pinned tokens grouped by (chain, contract_address, token_id)
-    pub async fn get_pinned_tokens_by_requestor(
+    async fn payment(
         &self,
-        requestor: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<TokenWithPins>, u32), sqlx::Error> {
-        // Total distinct tokens for this requestor
-        let total_row = sqlx::query(
-            r#"
-            SELECT COUNT(*) as count
-            FROM (
-                SELECT DISTINCT t.chain, t.contract_address, t.token_id
-                FROM tokens t
-                JOIN pins p ON p.token_id = t.id
-                JOIN backup_tasks bt ON bt.task_id = p.task_id
-                WHERE bt.requestor = $1
-            ) t
-            "#,
-        )
-        .bind(requestor)
-        .fetch_one(&self.pool)
-        .await?;
-        let total: u32 = (total_row.get::<i64, _>("count")).max(0) as u32;
-
-        // Page of distinct tokens ordered by most recent pin time
-        let rows = sqlx::query(
-            r#"
-            SELECT t.chain, t.contract_address, t.token_id
-            FROM (
-                SELECT t.chain, t.contract_address, t.token_id, MAX(p.created_at) AS last_created
-                FROM tokens t
-                JOIN pins p ON p.token_id = t.id
-                JOIN backup_tasks bt ON bt.task_id = p.task_id
-                WHERE bt.requestor = $1
-                GROUP BY t.chain, t.contract_address, t.token_id
-            ) t
-            ORDER BY last_created DESC
-            LIMIT $2 OFFSET $3
-            "#,
-        )
-        .bind(requestor)
-        .bind(limit)
-        .bind(offset)
-        .fetch_all(&self.pool)
-        .await?;
-
-        // For each token key, fetch pins (ordered by created_at desc)
-        let mut result: Vec<TokenWithPins> = Vec::new();
-        for r in rows {
-            let token_rows = sqlx::query(
-                r#"
-                SELECT t.chain, t.contract_address, t.token_id,
-                       p.cid, p.provider_type, p.provider_url, p.pin_status, p.created_at
-                FROM tokens t
-                JOIN pins p ON p.token_id = t.id
-                JOIN backup_tasks bt ON bt.task_id = p.task_id
-                WHERE bt.requestor = $1
-                  AND t.chain = $2
-                  AND t.contract_address = $3
-                  AND t.token_id = $4
-                ORDER BY p.created_at DESC
-                "#,
-            )
-            .bind(requestor)
-            .bind(r.get::<String, _>("chain"))
-            .bind(r.get::<String, _>("contract_address"))
-            .bind(r.get::<String, _>("token_id"))
-            .fetch_all(&self.pool)
+        resource: Resource,
+        owner: &str,
+        target_id: &str,
+        update: Option<PaymentUpdate>,
+    ) -> Result<Option<Value>> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("SELECT id FROM principals WHERE id=$1::text::uuid FOR UPDATE")
+            .bind(owner)
+            .execute(&mut *tx)
             .await?;
-
-            let mut pins: Vec<PinInfo> = Vec::new();
-            let mut chain = String::new();
-            let mut contract_address = String::new();
-            let mut token_id = String::new();
-            for row in token_rows {
-                chain = row.get("chain");
-                contract_address = row.get("contract_address");
-                token_id = row.get("token_id");
-                let cid: String = row.get("cid");
-                let provider_type: String = row.get("provider_type");
-                let provider_url: String = row
-                    .try_get::<Option<String>, _>("provider_url")
-                    .ok()
-                    .flatten()
-                    .unwrap_or_default();
-                let status: String = row.get("pin_status");
-                let created_at: DateTime<Utc> = row.get("created_at");
-                pins.push(PinInfo {
-                    cid,
-                    provider_type,
-                    provider_url,
-                    status,
-                    created_at,
-                });
-            }
-            result.push(TokenWithPins {
-                chain,
-                contract_address,
-                token_id,
-                pins,
-            });
-        }
-
-        Ok((result, total))
-    }
-
-    /// Get a specific pinned token for a requestor
-    pub async fn get_pinned_token_by_requestor(
-        &self,
-        requestor: &str,
-        chain: &str,
-        contract_address: &str,
-        token_id: &str,
-    ) -> Result<Option<TokenWithPins>, sqlx::Error> {
-        let query = r#"
-            SELECT t.chain, t.contract_address, t.token_id,
-                   p.cid, p.provider_type, p.provider_url, p.pin_status, p.created_at
-            FROM tokens t
-            JOIN pins p ON p.token_id = t.id
-            JOIN backup_tasks bt ON bt.task_id = p.task_id
-            WHERE bt.requestor = $1
-              AND t.chain = $2
-              AND t.contract_address = $3
-              AND t.token_id = $4
-            ORDER BY p.created_at DESC
-        "#;
-
-        let rows = sqlx::query(query)
-            .bind(requestor)
-            .bind(chain)
-            .bind(contract_address)
-            .bind(token_id)
-            .fetch_all(&self.pool)
-            .await?;
-
-        if rows.is_empty() {
+        let (table, column) = match resource {
+            Resource::Backup => ("backups", "backup_id"),
+            Resource::Archive => ("archives", "archive_id"),
+            Resource::PinSet => ("pin_sets", "pin_set_id"),
+            _ => return Err(DatabaseError::Invalid("Resource is not payable".into())),
+        };
+        let parent_state = if matches!(resource, Resource::Backup) {
+            "r.state"
+        } else {
+            "(SELECT b.state FROM backups b WHERE b.id=r.backup_id)"
+        };
+        let payment=sqlx::query(&format!("SELECT p.id::text AS id,p.state,r.state AS target_state,{parent_state} AS parent_state,p.settle_request,p.settlement FROM payments p JOIN {table} r ON r.id=p.{column} WHERE r.id=$1::text::uuid AND r.owner_id=$2::text::uuid FOR UPDATE OF p")).bind(target_id).bind(owner).fetch_optional(&mut *tx).await?;
+        let Some(payment) = payment else {
             return Ok(None);
+        };
+        let id: String = payment.get("id");
+        if matches!(
+            update,
+            Some(PaymentUpdate::Begin { .. } | PaymentUpdate::Settled(_))
+        ) && matches!(
+            payment.get::<String, _>("parent_state").as_str(),
+            "deleting" | "deleted"
+        ) {
+            return Err(DatabaseError::Conflict(
+                "Snapshot deletion has already started".into(),
+            ));
         }
-
-        let mut pins = Vec::new();
-        let mut token_chain = String::new();
-        let mut token_contract_address = String::new();
-        let mut token_token_id = String::new();
-
-        for row in rows {
-            token_chain = row.get("chain");
-            token_contract_address = row.get("contract_address");
-            token_token_id = row.get("token_id");
-            let cid: String = row.get("cid");
-            let provider_type: String = row.get("provider_type");
-            // provider_url may be NULL for legacy rows; default to empty string for API stability
-            let provider_url: String = row
-                .try_get::<Option<String>, _>("provider_url")
-                .ok()
-                .flatten()
-                .unwrap_or_default();
-            let status: String = row.get("pin_status");
-            let created_at: DateTime<Utc> = row.get("created_at");
-
-            pins.push(PinInfo {
-                cid,
-                provider_type,
-                provider_url,
-                status,
-                created_at,
-            });
+        match update {
+            None => {}
+            Some(PaymentUpdate::Begin {
+                proof_hash,
+                settle_request,
+            }) => {
+                if payment.get::<String, _>("target_state") != "awaiting_payment" {
+                    return Err(DatabaseError::Conflict(
+                        "Resource is no longer payable".into(),
+                    ));
+                }
+                if !matches!(
+                    payment.get::<String, _>("state").as_str(),
+                    "pending" | "failed"
+                ) {
+                    return Err(DatabaseError::Conflict(
+                        "Settlement is already in progress or requires reconciliation".into(),
+                    ));
+                }
+                let changed=sqlx::query("UPDATE payments SET state='settling',proof_hash=$2,settle_request=$3,updated_at=now() WHERE id=$1::text::uuid").bind(&id).bind(proof_hash).bind(settle_request).execute(&mut *tx).await;
+                match changed {
+                    Ok(_) => {}
+                    Err(error)
+                        if error.as_database_error().and_then(|e| e.code()).as_deref()
+                            == Some("23505") =>
+                    {
+                        return Err(DatabaseError::Conflict(
+                            "Payment authorization was already used for another request".into(),
+                        ))
+                    }
+                    Err(error) => return Err(error.into()),
+                }
+            }
+            Some(PaymentUpdate::Settled(settlement)) => {
+                if payment.get::<String, _>("target_state") != "awaiting_payment"
+                    && payment.get::<String, _>("state") != "paid"
+                {
+                    return Err(DatabaseError::Conflict(
+                        "Resource is no longer payable".into(),
+                    ));
+                }
+                sqlx::query("UPDATE payments SET state='paid',settlement=$2,updated_at=now() WHERE id=$1::text::uuid").bind(&id).bind(settlement).execute(&mut *tx).await?;
+                sqlx::query(&format!("UPDATE {table} SET state='queued' WHERE id=$1::text::uuid AND state='awaiting_payment'")).bind(target_id).execute(&mut *tx).await?;
+                sqlx::query(&format!("UPDATE operations SET state='queued',updated_at=now() WHERE state='awaiting_payment' AND {column}=$1::text::uuid")).bind(target_id).execute(&mut *tx).await?;
+                if matches!(resource, Resource::Backup) {
+                    sqlx::query("UPDATE archives SET state='queued' WHERE backup_id=$1::text::uuid AND state='awaiting_payment'").bind(target_id).execute(&mut *tx).await?;
+                    sqlx::query("UPDATE pin_sets SET state='queued' WHERE backup_id=$1::text::uuid AND state='awaiting_payment'").bind(target_id).execute(&mut *tx).await?;
+                    sqlx::query("UPDATE operations SET state='queued',updated_at=now() WHERE state='awaiting_payment' AND (archive_id IN(SELECT id FROM archives WHERE backup_id=$1::text::uuid) OR pin_set_id IN(SELECT id FROM pin_sets WHERE backup_id=$1::text::uuid))").bind(target_id).execute(&mut *tx).await?;
+                }
+            }
+            Some(PaymentUpdate::Failed { detail, ambiguous }) => {
+                sqlx::query("UPDATE payments SET state=$2,settlement=$3,updated_at=now() WHERE id=$1::text::uuid").bind(&id).bind(if ambiguous{"reconciliation_required"}else{"failed"}).bind(json!({"error":detail})).execute(&mut *tx).await?;
+            }
         }
-
-        Ok(Some(TokenWithPins {
-            chain: token_chain,
-            contract_address: token_contract_address,
-            token_id: token_token_id,
-            pins,
-        }))
-    }
-
-    /// Get all pins that are in 'queued' or 'pinning' status
-    /// This is used by the pin monitor to check for status updates
-    pub async fn get_active_pins(&self) -> Result<Vec<PinRow>, sqlx::Error> {
-        let rows = sqlx::query(
-            r#"
-            SELECT id, task_id, provider_type, provider_url, cid, request_id, pin_status, created_at
-            FROM pins
-            WHERE pin_status IN ('queued', 'pinning')
-            ORDER BY id
-            "#,
-        )
-        .fetch_all(&self.pool)
-        .await?;
-
-        Ok(rows
-            .into_iter()
-            .map(|row| PinRow {
-                id: row.get("id"),
-                task_id: row.get("task_id"),
-                provider_type: row.get("provider_type"),
-                provider_url: row
-                    .try_get::<Option<String>, _>("provider_url")
-                    .ok()
-                    .flatten(),
-                cid: row.get("cid"),
-                request_id: row.get("request_id"),
-                pin_status: parse_pin_status(row.get("pin_status")),
-                created_at: row.get("created_at"),
-            })
-            .collect())
-    }
-
-    /// Set backup fatal error for relevant subresources in a single SQL statement.
-    /// The update is based on the `storage_mode` value from the `backup_tasks` table for the given `task_id`:
-    /// - If storage_mode is 'archive' or 'full': updates archive_requests.status and archive_requests.fatal_error
-    /// - If storage_mode is 'ipfs' or 'full': updates pin_requests.status and pin_requests.fatal_error
-    pub async fn set_backup_error(
-        &self,
-        task_id: &str,
-        fatal_error: &str,
-    ) -> Result<(), sqlx::Error> {
-        let sql = r#"
-            WITH task_mode AS (
-                SELECT storage_mode FROM backup_tasks WHERE task_id = $1
-            ),
-            upd_archive AS (
-                UPDATE archive_requests ar
-                SET status = 'error', fatal_error = $2
-                WHERE ar.task_id = $1
-                  AND EXISTS (
-                      SELECT 1 FROM task_mode tm
-                      WHERE tm.storage_mode IN ('archive', 'full')
-                  )
-                RETURNING 1
-            ),
-            upd_pins AS (
-                UPDATE pin_requests pr
-                SET status = 'error', fatal_error = $2
-                WHERE pr.task_id = $1
-                  AND EXISTS (
-                      SELECT 1 FROM task_mode tm
-                      WHERE tm.storage_mode IN ('ipfs', 'full')
-                  )
-                RETURNING 1
-            )
-            SELECT COALESCE((SELECT COUNT(*) FROM upd_archive), 0) AS archive_updates,
-                   COALESCE((SELECT COUNT(*) FROM upd_pins), 0)     AS pin_updates
-        "#;
-        sqlx::query(sql)
-            .bind(task_id)
-            .bind(fatal_error)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    /// Update backup subresource statuses for the task based on its storage mode
-    /// - archive or full: updates archive_requests.status
-    /// - ipfs or full: updates pin_requests.status
-    pub async fn update_backup_statuses(
-        &self,
-        task_id: &str,
-        scope: &str,
-        archive_status: &ArchiveStatus,
-        ipfs_status: &IpfsStatus,
-    ) -> Result<(), sqlx::Error> {
-        let sql = r#"
-            WITH upd_archive AS (
-                UPDATE archive_requests ar
-                SET status = $2
-                WHERE ar.task_id = $1
-                  AND ($4 IN ('archive', 'full'))
-                RETURNING 1
-            ),
-            upd_pins AS (
-                UPDATE pin_requests pr
-                SET status = $3
-                WHERE pr.task_id = $1
-                  AND ($4 IN ('ipfs', 'full'))
-                RETURNING 1
-            )
-            SELECT COALESCE((SELECT COUNT(*) FROM upd_archive), 0) AS archive_updates,
-                   COALESCE((SELECT COUNT(*) FROM upd_pins), 0)     AS pin_updates
-        "#;
-        sqlx::query(sql)
-            .bind(task_id)
-            .bind(archive_status.as_str())
-            .bind(ipfs_status.as_str())
-            .bind(scope)
-            .execute(&self.pool)
-            .await?;
-        Ok(())
-    }
-
-    pub async fn update_pin_statuses(&self, updates: &[(i64, String)]) -> Result<(), sqlx::Error> {
-        if updates.is_empty() {
-            return Ok(());
-        }
-
-        let mut tx = self.pool.begin().await?;
-
-        for (id, status) in updates {
-            sqlx::query(
-                r#"
-                UPDATE pins
-                SET pin_status = $2
-                WHERE id = $1
-                "#,
-            )
-            .bind(id)
-            .bind(status)
-            .execute(&mut *tx)
-            .await?;
-        }
-
+        let result =
+            sqlx::query_scalar("SELECT to_jsonb(p) FROM payments p WHERE id=$1::text::uuid")
+                .bind(&id)
+                .fetch_one(&mut *tx)
+                .await?;
         tx.commit().await?;
-        Ok(())
+        Ok(Some(result))
     }
 
-    /// Ensure the missing subresource exists and upgrade the backup to full storage mode.
-    /// If `add_archive` is true, create/ensure archive_requests row with provided format/retention.
-    /// Otherwise, ensure pin_requests row exists. Always flips backup_tasks.storage_mode to 'full'.
-    pub async fn upgrade_backup_to_full(
-        &self,
-        task_id: &str,
-        add_archive: bool,
-        archive_format: Option<&str>,
-        retention_days: Option<u64>,
-    ) -> Result<(), sqlx::Error> {
+    async fn maintenance(&self) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-
-        // Upgrade storage mode to full
+        sqlx::query("WITH expired AS(UPDATE operations SET state='queued',available_at=now(),lease_token=NULL,lease_until=NULL,updated_at=now() WHERE state='running' AND lease_until<=now() RETURNING id,attempts) UPDATE operation_attempts a SET finished_at=now(),error=$1 FROM expired e WHERE a.operation_id=e.id AND a.number=e.attempts")
+            .bind(json!({"code":"lease_expired","message":"Worker lease expired; operation will resume","retryable":true})).execute(&mut *tx).await?;
+        sqlx::query("UPDATE payments SET state='reconciliation_required',updated_at=now() WHERE state='settling' AND updated_at<now()-interval '5 minutes'").execute(&mut *tx).await?;
         sqlx::query(
-            r#"
-            UPDATE backup_tasks
-            SET storage_mode = 'full', updated_at = NOW()
-            WHERE task_id = $1
-            "#,
+            "UPDATE quotes SET state='expired' WHERE expires_at<=now() AND state<>'expired'",
         )
-        .bind(task_id)
         .execute(&mut *tx)
         .await?;
-
-        if add_archive {
-            let fmt = archive_format.unwrap_or("zip");
-            if let Some(days) = retention_days {
-                sqlx::query(
-                    r#"
-                    INSERT INTO archive_requests (task_id, archive_format, expires_at, status)
-                    VALUES ($1, $2, NOW() + make_interval(days => $3::int), 'in_progress')
-                    ON CONFLICT (task_id) DO NOTHING
-                    "#,
-                )
-                .bind(task_id)
-                .bind(fmt)
-                .bind(days as i64)
+        let expired=sqlx::query("SELECT id::text AS id,owner_id::text AS owner_id FROM archives WHERE state IN('ready','partial') AND expires_at<=now() FOR UPDATE SKIP LOCKED").fetch_all(&mut *tx).await?;
+        for row in expired {
+            let id: String = row.get("id");
+            sqlx::query("UPDATE archives SET state='expired' WHERE id=$1::text::uuid")
+                .bind(&id)
                 .execute(&mut *tx)
                 .await?;
-            } else {
-                sqlx::query(
-                    r#"
-                    INSERT INTO archive_requests (task_id, archive_format, expires_at, status)
-                    VALUES ($1, $2, NULL, 'in_progress')
-                    ON CONFLICT (task_id) DO NOTHING
-                    "#,
-                )
-                .bind(task_id)
-                .bind(fmt)
-                .execute(&mut *tx)
-                .await?;
-            }
-        } else {
-            sqlx::query(
-                r#"
-                INSERT INTO pin_requests (task_id, status)
-                VALUES ($1, 'in_progress')
-                ON CONFLICT (task_id) DO NOTHING
-                "#,
+            insert_operation(
+                &mut tx,
+                &row.get::<String, _>("owner_id"),
+                "delete_archive",
+                &id,
+                "queued",
             )
-            .bind(task_id)
-            .execute(&mut *tx)
             .await?;
         }
-
+        let blocked = json!({"code":"capture_failed","message":"Snapshot capture failed; retry its operation before retrying this output","retryable":true});
+        sqlx::query("UPDATE operations o SET state='failed',error=$1,updated_at=now() WHERE o.state='queued' AND o.kind IN('archive','pin') AND EXISTS(SELECT 1 FROM backups b WHERE b.state='failed' AND b.id=COALESCE((SELECT backup_id FROM archives WHERE id=o.archive_id),(SELECT backup_id FROM pin_sets WHERE id=o.pin_set_id)))").bind(&blocked).execute(&mut *tx).await?;
+        sqlx::query("UPDATE archives a SET state='failed',error=$1 WHERE a.state='queued' AND EXISTS(SELECT 1 FROM backups b WHERE b.id=a.backup_id AND b.state='failed')").bind(&blocked).execute(&mut *tx).await?;
+        sqlx::query("UPDATE pin_sets p SET state='failed',error=$1 WHERE p.state='queued' AND EXISTS(SELECT 1 FROM backups b WHERE b.id=p.backup_id AND b.state='failed')").bind(&blocked).execute(&mut *tx).await?;
+        if self.pin_check_interval_seconds > 0 {
+            sqlx::query("UPDATE operations o SET state='queued',available_at=now(),updated_at=now() FROM pin_sets p WHERE o.pin_set_id=p.id AND o.kind='pin' AND o.state='succeeded' AND p.state IN('ready','partial') AND o.updated_at < now()-make_interval(secs=>$1::double precision)").bind(self.pin_check_interval_seconds as f64).execute(&mut *tx).await?;
+        }
         tx.commit().await?;
+        let abandoned=sqlx::query("SELECT b.owner_id::text AS owner_id,COALESCE(p.backup_id,p.archive_id,p.pin_set_id)::text AS target_id,CASE WHEN p.backup_id IS NOT NULL THEN 'backup' WHEN p.archive_id IS NOT NULL THEN 'archive' ELSE 'pin_set' END AS resource FROM payments p JOIN quotes q ON q.id=p.quote_id LEFT JOIN archives a ON a.id=p.archive_id LEFT JOIN pin_sets ps ON ps.id=p.pin_set_id JOIN backups b ON b.id=COALESCE(p.backup_id,a.backup_id,ps.backup_id) WHERE q.expires_at<=now() AND p.state IN('pending','failed') AND CASE WHEN p.backup_id IS NOT NULL THEN b.state WHEN p.archive_id IS NOT NULL THEN a.state ELSE ps.state END='awaiting_payment' LIMIT 100").fetch_all(&self.pool).await?;
+        for row in abandoned {
+            let resource = match row.get::<String, _>("resource").as_str() {
+                "backup" => Resource::Backup,
+                "archive" => Resource::Archive,
+                _ => Resource::PinSet,
+            };
+            match self
+                .delete(
+                    resource,
+                    &row.get::<String, _>("owner_id"),
+                    &row.get::<String, _>("target_id"),
+                )
+                .await
+            {
+                Ok(_) | Err(DatabaseError::Conflict(_)) => {}
+                Err(error) => return Err(error),
+            }
+        }
         Ok(())
     }
 
-    /// Complete archive deletion:
-    /// - If current storage_mode is 'archive', delete the whole backup (finalize deletion)
-    /// - Else if current storage_mode is 'full', flip to 'ipfs' to reflect archive removed
-    pub async fn complete_archive_request_deletion(
-        &self,
-        task_id: &str,
-    ) -> Result<(), sqlx::Error> {
-        // Atomically: delete when archive-only; else if full, flip to ipfs
-        let sql = r#"
-            WITH del AS (
-                DELETE FROM backup_tasks
-                WHERE task_id = $1 AND storage_mode = 'archive'
-                RETURNING 1
-            ), upd AS (
-                UPDATE backup_tasks
-                SET storage_mode = 'ipfs', updated_at = NOW()
-                WHERE task_id = $1 AND storage_mode = 'full' AND NOT EXISTS (SELECT 1 FROM del)
-                RETURNING 1
-            )
-            SELECT COALESCE((SELECT COUNT(*) FROM del), 0) AS deleted,
-                   COALESCE((SELECT COUNT(*) FROM upd), 0) AS updated
-        "#;
-        let _ = sqlx::query(sql).bind(task_id).execute(&self.pool).await?;
-        Ok(())
+    async fn active_leases(&self) -> Result<Vec<(String, String)>> {
+        Ok(sqlx::query_as("SELECT id::text,lease_token::text FROM operations WHERE state='running' AND lease_until>now()").fetch_all(&self.pool).await?)
+    }
+    async fn blob_deleting(&self, sha256: &str) -> Result<bool> {
+        Ok(sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM blobs WHERE sha256=$1 AND state='deleting')",
+        )
+        .bind(sha256)
+        .fetch_one(&self.pool)
+        .await?)
     }
 
-    /// Complete IPFS pins deletion:
-    /// - If current storage_mode is 'ipfs', delete the whole backup (finalize deletion)
-    /// - Else if current storage_mode is 'full', flip to 'archive' to reflect pins removed
-    pub async fn complete_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        // Atomically: delete when ipfs-only; else if full, flip to archive
-        let sql = r#"
-            WITH del AS (
-                DELETE FROM backup_tasks
-                WHERE task_id = $1 AND storage_mode = 'ipfs'
-                RETURNING 1
-            ), upd AS (
-                UPDATE backup_tasks
-                SET storage_mode = 'archive', updated_at = NOW()
-                WHERE task_id = $1 AND storage_mode = 'full' AND NOT EXISTS (SELECT 1 FROM del)
-                RETURNING 1
-            )
-            SELECT COALESCE((SELECT COUNT(*) FROM del), 0) AS deleted,
-                   COALESCE((SELECT COUNT(*) FROM upd), 0) AS updated
-        "#;
-        let _ = sqlx::query(sql).bind(task_id).execute(&self.pool).await?;
-        Ok(())
+    async fn garbage(&self, finished: Option<&str>) -> Result<Vec<Blob>> {
+        if let Some(sha256) = finished {
+            sqlx::query("UPDATE blobs SET state='deleted',deleted_at=now() WHERE sha256=$1 AND state='deleting'").bind(sha256).execute(&self.pool).await?;
+        }
+        let rows:Vec<Value>=sqlx::query_scalar("WITH candidates AS(SELECT bl.sha256 FROM blobs bl WHERE bl.state='ready' AND NOT EXISTS(SELECT 1 FROM blob_leases l JOIN operations o ON o.id=l.operation_id LEFT JOIN quotes q ON q.id=o.quote_id WHERE l.sha256=bl.sha256 AND (o.state IN('awaiting_payment','queued','running') OR q.expires_at>now())) AND NOT EXISTS(SELECT 1 FROM backup_items i JOIN backups b ON b.id=i.backup_id WHERE i.metadata_sha256=bl.sha256 AND b.state<>'deleted') AND NOT EXISTS(SELECT 1 FROM item_assets a JOIN backup_items i ON i.id=a.item_id JOIN backups b ON b.id=i.backup_id WHERE a.sha256=bl.sha256 AND b.state<>'deleted') AND NOT EXISTS(SELECT 1 FROM archives a WHERE a.sha256=bl.sha256 AND a.state NOT IN('deleted','expired')) AND NOT EXISTS(SELECT 1 FROM backups b WHERE b.manifest_sha256=bl.sha256 AND b.state<>'deleted') ORDER BY bl.created_at FOR UPDATE OF bl SKIP LOCKED LIMIT 100), marked AS(UPDATE blobs SET state='deleting' WHERE sha256 IN(SELECT sha256 FROM candidates) RETURNING sha256,size_bytes,storage_key) SELECT jsonb_build_object('sha256',sha256,'size_bytes',size_bytes,'storage_key',storage_key) FROM marked UNION ALL SELECT jsonb_build_object('sha256',sha256,'size_bytes',size_bytes,'storage_key',storage_key) FROM blobs WHERE state='deleting' LIMIT 100").fetch_all(&self.pool).await?;
+        rows.into_iter().map(decode).collect()
     }
 }
 
-// Implement the unified Database trait for the real Db struct
-#[async_trait::async_trait]
-impl Database for Db {
-    // Backup task operations
+pub fn state_name(state: &State) -> &'static str {
+    match state {
+        State::AwaitingPayment => "awaiting_payment",
+        State::Queued => "queued",
+        State::Running => "running",
+        State::Ready => "ready",
+        State::Partial => "partial",
+        State::Failed => "failed",
+        State::Deleting => "deleting",
+        State::Deleted => "deleted",
+        State::Expired => "expired",
+        State::Unsupported => "unsupported",
+    }
+}
+fn to_i64(value: u64) -> Result<i64> {
+    i64::try_from(value)
+        .map_err(|_| DatabaseError::Invalid("Byte count exceeds supported range".into()))
+}
 
-    async fn insert_backup_task(
-        &self,
-        task_id: &str,
-        requestor: &str,
-        nft_count: i32,
-        tokens: &serde_json::Value,
-        storage_mode: &str,
-        archive_format: Option<&str>,
-        retention_days: Option<u64>,
-    ) -> Result<(), sqlx::Error> {
-        Db::insert_backup_task(
-            self,
-            task_id,
-            requestor,
-            nft_count,
-            tokens,
-            storage_mode,
-            archive_format,
+async fn insert_output(
+    connection: &mut PgConnection,
+    owner: &str,
+    backup_id: &str,
+    id: &str,
+    output: OutputRequest,
+    providers: &[String],
+    state: &str,
+) -> Result<()> {
+    match output {
+        OutputRequest::Archive {
+            format,
             retention_days,
-        )
-        .await
+        } => {
+            sqlx::query("INSERT INTO archives(id,backup_id,owner_id,state,format,retention_days) VALUES($1::text::uuid,$2::text::uuid,$3::text::uuid,$4,$5,$6)")
+                .bind(id).bind(backup_id).bind(owner).bind(state).bind(format.as_str()).bind(retention_days.unwrap_or(3) as i32).execute(&mut *connection).await?;
+            insert_operation(connection, owner, "archive", id, state).await?;
+        }
+        OutputRequest::Ipfs => {
+            sqlx::query("INSERT INTO pin_sets(id,backup_id,owner_id,state,provider_ids) VALUES($1::text::uuid,$2::text::uuid,$3::text::uuid,$4,ARRAY(SELECT x::uuid FROM unnest($5::text[]) x))")
+                .bind(id).bind(backup_id).bind(owner).bind(state).bind(providers).execute(&mut *connection).await?;
+            insert_operation(connection, owner, "pin", id, state).await?;
+        }
     }
+    Ok(())
+}
 
-    async fn get_backup_task(&self, task_id: &str) -> Result<Option<BackupTask>, sqlx::Error> {
-        Db::get_backup_task(self, task_id).await
-    }
+async fn save_asset(connection: &mut PgConnection, item_id: &str, asset: &Asset) -> Result<()> {
+    sqlx::query("INSERT INTO item_assets(id,item_id,role,source_uri,path,sha256,cid,size_bytes,state,error,filename,fallback_filename,observed_at) VALUES($1::text::uuid,$2::text::uuid,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(item_id,path) DO UPDATE SET sha256=EXCLUDED.sha256,size_bytes=EXCLUDED.size_bytes,state=EXCLUDED.state,error=EXCLUDED.error")
+        .bind(&asset.id).bind(item_id).bind(&asset.role).bind(&asset.source_uri).bind(&asset.path).bind(&asset.sha256).bind(&asset.cid).bind(asset.size_bytes.map(to_i64).transpose()?).bind(state_name(&asset.state)).bind(json!(asset.error)).bind(&asset.filename).bind(&asset.fallback_filename).bind(asset.observed_at).execute(connection).await?;
+    Ok(())
+}
 
-    async fn get_backup_task_with_tokens(
-        &self,
-        task_id: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Option<(BackupTask, u32)>, sqlx::Error> {
-        Db::get_backup_task_with_tokens(self, task_id, limit, offset).await
-    }
+pub fn encode_cursor(created_at: DateTime<Utc>, id: String) -> String {
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(json!([created_at, id]).to_string())
+}
+pub fn decode_cursor(cursor: &str) -> Result<(DateTime<Utc>, String)> {
+    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(cursor)
+        .map_err(|_| DatabaseError::Invalid("Invalid cursor".into()))?;
+    let decoded: (DateTime<Utc>, String) = serde_json::from_slice(&bytes)
+        .map_err(|_| DatabaseError::Invalid("Invalid cursor".into()))?;
+    Uuid::parse_str(&decoded.1).map_err(|_| DatabaseError::Invalid("Invalid cursor".into()))?;
+    Ok(decoded)
+}
 
-    async fn delete_backup_task(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::delete_backup_task(self, task_id).await
-    }
-
-    async fn get_incomplete_backup_tasks(&self) -> Result<Vec<BackupTask>, sqlx::Error> {
-        Db::get_incomplete_backup_tasks(self).await
-    }
-
-    async fn list_requestor_backup_tasks_paginated(
-        &self,
-        requestor: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<BackupTask>, u32), sqlx::Error> {
-        Db::list_requestor_backup_tasks_paginated(self, requestor, limit, offset).await
-    }
-
-    async fn list_unprocessed_expired_backups(&self) -> Result<Vec<ExpiredBackup>, sqlx::Error> {
-        Db::list_unprocessed_expired_backups(self).await
-    }
-
-    // Backup task status and error operations
-    async fn clear_backup_errors(&self, task_id: &str, scope: &str) -> Result<(), sqlx::Error> {
-        Db::clear_backup_errors(self, task_id, scope).await
-    }
-
-    async fn set_backup_error(&self, task_id: &str, error: &str) -> Result<(), sqlx::Error> {
-        Db::set_backup_error(self, task_id, error).await
-    }
-
-    async fn set_error_logs(
-        &self,
-        task_id: &str,
-        archive_error_log: Option<&str>,
-        ipfs_error_log: Option<&str>,
-    ) -> Result<(), sqlx::Error> {
-        Db::set_error_logs(self, task_id, archive_error_log, ipfs_error_log).await
-    }
-
-    async fn update_archive_request_error_log(
-        &self,
-        task_id: &str,
-        error_log: &str,
-    ) -> Result<(), sqlx::Error> {
-        Db::update_archive_request_error_log(self, task_id, error_log).await
-    }
-
-    async fn update_pin_request_error_log(
-        &self,
-        task_id: &str,
-        error_log: &str,
-    ) -> Result<(), sqlx::Error> {
-        Db::update_pin_request_error_log(self, task_id, error_log).await
-    }
-
-    async fn set_archive_request_error(
-        &self,
-        task_id: &str,
-        fatal_error: &str,
-    ) -> Result<(), sqlx::Error> {
-        Db::set_archive_request_error(self, task_id, fatal_error).await
-    }
-
-    async fn set_pin_request_error(
-        &self,
-        task_id: &str,
-        fatal_error: &str,
-    ) -> Result<(), sqlx::Error> {
-        Db::set_pin_request_error(self, task_id, fatal_error).await
-    }
-
-    // Status update operations
-    async fn update_archive_request_status(
-        &self,
-        task_id: &str,
-        status: &ArchiveStatus,
-    ) -> Result<(), sqlx::Error> {
-        Db::update_archive_request_status(self, task_id, status).await
-    }
-
-    async fn update_pin_request_status(
-        &self,
-        task_id: &str,
-        status: &IpfsStatus,
-    ) -> Result<(), sqlx::Error> {
-        Db::update_pin_request_status(self, task_id, status).await
-    }
-
-    async fn update_backup_statuses(
-        &self,
-        task_id: &str,
-        scope: &str,
-        archive_status: &ArchiveStatus,
-        ipfs_status: &IpfsStatus,
-    ) -> Result<(), sqlx::Error> {
-        Db::update_backup_statuses(self, task_id, scope, archive_status, ipfs_status).await
-    }
-
-    async fn update_archive_request_statuses(
-        &self,
-        task_ids: &[String],
-        status: &ArchiveStatus,
-    ) -> Result<(), sqlx::Error> {
-        Db::update_archive_request_statuses(self, task_ids, status).await
-    }
-
-    async fn upgrade_backup_to_full(
-        &self,
-        task_id: &str,
-        add_archive: bool,
-        archive_format: Option<&str>,
-        retention_days: Option<u64>,
-    ) -> Result<(), sqlx::Error> {
-        Db::upgrade_backup_to_full(self, task_id, add_archive, archive_format, retention_days).await
-    }
-
-    // Deletion operations
-    async fn start_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::start_deletion(self, task_id).await
-    }
-
-    async fn start_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::start_archive_request_deletion(self, task_id).await
-    }
-
-    async fn start_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::start_pin_request_deletion(self, task_id).await
-    }
-
-    async fn complete_archive_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::complete_archive_request_deletion(self, task_id).await
-    }
-
-    async fn complete_pin_request_deletion(&self, task_id: &str) -> Result<(), sqlx::Error> {
-        Db::complete_pin_request_deletion(self, task_id).await
-    }
-
-    // Retry operations
-    async fn retry_backup(
-        &self,
-        task_id: &str,
-        scope: &str,
-        retention_days: u64,
-    ) -> Result<(), sqlx::Error> {
-        Db::retry_backup(self, task_id, scope, retention_days).await
-    }
-
-    // Pin operations
-    async fn insert_pins_with_tokens(
-        &self,
-        task_id: &str,
-        token_pin_mappings: &[crate::TokenPinMapping],
-    ) -> Result<(), sqlx::Error> {
-        Db::insert_pins_with_tokens(self, task_id, token_pin_mappings).await
-    }
-
-    async fn get_pins_by_task_id(&self, task_id: &str) -> Result<Vec<PinRow>, sqlx::Error> {
-        Db::get_pins_by_task_id(self, task_id).await
-    }
-
-    async fn get_active_pins(&self) -> Result<Vec<PinRow>, sqlx::Error> {
-        Db::get_active_pins(self).await
-    }
-
-    async fn update_pin_statuses(&self, updates: &[(i64, String)]) -> Result<(), sqlx::Error> {
-        Db::update_pin_statuses(self, updates).await
-    }
-
-    // Pinned tokens operations
-    async fn get_pinned_tokens_by_requestor(
-        &self,
-        requestor: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<(Vec<TokenWithPins>, u32), sqlx::Error> {
-        Db::get_pinned_tokens_by_requestor(self, requestor, limit, offset).await
-    }
-
-    async fn get_pinned_token_by_requestor(
-        &self,
-        requestor: &str,
-        chain: &str,
-        contract_address: &str,
-        token_id: &str,
-    ) -> Result<Option<TokenWithPins>, sqlx::Error> {
-        Db::get_pinned_token_by_requestor(self, requestor, chain, contract_address, token_id).await
+#[cfg(test)]
+mod decode_cursor_tests {
+    use super::*;
+    #[test]
+    fn round_trips_and_rejects_untrusted_cursors() {
+        let timestamp = DateTime::parse_from_rfc3339("2026-10-24T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let id = "11111111-1111-4111-8111-111111111111".to_string();
+        assert_eq!(
+            decode_cursor(&encode_cursor(timestamp, id.clone())).unwrap(),
+            (timestamp, id)
+        );
+        assert!(decode_cursor("invalid").is_err());
     }
 }

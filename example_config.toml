@@ -3,14 +3,14 @@
 
 # Chain configurations (RPC endpoints)
 [chains]
-arbitrum = "https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-base = "https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-ethereum = "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-optimism = "https://opt-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-polygon = "https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-shape = "https://shape-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
-tezos = "https://mainnet.smartpy.io"
-zora = "https://zora-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+"eip155:42161" = "https://arb-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+"eip155:8453" = "https://base-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+"eip155:1" = "https://eth-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+"eip155:10" = "https://opt-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+"eip155:137" = "https://polygon-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+"eip155:360" = "https://shape-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
+"tezos:NetXdQprcVkpaWU" = "https://mainnet.smartpy.io"
+"eip155:7777777" = "https://zora-mainnet.g.alchemy.com/v2/${ALCHEMY_API_KEY}"
 
 # JWT authentication credentials
 [[jwt]]
@@ -41,21 +41,21 @@ pin_price_per_gb = "0.2"
 # Check https://www.x402.org/ecosystem?category=facilitators for more facilitator options
 [x402.facilitator]
 url = "https://x402.org/facilitator"
-network = "base-sepolia"
+network = "eip155:84532"
 
 # [x402.facilitator]
 # url = "https://api.cdp.coinbase.com/platform/v2/x402"
-# network = "base"
+# network = "eip155:8453"
 # api_key_id_env = "COINBASE_API_KEY_ID"
 # api_key_secret_env = "COINBASE_API_KEY_SECRET"
 
 # [x402.facilitator]
 # url = "https://facilitator.payai.network"
-# network = "base"
+# network = "eip155:8453"
 
 # [x402.facilitator]
 # url = "https://facilitator.x402.rs"
-# network = "base"
+# network = "eip155:8453"
 
 # IPFS pinning providers
 [[ipfs_pinning_provider]]

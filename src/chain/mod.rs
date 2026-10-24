@@ -15,6 +15,7 @@ pub use common::ContractTokenInfo;
 
 pub mod common;
 pub mod evm;
+pub mod id;
 pub mod tezos;
 
 /// Check for shutdown signal and return error if shutdown is requested

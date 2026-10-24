@@ -222,6 +222,20 @@ jobs:
   test:
     name: Run Tests
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: nftbk
+          POSTGRES_PASSWORD: nftbk
+          POSTGRES_DB: nftbk_v2
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U nftbk -d nftbk_v2"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
     steps:
     - uses: actions/checkout@v4
@@ -267,6 +281,12 @@ jobs:
           --timeout 120 \
           --out Lcov \
           --output-dir .
+
+    - name: Validate PostgreSQL migration and API lifecycles
+      env:
+        NFTBK_INTEGRATION_DATABASE_URL: postgres://nftbk:nftbk@localhost:5432/nftbk_v2
+        SQLX_OFFLINE: "true"
+      run: cargo test --test api_v2_postgres -- --ignored
 
     - name: Upload coverage to Coveralls
       uses: coverallsapp/github-action@v2

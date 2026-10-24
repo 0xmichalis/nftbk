@@ -27,6 +27,13 @@ See `example_config.toml` for an example config. It contains:
 - x402 payment configuration (optional)
 - IPFS pinning providers (optional)
 
+Chain keys use case-sensitive [CAIP-2 identifiers][caip2], for example
+`"eip155:1"` or `"tezos:NetXdQprcVkpaWU"`. Quote TOML keys containing a colon.
+Known 1.x configuration aliases are accepted and normalized during migration;
+the 2.0 HTTP API accepts only CAIP-2 identifiers.
+
+[caip2]: https://standards.chainagnostic.org/CAIPs/caip-2
+
 The CLI uses additionally a config file for the tokens to be backed up when
 running in standalone mode. See `example_config_tokens.toml` for an example.
 
@@ -43,8 +50,8 @@ Failed downloads remove partial files. Larger artwork needs another backup
 method.
 
 Backup error messages omit HTTP(S) and WebSocket endpoint URLs to keep RPC
-credentials private. API responses also redact URLs in error logs stored by
-earlier versions. Those stored rows are not rewritten; remove credentials
+credentials private. API responses also redact URLs in migrated error logs.
+Those stored rows are not rewritten; remove credentials
 from them manually if needed.
 
 ### Generate config from gallery.so
@@ -124,12 +131,15 @@ pin_price_per_gb = "0.2"             # USDC per GB for IPFS pinning
 
 [x402.facilitator]
 url = "https://x402.org/facilitator" # Facilitator endpoint
-network = "base-sepolia"             # Facilitator network id
+network = "eip155:84532"             # Facilitator network id
 ```
 
-When enabled, callers should first request quotes via `POST /v1/backups/quote`;
-the quote should subsequently be used as part of the normal `POST /v1/backups`
-request.
+When enabled, create a quote with `POST /v2/quotes`, wait until it is ready,
+then pass its `id` as `quote_id` in `POST /v2/backups`. Use a stable
+`Idempotency-Key` across the initial request and its x402 payment retry.
+
+See the [2.0 API and migration guide](docs/api-v2.md) for resource lifecycles,
+payment recovery, the database model and the coordinated Partal upgrade.
 
 ## Run
 
@@ -184,10 +194,10 @@ make run-server
 
 ### OpenAPI Documentation
 
-The server includes interactive OpenAPI documentation available at `/v1/swagger-ui`
+The server includes interactive OpenAPI documentation available at `/v2/swagger-ui`
 when running. This provides a complete API reference with example requests and
 responses for all endpoints. The OpenAPI specification JSON is available at
-`/v1/api-docs/openapi.json`.
+`/v2/openapi.json`.
 
 Example usage:
 
@@ -196,7 +206,7 @@ Example usage:
 make run-server
 
 # View the interactive API documentation
-open http://localhost:8080/v1/swagger-ui
+open http://localhost:8080/v2/swagger-ui
 ```
 
 ## Contribute

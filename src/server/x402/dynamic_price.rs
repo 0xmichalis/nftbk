@@ -1,12 +1,3 @@
-use axum::http::HeaderMap;
-use tracing::warn;
-use url::Url;
-use x402_axum::layer::X402Error;
-use x402_rs::types::TokenAmount;
-
-use crate::server::x402::X402Config;
-use crate::server::AppState;
-
 /// Parse a price string (e.g., "0.1069") directly to microdollars (u64)
 /// without using floating-point arithmetic to avoid precision loss.
 /// USDC has 6 decimal places, so we multiply by 1_000_000.
@@ -55,70 +46,6 @@ pub fn parse_usdc_price_to_wei(price_str: &str) -> Result<u64, String> {
         .ok_or_else(|| "Price value too large, would overflow".to_string())?;
 
     Ok(microdollars)
-}
-
-async fn compute_dynamic_price_impl(
-    state: AppState,
-    config: X402Config,
-    quote_id: Option<String>,
-) -> Result<TokenAmount, X402Error> {
-    let quote_id = quote_id.ok_or_else(|| {
-        X402Error::verification_failed("X-Quote-Id header is required".to_string(), Vec::new())
-    })?;
-
-    let mut cache = state.quote_cache.lock().await;
-    let price_opt = cache
-        .get(&quote_id)
-        .ok_or_else(|| {
-            X402Error::verification_failed(
-                format!("Quote {quote_id} not found in cache"),
-                Vec::new(),
-            )
-        })?
-        .price;
-
-    let price_wei = price_opt.ok_or_else(|| {
-        X402Error::verification_failed(
-            format!("Quote {quote_id} exists but has no price set"),
-            Vec::new(),
-        )
-    })?;
-
-    drop(cache);
-
-    // Validate the price tag
-    let _price_tag = config
-        .usdc_price_tag_for_token_amount(price_wei)
-        .map_err(|e| {
-            let error_msg = format!(
-                "Failed to build price tag from amount '{}': {}",
-                price_wei, e
-            );
-            warn!("{}", error_msg);
-            X402Error::verification_failed(error_msg, Vec::new())
-        })?;
-
-    let token_amount = TokenAmount::from(price_wei);
-
-    Ok(token_amount)
-}
-
-pub fn create_dynamic_price_callback(
-    state: AppState,
-    config: X402Config,
-) -> Box<x402_axum::layer::DynamicPriceCallback> {
-    Box::new(
-        move |headers: &HeaderMap, _uri: &axum::http::Uri, _base_url: &Url| {
-            let state = state.clone();
-            let config = config.clone();
-            let quote_id = headers
-                .get("X-Quote-Id")
-                .and_then(|v| v.to_str().ok())
-                .map(|s| s.to_string());
-
-            Box::pin(compute_dynamic_price_impl(state, config, quote_id))
-        },
-    )
 }
 
 #[cfg(test)]

@@ -77,6 +77,8 @@ impl PinataClient {
     pub fn new<T: Into<String>>(base_url: T, bearer_token: String) -> Self {
         let http = Client::builder()
             .user_agent(USER_AGENT)
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .timeout(std::time::Duration::from_secs(30))
             .build()
             .expect("Failed to create reqwest client - this should never fail");
         Self {

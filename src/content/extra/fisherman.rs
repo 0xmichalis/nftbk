@@ -32,7 +32,10 @@ async fn fetch_the_fisherman_content(
     );
 
     // Create token directory
-    let token_dir = output_path.join("tezos").join(contract).join(token_id);
+    let token_dir = output_path
+        .join("tezos:NetXdQprcVkpaWU")
+        .join(contract)
+        .join(token_id);
     fs::create_dir_all(&token_dir).await?;
 
     // Files to download

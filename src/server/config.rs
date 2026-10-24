@@ -348,13 +348,13 @@ bearer_token_env = "FILEBASE_TOKEN"
             assert!(config
                 .chain_config
                 .0
-                .get("ethereum")
+                .get("eip155:1")
                 .unwrap()
                 .contains("test-key"));
             assert!(config
                 .chain_config
                 .0
-                .get("polygon")
+                .get("eip155:137")
                 .unwrap()
                 .contains("test-key"));
 

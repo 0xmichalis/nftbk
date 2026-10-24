@@ -1,6 +1,6 @@
 [package]
 name = "nftbk"
-version = "1.2.4"
+version = "2.0.0"
 edition = "2021"
 description = "A library, server, and CLI tool for backing up NFT metadata and content from EVM and Tezos NFT contracts."
 license = "Apache-2.0"
@@ -38,10 +38,10 @@ fs2 = "0.4"
 futures = "0.3"
 futures-util = "0.3"
 hex = "0.4.3"
+hmac = "0.12.1"
 httpdate = "1.0"
 josekit = "0.10.3"
 libc = "0.2"
-lru = "0.18.2"
 prettytable = "0.10"
 rand = "0.8"
 regex = "1"
@@ -61,7 +61,6 @@ time = { version = "0.3", features = ["macros", "formatting"] }
 tokio = { version = "1.53.3", features = ["full"] }
 tokio-util = "0.7"
 toml = "0.7"
-tower = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter", "time"] }
 url = "2.4"
@@ -81,4 +80,5 @@ pkcs8 = "0.10"
 rand_core = "0.6"
 tempfile = "3.8"
 tokio-test = "0.4"
+tower = { version = "0.4", features = ["util"] }
 wiremock = "0.6"

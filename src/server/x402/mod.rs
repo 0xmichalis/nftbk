@@ -10,12 +10,11 @@ use x402_rs::types::{MixedAddress, TokenAmount};
 
 use crate::server::x402::coinbase_facilitator::CoinbaseFacilitator;
 use crate::server::x402::either_facilitator::EitherFacilitator;
-pub use dynamic_price::create_dynamic_price_callback;
 pub use dynamic_price::parse_usdc_price_to_wei;
 
 mod coinbase_facilitator;
 mod dynamic_price;
-mod either_facilitator;
+pub mod either_facilitator;
 mod error_handling;
 mod shared_facilitator;
 
@@ -147,23 +146,7 @@ impl X402Config {
     pub fn to_middleware(&self) -> anyhow::Result<X402Middleware<EitherFacilitator>> {
         let base_url = Url::parse(self.base_url.as_str())?;
 
-        // Choose facilitator: simple client if no API creds, dynamic otherwise
-        let facilitator = if self.facilitator.api_key_id_env.is_none()
-            || self.facilitator.api_key_secret_env.is_none()
-        {
-            let client = x402_axum::facilitator_client::FacilitatorClient::try_from(
-                self.facilitator.url.as_str(),
-            )?;
-            EitherFacilitator::from(client)
-        } else {
-            info!("x402 Coinbase facilitator authentication enabled");
-            let client = CoinbaseFacilitator::new_with_url(
-                self.facilitator.url.as_str(),
-                self.facilitator.api_key_id_env.as_deref(),
-                self.facilitator.api_key_secret_env.as_deref(),
-            );
-            EitherFacilitator::from(client)
-        };
+        let facilitator = self.facilitator_client()?;
 
         // Use a default placeholder price since dynamic pricing will override it per request
         let default_price = "0.01";
@@ -179,6 +162,29 @@ impl X402Config {
             .with_max_timeout_seconds(self.max_timeout_seconds)
             .with_price_tag(price_tag);
         Ok(middleware)
+    }
+
+    pub fn facilitator_client(&self) -> anyhow::Result<EitherFacilitator> {
+        // Choose facilitator: simple client if no API creds, dynamic otherwise
+        let facilitator = if self.facilitator.api_key_id_env.is_none()
+            || self.facilitator.api_key_secret_env.is_none()
+        {
+            let client = x402_axum::facilitator_client::FacilitatorClient::try_from(
+                self.facilitator.url.as_str(),
+            )?
+            .with_timeout(std::time::Duration::from_secs(15));
+            EitherFacilitator::from(client)
+        } else {
+            info!("x402 Coinbase facilitator authentication enabled");
+            let client = CoinbaseFacilitator::new_with_url(
+                self.facilitator.url.as_str(),
+                self.facilitator.api_key_id_env.as_deref(),
+                self.facilitator.api_key_secret_env.as_deref(),
+            );
+            EitherFacilitator::from(client)
+        };
+
+        Ok(facilitator)
     }
 
     /// Prepare a USDC price tag builder with the configured network and recipient.
@@ -244,8 +250,8 @@ fn normalize_base_url(input: &str) -> anyhow::Result<String> {
 
 fn parse_network(input: &str) -> anyhow::Result<Network> {
     match input {
-        "base-sepolia" => Ok(Network::BaseSepolia),
-        "base" => Ok(Network::Base),
+        "eip155:84532" | "base-sepolia" => Ok(Network::BaseSepolia),
+        "eip155:8453" | "base" => Ok(Network::Base),
         other => Err(anyhow::anyhow!("unsupported network: {}", other)),
     }
 }

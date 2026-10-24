@@ -6,10 +6,7 @@ use x402_rs::types::{
     SettleRequest, SettleResponse, SupportedPaymentKindsResponse, VerifyRequest, VerifyResponse,
 };
 
-use super::error_handling::{
-    handle_result, tolerant_parse_supported, tolerant_recover_payment_required,
-    tolerant_recover_verify,
-};
+use super::error_handling::{handle_result, tolerant_parse_supported, tolerant_recover_verify};
 
 /// A wrapper around FacilitatorClient that adds robust error handling
 #[derive(Clone, Debug)]
@@ -57,27 +54,10 @@ impl Facilitator for SharedFacilitator {
         &self,
         request: &SettleRequest,
     ) -> impl Future<Output = Result<SettleResponse, Self::Error>> + Send {
-        let this = self.clone();
-        let req = request.clone();
-        async move {
-            handle_result(
-                &this.client,
-                "POST /settle",
-                {
-                    let client = this.client.clone();
-                    let req = req.clone();
-                    move || {
-                        reqwest::Client::new()
-                            .post(client.settle_url().clone())
-                            .json(&req)
-                    }
-                },
-                |body| tolerant_recover_payment_required::<SettleResponse>("POST /settle", body),
-                this.client.settle(&req).await,
-                3, // Default max retries
-            )
-            .await
-        }
+        let client = self.client.clone();
+        let request = request.clone();
+        // A lost settlement response requires durable reconciliation, never another POST.
+        async move { client.settle(&request).await }
     }
 
     fn supported(

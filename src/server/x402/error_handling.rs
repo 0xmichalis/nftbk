@@ -44,7 +44,7 @@ where
     FBuild: Fn() -> reqwest::RequestBuilder + Send + Sync + Clone + 'static,
     FRecover: Fn(&str) -> Option<Result<T, FacilitatorClientError>> + Send + Sync + Clone + 'static,
 {
-    let req = build_req();
+    let req = build_req().timeout(std::time::Duration::from_secs(15));
     let req = add_headers_from_client(client, req).await;
     match req.send().await {
         Ok(resp) => {
@@ -172,7 +172,7 @@ where
     FBuild: Fn() -> reqwest::RequestBuilder + Send + Sync + Clone + 'static,
     FRecover: Fn(&str) -> Option<Result<T, FacilitatorClientError>> + Send + Sync + Clone + 'static,
 {
-    let req = build_req();
+    let req = build_req().timeout(std::time::Duration::from_secs(15));
     let req = add_headers_from_client(client, req).await;
     match req.send().await {
         Ok(resp) => match resp.text().await {
@@ -310,23 +310,6 @@ pub fn tolerant_recover_verify(
         }
     }
 
-    None
-}
-
-/// Tolerant recovery for payment required errors in settle responses
-pub fn tolerant_recover_payment_required<T>(
-    context: &'static str,
-    body: &str,
-) -> Option<Result<T, FacilitatorClientError>> {
-    if let Ok(v) = serde_json::from_str::<serde_json::Value>(body) {
-        if v.get("error").is_some() && v.get("accepts").is_some() {
-            return Some(Err(FacilitatorClientError::HttpStatus {
-                context,
-                status: StatusCode::PAYMENT_REQUIRED,
-                body: body.to_string(),
-            }));
-        }
-    }
     None
 }
 
@@ -549,7 +532,7 @@ mod tests {
                         .json(&settle_request)
                 }
             },
-            |body| tolerant_recover_payment_required::<SettleResponse>("POST /settle", body),
+            |_| None::<Result<SettleResponse, FacilitatorClientError>>,
             client.settle(&settle_request).await,
             3, // Default max retries
         )

@@ -429,14 +429,14 @@ async fn handle_special_contract_uri(
     token_id: &U256,
 ) -> anyhow::Result<Option<String>> {
     // Handle CryptoPunks on Ethereum mainnet
-    if chain_name == "ethereum"
+    if crate::chain::id::canonical_chain_id(chain_name) == "eip155:1"
         && token_address.to_lowercase() == "0xb47e3cd837ddf8e4c57f05d70ab865de6e193bbb"
     {
         return generate_cryptopunks_data_uri(rpc, token_id).await.map(Some);
     }
 
     // Handle Beeple's contract on Ethereum mainnet
-    if chain_name == "ethereum"
+    if crate::chain::id::canonical_chain_id(chain_name) == "eip155:1"
         && token_address.to_lowercase() == "0xd92e44ac213b9ebda0178e1523cc0ce177b7fa96"
     {
         return Ok(Some(generate_beeple_uri(token_id)));
