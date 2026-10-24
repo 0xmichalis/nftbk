@@ -157,11 +157,11 @@ pub async fn capture(state: &AppState, claim: &Claim) -> Result<()> {
             continue;
         }
         if item.metadata_sha256.is_none() {
-            if observe(state, claim, item).await.is_err() {
+            if let Err(error) = observe(state, claim, item).await {
                 item.state = State::Failed;
                 item.error = Some(failure(
                     "metadata_capture_failed",
-                    "NFT metadata could not be captured",
+                    &format!("NFT metadata could not be captured: {error:#}"),
                 ));
                 state
                     .db
@@ -206,11 +206,11 @@ pub async fn capture(state: &AppState, claim: &Claim) -> Result<()> {
                     *asset = primary;
                     additions.extend(dependencies);
                 }
-                Err(_) => {
+                Err(error) => {
                     asset.state = State::Failed;
                     asset.error = Some(failure(
                         "asset_capture_failed",
-                        "Asset could not be captured",
+                        &format!("Asset could not be captured: {error:#}"),
                     ));
                 }
             }
@@ -596,6 +596,118 @@ mod estimate_price_tests {
             estimate_price(&pricing, &specification, &[item]).unwrap(),
             (1_000_003, 1024 * 1024 * 1024 + 1024)
         );
+    }
+}
+
+#[cfg(test)]
+mod capture_tests {
+    use std::sync::Arc;
+
+    use alloy_sol_types::SolValue;
+    use serde_json::json;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    use super::*;
+    use crate::server::database::mock::{state, MockDatabase};
+
+    async fn capture_failure(metadata_status: u16, asset_status: u16) -> (Item, bool) {
+        let directory = tempfile::tempdir().unwrap();
+        let server = MockServer::start().await;
+        let uri = format!("{}/metadata?api_key=metadata-secret", server.uri());
+        Mock::given(method("POST"))
+            .and(path("/rpc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0", "id": 0,
+                "result": format!("0x{}", hex::encode(uri.abi_encode()))
+            })))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/metadata"))
+            .respond_with(ResponseTemplate::new(metadata_status).set_body_json(json!({
+                "image": format!("{}/image.png?api_key=asset-secret", server.uri())
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/image.png"))
+            .respond_with(ResponseTemplate::new(asset_status))
+            .mount(&server)
+            .await;
+
+        let item = new_item(
+            "snapshot",
+            Nft {
+                chain_id: "eip155:1".into(),
+                contract_address: "0x00000000000000000000000000000000000000ab".into(),
+                token_id: "42".into(),
+            },
+        );
+        let db = Arc::new(MockDatabase {
+            document: Some(json!({
+                "id": "snapshot", "created_at": Utc::now(), "updated_at": Utc::now(),
+                "state": "running", "nft_count": 1, "captured_count": 0, "failed_count": 0,
+                "archives": [], "pin_sets": [], "operation_id": "op",
+                "manifest_sha256": null, "provenance": "observed"
+            })),
+            operation_context: std::sync::Mutex::new(Some(json!({"items": [item]}))),
+            ..Default::default()
+        });
+        let mut state = state(db.clone(), directory.path());
+        Arc::make_mut(&mut state.chain_config).0.insert(
+            "eip155:1".into(),
+            format!("{}/rpc?api_key=rpc-secret", server.uri()),
+        );
+        let claim: Claim = serde_json::from_value(json!({
+            "operation": {"id": "op", "kind": "capture", "target_id": "snapshot",
+                "state": "running", "attempts": 1, "created_at": Utc::now(),
+                "updated_at": Utc::now(), "error": null},
+            "owner_id": "owner", "lease_token": "lease",
+            "specification": {"nfts": [], "outputs": [{"type": "archive", "format": "zip"}]},
+            "plan": []
+        }))
+        .unwrap();
+        let succeeded = capture(&state, &claim).await.is_ok();
+        let context = db.operation_context.lock().unwrap();
+        let item = serde_json::from_value(context.as_ref().unwrap()["items"][0].clone()).unwrap();
+        (item, succeeded)
+    }
+
+    #[tokio::test]
+    async fn persists_metadata_failure_details_without_endpoint_credentials() {
+        let (item, succeeded) = capture_failure(404, 200).await;
+        assert!(!succeeded);
+        assert_eq!(item.state, State::Failed);
+        let error = item.error.unwrap();
+        assert_eq!(error.code, "metadata_capture_failed");
+        assert!(error.message.contains("404 Not Found"));
+        assert!(error.message.contains("[redacted URL]"));
+        assert!(!error.message.contains("secret"));
+        assert!(!error.message.contains("127.0.0.1"));
+    }
+
+    #[tokio::test]
+    async fn persists_asset_failure_details_without_endpoint_credentials() {
+        let (item, succeeded) = capture_failure(200, 403).await;
+        assert!(succeeded);
+        assert_eq!(item.state, State::Partial);
+        let error = item
+            .assets
+            .iter()
+            .find(|asset| asset.role == "image")
+            .unwrap()
+            .error
+            .as_ref()
+            .unwrap();
+        assert_eq!(error.code, "asset_capture_failed");
+        assert!(error.message.contains("403 Forbidden"));
+        assert!(error.message.contains("[redacted URL]"));
+        assert!(!error.message.contains("secret"));
+        assert!(!error.message.contains("127.0.0.1"));
     }
 }
 

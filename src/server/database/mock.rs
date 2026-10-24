@@ -16,6 +16,7 @@ pub struct MockDatabase {
     pub payment_updates: Mutex<Vec<PaymentUpdate>>,
     pub creates: Mutex<Vec<Create>>,
     pub blobs: Mutex<Vec<Blob>>,
+    pub operation_context: Mutex<Option<Document>>,
 }
 #[async_trait]
 impl Database for MockDatabase {
@@ -59,10 +60,20 @@ impl Database for MockDatabase {
         panic!("Unexpected database call: heartbeat")
     }
     async fn context(&self, _claim: &Claim) -> Result<Document> {
-        panic!("Unexpected database call: context")
+        Ok(self
+            .operation_context
+            .lock()
+            .unwrap()
+            .clone()
+            .expect("Configure operation context"))
     }
-    async fn progress(&self, _claim: &Claim, _progress: Progress) -> Result<()> {
-        panic!("Unexpected database call: progress")
+    async fn progress(&self, _claim: &Claim, progress: Progress) -> Result<()> {
+        let mut context = self.operation_context.lock().unwrap();
+        let context = context.as_mut().expect("Configure operation context");
+        if let Progress::Items(items) = &progress {
+            context["items"] = serde_json::to_value(items).unwrap();
+        }
+        Ok(())
     }
     async fn put_blob(&self, _claim: &Claim, blob: &Blob) -> Result<()> {
         self.blobs.lock().unwrap().push(blob.clone());
