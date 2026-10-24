@@ -1,234 +1,85 @@
 # nftbk
 
-![x402 badge](assets/x402-button-small.png)
+[![CI][ci-badge]][ci] [![Coverage][coverage-badge]][coverage]
 
-[![CI](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml/badge.svg)](https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml)[![Coverage](https://coveralls.io/repos/github/0xmichalis/nftbk/badge.svg?branch=main)](https://coveralls.io/github/0xmichalis/nftbk?branch=main)
-
-A library, server, and CLI tool for protecting NFTs. The following networks are
-currently supported:
-
-- EVM (Ethereum, Base, Shape, Zora, etc)
-- Tezos
+Back up NFT metadata and content from EVM networks (Ethereum, Base, Shape,
+Zora, and others) and Tezos. Use nftbk as a Rust library, a standalone CLI,
+or a server with an HTTP API. Backups can be saved locally or pinned to IPFS.
 
 ## Requirements
 
-- Rust toolchain (install from [rustup.rs](https://rustup.rs))
-- Chain-specific RPC URLs
-- IPFS pinning service (optional)
-- PostgreSQL (server-specific; used for backup metadata storage)
+- Rust toolchain (install from [rustup.rs](https://rustup.rs)).
+- An RPC URL for each network you want to back up.
+- PostgreSQL for the server; the local database target also uses Podman and
+  `podman-compose`.
+- An IPFS pinning provider account if you want to pin content.
 
-## Configuration
+## Quick start
 
-The server uses a configuration file that combines all settings.
-See `example_config.toml` for an example config. It contains:
-
-- Chain RPC URLs
-- JWT authentication credentials (optional)
-- x402 payment configuration (optional)
-- IPFS pinning providers (optional)
-
-Chain keys use case-sensitive [CAIP-2 identifiers][caip2], for example
-`"eip155:1"` or `"tezos:NetXdQprcVkpaWU"`. Quote TOML keys containing a colon.
-Known 1.x configuration aliases are accepted and normalized during migration;
-the 2.0 HTTP API accepts only CAIP-2 identifiers.
-
-[caip2]: https://standards.chainagnostic.org/CAIPs/caip-2
-
-The CLI uses additionally a config file for the tokens to be backed up when
-running in standalone mode. See `example_config_tokens.toml` for an example.
-
-NFT metadata, media and extra resources must use public HTTP(S) destinations,
-including every redirect and DNS result. Content fetches ignore proxy
-environment variables; configured RPC, pinning and payment endpoints retain
-their existing network access.
-
-HTTP(S) URLs are tried unchanged before falling back to IPFS gateways.
-IPFS URIs use Filebase and Pinata, preferring authenticated gateways. Artwork
-query parameters and fragments are preserved when switching gateways.
-
-Downloads allow 10 seconds to connect, 30 seconds per read and 5 minutes in
-total per request. Buffered metadata is limited to 16 MiB; saved media is
-limited to 256 MiB per file, including decompressed content. These limits
-allow large NFT media while bounding memory, disk use and stalled requests.
-Failed downloads remove partial files. Larger artwork needs another backup
-method.
-
-Backup error messages omit HTTP(S) and WebSocket endpoint URLs to keep RPC
-credentials private while retaining the underlying capture failure details.
-API responses also redact URLs in migrated error logs.
-Those stored rows are not rewritten; remove credentials
-from them manually if needed.
-
-### Generate config from gallery.so
-
-If you already have a [Gallery](https://gallery.so) account and gallery, you can
-easily create a backup of it by following these steps:
-
-1. Note down the username and gallery id you want to back up. The gallery id is
-the last part of the URL when viewing a gallery, eg, `2RgusW2IT1qkSPKE15S2xTnArN4`
-from [`https://gallery.so/michalis/galleries/2RgusW2IT1qkSPKE15S2xTnArN4`](https://gallery.so/michalis/galleries/2RgusW2IT1qkSPKE15S2xTnArN4).
-2. Run the following command to generate a config file:
+Run commands from the repository root. Copy the example configuration files:
 
 ```sh
-GALLERY_ID=2RgusW2IT1qkSPKE15S2xTnArN4 \
-USERNAME=michalis \
-    python3 scripts/extract_gallery_tokens.py > config_tokens.toml
+cp .env.example .env
+cp example_config.toml config.toml
+cp example_config_tokens.toml config_tokens.toml
 ```
 
-### JWT authentication support
+Edit the RPC URLs, credentials, and token selections for your collection.
+Remove unused RPC entries and optional JWT, x402, and pinning sections until
+you configure them. When removing `[x402]`, remove its subtables too.
+See the [configuration guide](docs/configuration.md) for chain identifiers,
+authentication, payments, pinning, and importing a Gallery collection.
 
-The server supports authenticating JWT tokens. Multiple JWT credential sets can
-be configured in the `[[jwt]]` section of the server config. All credential sets
-in the config are considered valid and tried during authentication.
-
-```toml
-[[jwt]]
-# Expected issuer (iss)
-issuer = "https://issuer.example.com"
-# Expected audience (aud)
-audience = "my-audience"
-# ES256 public key in PEM format (you may escape newlines as \n)
-verification_key = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
-
-# Additional JWT credential sets can be added
-[[jwt]]
-issuer = "https://another-issuer.example.com"
-audience = "another-audience"
-verification_key = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
-```
-
-### IPFS Pinning
-
-There is support for pinning IPFS content using multiple providers. Both the
-[IPFS Pinning Service API](https://ipfs.github.io/pinning-services-api-spec/)
-and the [Pinata API](https://docs.pinata.cloud/api-reference/introduction)
-are currently supported.
-
-```toml
-# Pin to Filebase (supports the IPFS Pinning Service API)
-[[ipfs_pinning_provider]]
-type = "pinning-service"
-base_url = "https://api.filebase.io/v1/ipfs"
-bearer_token_env = "FILEBASE_TOKEN"
-
-# Pin to Pinata
-[[ipfs_pinning_provider]]
-type = "pinata"
-base_url = "https://api.pinata.cloud"
-bearer_token_env = "PINATA_TOKEN"
-```
-
-### x402 payments
-
-The server can lock backup generation behind [x402](https://x402.org)
-micropayments. Enable it by adding an `[x402]` stanza to your config:
-
-```toml
-[x402]
-asset_symbol = "USDC"                # Settlement asset (USDC supported today)
-base_url = "https://localhost:8080"  # Public base URL echoed in 402 replies
-recipient_address = "0x..."          # Wallet that receives payments
-max_timeout_seconds = 300            # How long a quote remains payable
-
-[x402.pricing]
-archive_price_per_gb = "0.05"        # USDC per GB for archive downloads
-pin_price_per_gb = "0.2"             # USDC per GB for IPFS pinning
-
-[x402.facilitator]
-url = "https://x402.org/facilitator" # Facilitator endpoint
-network = "eip155:84532"             # Facilitator network id
-```
-
-When enabled, create a quote with `POST /v2/quotes`, wait until it is ready,
-then pass its `id` as `quote_id` in `POST /v2/backups`. Use a stable
-`Idempotency-Key` across the initial request and its x402 payment retry.
-
-See the [2.0 API and migration guide](docs/api-v2.md) for resource lifecycles,
-payment recovery, the database model and the coordinated Partal upgrade.
-
-## Run
-
-### CLI
-
-Check the supported options in the CLI:
+### Create a local backup
 
 ```sh
-cargo run --bin nftbk-cli -- --help
+SQLX_OFFLINE=true cargo run --bin nftbk-cli -- create
 ```
 
-A few useful targets in the Makefile:
+This reads `config.toml` and `config_tokens.toml` and writes to `nft_backup/`.
+PostgreSQL is only needed for server mode.
 
-```sh
-# Create a local backup based on config.toml and config_tokens.toml
-make run-cli
-# Request a backup from a local server running at localhost:8080 using
-# tokens defined in config_tokens_test.toml
-make run-cli-server-test 
-```
+### Run the server
 
-### Postgres
-
-Postgres is a requirement in order to run the server. The server applies any
-pending migrations automatically on startup, so you only need to deploy
-Postgres:
+Set `DATABASE_URL` in `.env` to match your PostgreSQL credentials. To start
+the bundled database and server:
 
 ```sh
 cp .env.postgres.example .env.postgres
-make start-db
+SQLX_OFFLINE=true make run
 ```
 
-Migrations live in `migrations/` and are embedded into the server binary at
-build time. To apply them manually without starting the server (e.g. for
-inspection), use the sqlx CLI:
+The server applies database migrations on startup and listens at
+`http://127.0.0.1:8080`. Browse its interactive API reference at
+[/v2/swagger-ui](http://127.0.0.1:8080/v2/swagger-ui); the OpenAPI JSON is at
+[/v2/openapi.json](http://127.0.0.1:8080/v2/openapi.json).
 
-```sh
-export DATABASE_URL=postgres://nftbkuser:nftbkpassword@localhost:5432/nftbkdb
-sqlx migrate run
-```
+See the [running guide](docs/running.md) for CLI options, an existing
+database, manual migrations, and download behavior.
 
-### Server
+## Documentation
 
-```sh
-# This deploys Postgres and runs the server, which applies migrations on startup.
-# You should have already created `.env.postgres` for this to work end to end.
-make run
-
-# If you are already running Postgres, you can simply run the server with:
-make run-server
-```
-
-### OpenAPI Documentation
-
-The server includes interactive OpenAPI documentation available at `/v2/swagger-ui`
-when running. This provides a complete API reference with example requests and
-responses for all endpoints. The OpenAPI specification JSON is available at
-`/v2/openapi.json`.
-
-Example usage:
-
-```sh
-# Start the server
-make run-server
-
-# View the interactive API documentation
-open http://localhost:8080/v2/swagger-ui
-```
+- [Configuration](docs/configuration.md): RPCs, token selection, Gallery
+  import, JWT authentication, IPFS pinning, and x402 payments.
+- [Running nftbk](docs/running.md): CLI and server usage, PostgreSQL,
+  storage, and content download limits.
+- [API and migration guide](docs/api-v2.md): resources, payment recovery,
+  database model, and upgrading from 1.x.
+- [Development](docs/development.md): checks, SQLx query cache, and coverage.
 
 ## Contribute
 
-```sh
-# Update the sqlx cache and commit any changes when necessary - this is needed
-# when developing new or updating existing static queries in the server.
-make sqlxprepare
-
-# Run tests with coverage output in HTML
-make cover
-```
+Run `make all` before submitting a change. See the
+[development guide](docs/development.md) for the full workflow.
 
 ## Donations
 
-If you find this project helpful and would like to support its development, you
-can make a donation in the following addresses:
+To support development, you can donate to:
 
 - Ethereum: `0xd2Be832911A252302bAc09e30Fc124A405E142DF` (michalis.eth)
 - Tezos: `tz1ioFzpKGdwtncBkGunkUD9Sk16NqB2vML6` (michalis.tez)
+
+[ci-badge]: https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml/badge.svg
+[ci]: https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml
+[coverage-badge]: https://coveralls.io/repos/github/0xmichalis/nftbk/badge.svg?branch=main
+[coverage]: https://coveralls.io/github/0xmichalis/nftbk?branch=main
