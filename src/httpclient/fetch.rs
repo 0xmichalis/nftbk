@@ -106,7 +106,7 @@ async fn retry_with_gateways_with_method(
         None => return Err(original_error),
     };
 
-    let mut last_err = original_error;
+    let mut fallback_errors = Vec::new();
     let alternative_gateways: Vec<_> = gateway_urls
         .into_iter()
         .filter(|gateway_url| gateway_url.url != url)
@@ -128,17 +128,24 @@ async fn retry_with_gateways_with_method(
                     return Ok(response);
                 } else {
                     warn!("Alternative IPFS gateway {new_url} failed: {status}");
-                    last_err = anyhow::anyhow!("{status}");
+                    fallback_errors.push(create_http_error(status, &new_url).to_string());
                 }
             }
             Err(err) => {
                 warn!("Failed to fetch from IPFS gateway {}: {}", new_url, err);
-                last_err = err;
+                fallback_errors.push(format!("{err:#}"));
             }
         }
     }
 
-    Err(last_err)
+    if fallback_errors.is_empty() {
+        Err(original_error)
+    } else {
+        Err(original_error.context(format!(
+            "IPFS gateway fallbacks failed: {}",
+            fallback_errors.join("; ")
+        )))
+    }
 }
 
 pub(crate) async fn retry_with_gateways(
@@ -400,11 +407,37 @@ mod try_fetch_response_tests {
     }
 
     #[tokio::test]
+    async fn retains_original_status_and_fallback_failures() {
+        let origin = MockServer::start().await;
+        let fallback = MockServer::start().await;
+        let content_path = "/ipfs/QmQUgxNdHwYgJBSsp2CRYRgrenqhwKiFWiNFv2Xxm28NK4";
+        Mock::given(method("GET"))
+            .and(path(content_path))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&origin)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(content_path))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&fallback)
+            .await;
+
+        let url = format!("{}{content_path}", origin.uri());
+        let (result, status) = super::try_fetch_response(&url, &[gw(&fallback.uri())]).await;
+        assert_eq!(status, Some(reqwest::StatusCode::NOT_FOUND));
+        let message = format!("{:#}", result.unwrap_err());
+        assert!(message.contains("404 Not Found"));
+        assert!(message.contains("403 Forbidden"));
+    }
+
+    #[tokio::test]
     async fn primary_gateway_request_carries_its_bearer_token() {
         std::env::set_var("NFTBK_TEST_PRIMARY_GW_TOKEN", "secret");
         let mock_server = MockServer::start().await;
         let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
-        let url = format!("{}/ipfs/{}", mock_server.uri(), cid);
+        let url = format!("{}/ipfs/{}?edition_number=20", mock_server.uri(), cid);
 
         Mock::given(method("GET"))
             .and(path(format!("/ipfs/{}", cid)))

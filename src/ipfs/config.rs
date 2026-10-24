@@ -31,13 +31,8 @@ impl IpfsGatewayConfig {
 // https://ipfs.github.io/public-gateway-checker/
 pub const IPFS_GATEWAYS: &[IpfsGatewayConfig] = &[
     IpfsGatewayConfig {
-        url: "https://ipfs.io",
+        url: "https://ipfs.filebase.io",
         gateway_type: IpfsGatewayType::Path,
-        bearer_token_env: None,
-    },
-    IpfsGatewayConfig {
-        url: "https://4everland.io",
-        gateway_type: IpfsGatewayType::Subdomain,
         bearer_token_env: None,
     },
     IpfsGatewayConfig {

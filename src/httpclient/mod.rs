@@ -677,6 +677,35 @@ mod fetch_and_write_tests {
     }
 
     #[tokio::test]
+    async fn streams_original_gateway_content_before_using_fallbacks() {
+        let origin = MockServer::start().await;
+        let fallback = MockServer::start().await;
+        let content_path = "/ipfs/QmQUgxNdHwYgJBSsp2CRYRgrenqhwKiFWiNFv2Xxm28NK4/image.png";
+        Mock::given(method("GET"))
+            .and(path(content_path))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(PNG_1X1))
+            .expect(1)
+            .mount(&origin)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&fallback)
+            .await;
+
+        let out = TempDir::new().unwrap();
+        let client = HttpClient::new()
+            .with_gateways(vec![(fallback.uri(), IpfsGatewayType::Path)])
+            .with_max_retries(0);
+        let url = format!("{}{content_path}", origin.uri());
+        let saved = client
+            .fetch_and_write(&url, &token(), out.path(), image_options())
+            .await
+            .unwrap();
+        assert_eq!(tokio::fs::read(saved).await.unwrap(), PNG_1X1);
+    }
+
+    #[tokio::test]
     async fn hard_links_download_identical_to_existing_file_under_another_name() {
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -742,6 +771,57 @@ mod fetch_tests {
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
+
+    #[tokio::test]
+    async fn tries_original_gateway_before_configured_fallbacks() {
+        let origin = MockServer::start().await;
+        let fallback = MockServer::start().await;
+        let content_path = "/ipfs/QmQUgxNdHwYgJBSsp2CRYRgrenqhwKiFWiNFv2Xxm28NK4";
+        Mock::given(method("GET"))
+            .and(path(content_path))
+            .and(wiremock::matchers::query_param("edition_number", "20"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("original metadata"))
+            .expect(1)
+            .mount(&origin)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&fallback)
+            .await;
+
+        let client = HttpClient::new()
+            .with_gateways(vec![(fallback.uri(), IpfsGatewayType::Path)])
+            .with_max_retries(0);
+        let url = format!("{}{content_path}?edition_number=20", origin.uri());
+        assert_eq!(client.fetch(&url).await.unwrap(), b"original metadata");
+    }
+
+    #[tokio::test]
+    async fn keeps_artwork_parameters_when_original_gateway_fails() {
+        let origin = MockServer::start().await;
+        let fallback = MockServer::start().await;
+        let content_path = "/ipfs/QmQUgxNdHwYgJBSsp2CRYRgrenqhwKiFWiNFv2Xxm28NK4/";
+        Mock::given(method("GET"))
+            .and(path(content_path))
+            .respond_with(ResponseTemplate::new(429))
+            .expect(1)
+            .mount(&origin)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(content_path))
+            .and(wiremock::matchers::query_param("edition_number", "20"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("artwork"))
+            .expect(1)
+            .mount(&fallback)
+            .await;
+
+        let client = HttpClient::new()
+            .with_gateways(vec![(fallback.uri(), IpfsGatewayType::Path)])
+            .with_max_retries(0);
+        let url = format!("{}{content_path}?edition_number=20", origin.uri());
+        assert_eq!(client.fetch(&url).await.unwrap(), b"artwork");
+    }
 
     #[tokio::test]
     async fn rejects_oversized_buffered_body() {
@@ -975,6 +1055,30 @@ mod head_content_length_tests {
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
+
+    #[tokio::test]
+    async fn measures_original_gateway_without_rewriting_it() {
+        let origin = MockServer::start().await;
+        let fallback = MockServer::start().await;
+        let content_path = "/ipfs/QmQUgxNdHwYgJBSsp2CRYRgrenqhwKiFWiNFv2Xxm28NK4";
+        Mock::given(method("HEAD"))
+            .and(path(content_path))
+            .respond_with(ResponseTemplate::new(200).insert_header("Content-Length", "1024"))
+            .expect(1)
+            .mount(&origin)
+            .await;
+        Mock::given(method("HEAD"))
+            .respond_with(ResponseTemplate::new(500))
+            .expect(0)
+            .mount(&fallback)
+            .await;
+
+        let client = HttpClient::new()
+            .with_gateways(vec![(fallback.uri(), IpfsGatewayType::Path)])
+            .with_max_retries(0);
+        let url = format!("{}{content_path}", origin.uri());
+        assert_eq!(client.head_content_length(&url).await.unwrap(), 1024);
+    }
 
     #[tokio::test]
     async fn calculates_size_for_data_url() {

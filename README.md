@@ -42,6 +42,10 @@ including every redirect and DNS result. Content fetches ignore proxy
 environment variables; configured RPC, pinning and payment endpoints retain
 their existing network access.
 
+HTTP(S) URLs are tried unchanged before falling back to IPFS gateways.
+IPFS URIs use Filebase and Pinata, preferring authenticated gateways. Artwork
+query parameters and fragments are preserved when switching gateways.
+
 Downloads allow 10 seconds to connect, 30 seconds per read and 5 minutes in
 total per request. Buffered metadata is limited to 16 MiB; saved media is
 limited to 256 MiB per file, including decompressed content. These limits
@@ -50,7 +54,8 @@ Failed downloads remove partial files. Larger artwork needs another backup
 method.
 
 Backup error messages omit HTTP(S) and WebSocket endpoint URLs to keep RPC
-credentials private. API responses also redact URLs in migrated error logs.
+credentials private while retaining the underlying capture failure details.
+API responses also redact URLs in migrated error logs.
 Those stored rows are not rewritten; remove credentials
 from them manually if needed.
 

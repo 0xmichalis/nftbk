@@ -85,6 +85,12 @@ pub fn get_last_path_segment(url: &str, fallback: &str) -> String {
 
 /// Resolve a potentially special URL (e.g., ar://, ipfs://, gateway) to a concrete HTTP URL
 pub fn resolve_url_with_gateways(url: &str, gateways: &[IpfsGatewayConfig]) -> String {
+    if matches!(
+        Url::parse(url).ok().as_ref().map(Url::scheme),
+        Some("http" | "https")
+    ) {
+        return url.to_string();
+    }
     if url.starts_with("ar://") {
         return format!("https://arweave.net/{}", url.trim_start_matches("ar://"));
     }
@@ -302,5 +308,26 @@ mod tests {
         assert!(content_str.starts_with("<svg width='512' height='512'"));
         assert!(content_str.contains("xmlns='http://www.w3.org/2000/svg'"));
         assert!(content_str.ends_with("</svg>"));
+    }
+}
+
+#[cfg(test)]
+mod resolve_url_with_gateways_tests {
+    use super::*;
+    use crate::ipfs::config::IpfsGatewayType;
+
+    #[test]
+    fn preserves_http_gateway_urls_with_their_parameters() {
+        let gateways = [IpfsGatewayConfig {
+            url: "https://fallback.example",
+            gateway_type: IpfsGatewayType::Path,
+            bearer_token_env: None,
+        }];
+        for url in [
+            "https://ipfs.bitmark.com/ipfs/QmQUgxNdHwYgJBSsp2CRYRgrenqhwKiFWiNFv2Xxm28NK4?edition_number=20#art",
+            "http://example.com/ipfs/QmQUgxNdHwYgJBSsp2CRYRgrenqhwKiFWiNFv2Xxm28NK4",
+        ] {
+            assert_eq!(resolve_url_with_gateways(url, &gateways), url);
+        }
     }
 }
