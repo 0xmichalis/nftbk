@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 use tracing::{error, info};
 
+use crate::errors::redact_urls;
 use crate::server::archive::{
     get_zipped_backup_paths, sync_files, zip_backup, ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
 };
@@ -25,12 +26,12 @@ async fn persist_non_fatal_error_logs<DB: Database + ?Sized>(
     let archive_log = if archive_errors.is_empty() {
         None
     } else {
-        Some(archive_errors.join("\n"))
+        Some(redact_urls(&archive_errors.join("\n")))
     };
     let ipfs_log = if ipfs_errors.is_empty() {
         None
     } else {
-        Some(ipfs_errors.join("\n"))
+        Some(redact_urls(&ipfs_errors.join("\n")))
     };
     if archive_log.is_none() && ipfs_log.is_none() {
         return;
@@ -52,6 +53,12 @@ async fn persist_non_fatal_error_logs<DB: Database + ?Sized>(
             }
         }
     }
+}
+
+async fn persist_backup_error<DB: Database + ?Sized>(db: &DB, task_id: &str, message: &str) {
+    let message = redact_urls(message);
+    error!(task_id = %task_id, "{message}");
+    let _ = db.set_backup_error(task_id, &message).await;
 }
 
 #[derive(Debug, PartialEq)]
@@ -255,10 +262,7 @@ async fn run_backup_task_inner<DB: Database + ?Sized>(state: AppState, task: Bac
                 );
                 return;
             }
-            error!("Backup {task_id} failed: {}", e);
-            let _ = db
-                .set_backup_error(&task_id, &format!("Backup failed: {e}"))
-                .await;
+            persist_backup_error(db, &task_id, &format!("Backup failed: {e}")).await;
             return;
         }
     };
@@ -385,8 +389,7 @@ pub async fn run_backup_task(state: AppState, task: BackupTask) {
             "Unknown panic".to_string()
         };
         let error_msg = format!("Backup task for task {task_id} panicked: {panic_msg}");
-        error!("{error_msg}");
-        let _ = Database::set_backup_error(&*state_clone.db, &task_id, &error_msg).await;
+        persist_backup_error(&*state_clone.db, &task_id, &error_msg).await;
     }
 }
 
@@ -394,6 +397,46 @@ pub async fn run_backup_task(state: AppState, task: BackupTask) {
 mod persist_error_logs_tests {
     use super::persist_non_fatal_error_logs;
     use crate::server::database::r#trait::MockDatabase;
+    use std::time::Duration;
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn removes_rpc_keys_from_all_persisted_error_log_scopes() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(60)))
+            .mount(&server)
+            .await;
+        let error = reqwest::Client::new()
+            .get(format!("{}/v2/not-a-real-key", server.uri()))
+            .timeout(Duration::from_millis(100))
+            .send()
+            .await
+            .unwrap_err()
+            .to_string();
+
+        for scope in [
+            crate::server::StorageMode::Full,
+            crate::server::StorageMode::Archive,
+            crate::server::StorageMode::Ipfs,
+        ] {
+            let db = MockDatabase::default();
+            persist_non_fatal_error_logs(
+                &db,
+                "t1",
+                &scope,
+                std::slice::from_ref(&error),
+                std::slice::from_ref(&error),
+            )
+            .await;
+            let logs = db.persisted_error_logs.lock().unwrap();
+            assert!(!logs.is_empty());
+            for log in logs.iter() {
+                assert!(!log.contains("not-a-real-key"));
+                assert!(!log.contains("http://"));
+            }
+        }
+    }
 
     #[tokio::test]
     async fn no_errors_makes_no_call() {
@@ -442,5 +485,29 @@ mod persist_error_logs_tests {
             &["i1".into(), "i2".into()],
         )
         .await;
+    }
+}
+
+#[cfg(test)]
+mod persist_backup_error_tests {
+    use super::*;
+    use crate::server::database::r#trait::MockDatabase;
+
+    #[tokio::test]
+    async fn removes_rpc_keys_before_storing_fatal_and_panic_errors() {
+        let db = MockDatabase::default();
+        for message in [
+            "Backup failed: request to https://example.invalid/v2/not-a-real-key",
+            "Backup task panicked: request to wss://example.invalid/v2/not-a-real-key",
+        ] {
+            persist_backup_error(&db, "t1", message).await;
+        }
+        assert_eq!(
+            *db.persisted_backup_errors.lock().unwrap(),
+            [
+                "Backup failed: request to [redacted URL]",
+                "Backup task panicked: request to [redacted URL]"
+            ]
+        );
     }
 }

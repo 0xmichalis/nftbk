@@ -7,6 +7,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::content::extra::fetch_and_write_extra;
 use crate::content::{read_metadata, write_metadata, Options};
+use crate::errors::redact_urls;
 use crate::ipfs::url::extract_ipfs_cid;
 use crate::ipfs::{IpfsPinningProvider, PinRequest};
 
@@ -40,7 +41,7 @@ fn process<T>(
     match result {
         Ok(value) => Ok(Some(value)),
         Err(e) => {
-            let full_msg = format!("{error_msg}: {e}");
+            let full_msg = redact_urls(&format!("{error_msg}: {e}"));
             if exit_on_error {
                 return Err(anyhow!(full_msg));
             }
@@ -525,7 +526,7 @@ where
             Err(err) => {
                 warn!(
                     token = %token,
-                    error = %err,
+                    error = %redact_urls(&err.to_string()),
                     "Failed to get token URI during size estimation; skipping token"
                 );
                 continue;
@@ -537,7 +538,7 @@ where
             Err(err) => {
                 warn!(
                     token = %token,
-                    error = %err,
+                    error = %redact_urls(&err.to_string()),
                     "Failed to fetch metadata during size estimation; skipping token"
                 );
                 continue;
@@ -549,7 +550,7 @@ where
             Err(err) => {
                 warn!(
                     token = %token,
-                    error = %err,
+                    error = %redact_urls(&err.to_string()),
                     "Failed to serialize metadata during size estimation; skipping token"
                 );
                 continue;
@@ -567,8 +568,8 @@ where
                     Err(err) => {
                         warn!(
                             token = %token,
-                            url = %url,
-                            error = %err,
+                            url = %redact_urls(&url),
+                            error = %redact_urls(&err.to_string()),
                             "Failed to HEAD content during size estimation; skipping URL"
                         );
                         continue;
@@ -587,8 +588,8 @@ where
                     Err(err) => {
                         warn!(
                             token = %token,
-                            url = %extra_uri,
-                            error = %err,
+                            url = %redact_urls(extra_uri),
+                            error = %redact_urls(&err.to_string()),
                             "Failed to HEAD extra content during size estimation; skipping URL"
                         );
                         continue;
@@ -608,6 +609,73 @@ where
 mod process_tests {
     use super::*;
     use anyhow::anyhow;
+    use std::time::Duration;
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn removes_rpc_key_from_recorded_transport_errors() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(60)))
+            .mount(&server)
+            .await;
+        let rpc_url = format!("{}/v2/not-a-real-key", server.uri());
+        for exit_on_error in [false, true] {
+            let error = reqwest::Client::new()
+                .get(&rpc_url)
+                .timeout(Duration::from_millis(100))
+                .send()
+                .await
+                .unwrap_err();
+            let mut errors = Vec::new();
+            let result = process::<()>(
+                Err(error.into()),
+                "RPC failed".into(),
+                exit_on_error,
+                &mut errors,
+            );
+            let message = if exit_on_error {
+                result.unwrap_err().to_string()
+            } else {
+                errors.pop().unwrap()
+            };
+
+            assert!(!message.contains("not-a-real-key"));
+            assert!(!message.contains("http://"));
+        }
+    }
+
+    #[tokio::test]
+    async fn removes_rpc_key_from_alloy_errors() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let processor = super::evm::EvmChainProcessor::new(
+            &format!("{}/v2/not-a-real-key", server.uri()),
+            crate::StorageConfig {
+                output_path: None,
+                prune_redundant: false,
+                ipfs_pinning_configs: vec![],
+            },
+            0,
+        )
+        .await
+        .unwrap();
+        let token = super::common::ContractTokenId {
+            address: "0x0000000000000000000000000000000000000001".into(),
+            token_id: "1".into(),
+            chain_name: "ethereum".into(),
+        };
+        let error = processor.get_uri(&token).await.unwrap_err();
+        let mut errors = Vec::new();
+        process::<()>(Err(error), "RPC failed".into(), false, &mut errors).unwrap();
+
+        assert_eq!(errors.len(), 1);
+        assert!(!errors[0].contains("not-a-real-key"));
+        assert!(!errors[0].contains("http://"));
+    }
 
     #[test]
     fn test_process_success() {
@@ -1607,7 +1675,13 @@ mod process_nfts_tests {
         assert_eq!(archive_out.files.len(), 1); // Should have metadata.json
         assert_eq!(archive_out.errors.len(), 1); // Content download error should go to archive_errors
         assert!(archive_out.errors[0].contains("Failed to fetch"));
-        assert!(archive_out.errors[0].contains("image"));
+        assert_eq!(
+            archive_out.errors[0],
+            format!(
+                "Failed to fetch content for {}: HTTP error: status 500 Internal Server Error from [redacted URL]",
+                create_test_token()
+            )
+        );
 
         // Verify that IPFS operations were not attempted
         assert!(ipfs_out.pin_requests.is_empty());
@@ -1709,6 +1783,60 @@ mod size_nfts_tests {
     use crate::ipfs::IpfsPinningProvider;
     use crate::ProcessManagementConfig;
     use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct LogWriter(Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogWriter {
+        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buffer);
+            Ok(buffer.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn redacts_metadata_url_keys_in_size_estimation_warnings() {
+        use tracing::instrument::WithSubscriber;
+
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("HEAD"))
+            .respond_with(wiremock::ResponseTemplate::new(500))
+            .mount(&server)
+            .await;
+        let metadata = MockMetadata {
+            image: format!("{}/?token=not-a-real-key&part=image", server.uri()),
+            animation_url: None,
+        };
+        let expected_size = serde_json::to_vec(&metadata).unwrap().len() as u64;
+        let mut processor = MockProcessor::new(metadata);
+        processor.http_client = crate::httpclient::HttpClient::new().with_max_retries(0);
+        let logs = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let output = LogWriter(logs.clone());
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || output.clone())
+            .finish();
+
+        let size = size_nfts(Arc::new(processor), vec![token()], config(), |metadata| {
+            metadata.image.strip_suffix("&part=image")
+        })
+        .with_subscriber(subscriber)
+        .await
+        .unwrap();
+        let logs = String::from_utf8(logs.lock().unwrap().clone()).unwrap();
+
+        assert_eq!(size, expected_size);
+        assert!(logs.contains("Failed to HEAD content"));
+        assert!(logs.contains("Failed to HEAD extra content"));
+        assert!(!logs.contains("not-a-real-key"));
+        assert!(!logs.contains("http://"));
+    }
 
     #[derive(Clone, serde::Serialize)]
     struct MockMetadata {

@@ -1,22 +1,25 @@
 use anyhow::Result;
 use async_compression::tokio::bufread::GzipDecoder;
-use futures_util::TryStreamExt;
 use std::path::Path;
-use tokio::io::{AsyncRead, AsyncWriteExt, BufReader};
-use tokio_util::io::StreamReader;
+use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+
+use super::limits::{check_size, response_reader, MAX_FILE_BYTES};
 
 pub(crate) async fn stream_reader_to_file<R: AsyncRead + Unpin>(
     reader: &mut R,
     file: &mut tokio::fs::File,
     file_path: &Path,
 ) -> anyhow::Result<std::path::PathBuf> {
-    tokio::io::copy(reader, file).await.map_err(|e| {
-        anyhow::anyhow!(
-            "Failed to stream content to file {}: {}",
-            file_path.display(),
-            e
-        )
-    })?;
+    let copied = tokio::io::copy(&mut reader.take(MAX_FILE_BYTES + 1), file)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!(
+                "Failed to stream content to file {}: {}",
+                file_path.display(),
+                e
+            )
+        })?;
+    check_size(copied, MAX_FILE_BYTES)?;
     file.flush()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to flush file {}: {}", file_path.display(), e))?;
@@ -27,8 +30,9 @@ pub(crate) async fn stream_http_to_file(
     response: reqwest::Response,
     file_path: &Path,
 ) -> anyhow::Result<std::path::PathBuf> {
-    let stream = response.bytes_stream().map_err(std::io::Error::other);
-    let mut reader = StreamReader::new(stream);
+    let mut reader = response_reader(response, MAX_FILE_BYTES)?;
+    // The extension probe treats read errors as empty content, so check first.
+    reader.fill_buf().await?;
 
     let mut file_path = file_path.to_path_buf();
     let (detected_ext, prefix_buf) =
@@ -41,36 +45,39 @@ pub(crate) async fn stream_http_to_file(
         }
     }
 
-    let mut file = tokio::fs::File::create(&file_path)
+    let mut reader = prefix_buf.as_slice().chain(reader);
+    write_reader_to_file(&mut reader, &file_path).await
+}
+
+async fn write_reader_to_file<R: AsyncRead + Unpin>(
+    reader: &mut R,
+    file_path: &Path,
+) -> Result<std::path::PathBuf> {
+    let mut file = tokio::fs::File::create(file_path)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to create file {}: {}", file_path.display(), e))?;
-    if !prefix_buf.is_empty() {
-        file.write_all(&prefix_buf).await.map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to write prefix to file {}: {}",
-                file_path.display(),
-                e
-            )
+    let result = async {
+        let path = stream_reader_to_file(reader, &mut file, file_path).await?;
+        file.sync_all().await.map_err(|e| {
+            anyhow::anyhow!("Failed to sync file {} to disk: {}", file_path.display(), e)
         })?;
+        Ok(path)
     }
-    let result = stream_reader_to_file(&mut reader, &mut file, &file_path).await?;
-
-    file.sync_all().await.map_err(|e| {
-        anyhow::anyhow!("Failed to sync file {} to disk: {}", file_path.display(), e)
-    })?;
-
-    Ok(result)
+    .await;
+    drop(file);
+    if result.is_err() {
+        tokio::fs::remove_file(file_path).await?;
+    }
+    result
 }
 
 pub(crate) async fn stream_gzip_http_to_file(
     response: reqwest::Response,
     file_path: &Path,
 ) -> Result<std::path::PathBuf> {
-    let mut file = tokio::fs::File::create(file_path).await?;
-    let stream = response.bytes_stream().map_err(std::io::Error::other);
-    let reader = StreamReader::new(stream);
+    let reader = response_reader(response, MAX_FILE_BYTES)?;
     let mut decoder = GzipDecoder::new(BufReader::new(reader));
-    stream_reader_to_file(&mut decoder, &mut file, file_path).await
+    write_reader_to_file(&mut decoder, file_path).await
 }
 
 #[cfg(test)]
@@ -126,11 +133,65 @@ mod stream_reader_to_file_tests {
 #[cfg(test)]
 mod stream_http_to_file_tests {
     use super::*;
+    use futures_util::StreamExt;
     use tempfile::TempDir;
     use wiremock::{
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
+
+    #[tokio::test]
+    async fn rejects_oversized_content_length_without_creating_file() {
+        let response = axum::http::Response::builder()
+            .header("Content-Length", "268435457")
+            .body(Vec::<u8>::new())
+            .unwrap()
+            .into();
+        let out = TempDir::new().unwrap();
+        let file_path = out.path().join("large.bin");
+
+        assert!(stream_http_to_file(response, &file_path).await.is_err());
+        assert!(!file_path.exists());
+    }
+
+    #[tokio::test]
+    async fn rejects_oversized_chunked_body_and_removes_partial_file() {
+        let chunks = futures_util::stream::iter(0..257)
+            .map(|_| Ok::<_, std::io::Error>(vec![0; 1024 * 1024]));
+        let response = axum::http::Response::new(reqwest::Body::wrap_stream(chunks)).into();
+        let out = TempDir::new().unwrap();
+        let file_path = out.path().join("large.bin");
+
+        assert!(stream_http_to_file(response, &file_path).await.is_err());
+        assert!(!file_path.exists());
+    }
+
+    #[tokio::test]
+    async fn removes_partial_file_with_detected_extension_after_body_error() {
+        let chunks = futures_util::stream::iter([
+            Ok(b"\x89PNG\r\n\x1a\npartial image".to_vec()),
+            Err(std::io::Error::other("body read timed out")),
+        ]);
+        let response = axum::http::Response::new(reqwest::Body::wrap_stream(chunks)).into();
+        let out = TempDir::new().unwrap();
+        let file_path = out.path().join("image");
+
+        assert!(stream_http_to_file(response, &file_path).await.is_err());
+        assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn rejects_failed_body_before_creating_file() {
+        let chunks = futures_util::stream::iter([Err::<Vec<u8>, _>(std::io::Error::other(
+            "body read timed out",
+        ))]);
+        let response = axum::http::Response::new(reqwest::Body::wrap_stream(chunks)).into();
+        let out = TempDir::new().unwrap();
+        let file_path = out.path().join("empty.bin");
+
+        assert!(stream_http_to_file(response, &file_path).await.is_err());
+        assert!(!file_path.exists());
+    }
 
     #[tokio::test]
     async fn streams_large_http_body_to_file() {
@@ -230,6 +291,21 @@ mod stream_gzip_http_to_file_tests {
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
+
+    #[tokio::test]
+    async fn rejects_oversized_gzip_output_and_removes_partial_file() {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        let mut content = std::io::Read::take(std::io::repeat(0), 256 * 1024 * 1024 + 1);
+        std::io::copy(&mut content, &mut encoder).unwrap();
+        let response = axum::http::Response::new(encoder.finish().unwrap()).into();
+        let out = TempDir::new().unwrap();
+        let file_path = out.path().join("expanded.bin");
+
+        assert!(stream_gzip_http_to_file(response, &file_path)
+            .await
+            .is_err());
+        assert!(!file_path.exists());
+    }
 
     #[tokio::test]
     async fn decodes_gzipped_http_body_to_file() {

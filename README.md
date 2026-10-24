@@ -30,6 +30,23 @@ See `example_config.toml` for an example config. It contains:
 The CLI uses additionally a config file for the tokens to be backed up when
 running in standalone mode. See `example_config_tokens.toml` for an example.
 
+NFT metadata, media and extra resources must use public HTTP(S) destinations,
+including every redirect and DNS result. Content fetches ignore proxy
+environment variables; configured RPC, pinning and payment endpoints retain
+their existing network access.
+
+Downloads allow 10 seconds to connect, 30 seconds per read and 5 minutes in
+total per request. Buffered metadata is limited to 16 MiB; saved media is
+limited to 256 MiB per file, including decompressed content. These limits
+allow large NFT media while bounding memory, disk use and stalled requests.
+Failed downloads remove partial files. Larger artwork needs another backup
+method.
+
+Backup error messages omit HTTP(S) and WebSocket endpoint URLs to keep RPC
+credentials private. API responses also redact URLs in error logs stored by
+earlier versions. Those stored rows are not rewritten; remove credentials
+from them manually if needed.
+
 ### Generate config from gallery.so
 
 If you already have a [Gallery](https://gallery.so) account and gallery, you can

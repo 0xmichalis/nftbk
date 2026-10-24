@@ -9,16 +9,14 @@ async fn send_request(
     url: &str,
     bearer_token: Option<String>,
 ) -> anyhow::Result<reqwest::Response> {
-    let client = reqwest::Client::builder()
-        .user_agent(crate::USER_AGENT)
-        .build()?;
+    let client = super::security::client_builder(url)?.build()?;
 
     let mut req = client.request(method, url);
     if let Some(token) = bearer_token {
         req = req.bearer_auth(token);
     }
 
-    Ok(req.send().await?)
+    Ok(req.send().await.map_err(reqwest::Error::without_url)?)
 }
 
 pub(crate) async fn fetch_url(
@@ -752,6 +750,71 @@ mod fetch_url_tests {
         matchers::{header, method, path},
         Mock, MockServer, ResponseTemplate,
     };
+
+    #[tokio::test]
+    async fn rejects_stalled_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(3600)),
+            )
+            .mount(&server)
+            .await;
+        let url = server.uri();
+        let mut request = tokio::spawn(async move { super::fetch_url(&url, None).await });
+        while server.received_requests().await.unwrap().is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut request).await;
+        request.abort();
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().unwrap().is_err());
+    }
+
+    #[tokio::test]
+    async fn rejects_redirect_to_loopback() {
+        let origin = MockServer::start().await;
+        let internal = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("internal secret"))
+            .mount(&internal)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(302).insert_header("Location", internal.uri()))
+            .mount(&origin)
+            .await;
+
+        let result = super::fetch_url(&origin.uri(), None).await;
+
+        assert!(result.is_err());
+        assert_eq!(internal.received_requests().await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn rejects_redirect_to_a_private_hostname() {
+        let origin = MockServer::start().await;
+        let internal = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("internal secret"))
+            .mount(&internal)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", internal.uri().replace("127.0.0.1", "localhost")),
+            )
+            .mount(&origin)
+            .await;
+
+        let result = super::fetch_url(&origin.uri(), None).await;
+
+        assert!(result.is_err());
+        assert_eq!(internal.received_requests().await.unwrap().len(), 0);
+    }
 
     #[tokio::test]
     async fn test_fetch_url_without_bearer_token() {

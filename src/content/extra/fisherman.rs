@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use tokio::fs;
 use tracing::{debug, info, warn};
 
+use crate::httpclient::fetch::fetch_url;
 use crate::httpclient::stream::stream_http_to_file;
 
 pub async fn fetch_fisherman(
@@ -54,7 +55,6 @@ async fn fetch_the_fisherman_content(
     ];
 
     // Download each file
-    let client = reqwest::Client::new();
     let mut files_created = Vec::new();
     for file in files {
         let url = format!("{}/{}", artifact_url.trim_end_matches('/'), file);
@@ -67,7 +67,7 @@ async fn fetch_the_fisherman_content(
             continue;
         }
 
-        match client.get(&url).send().await {
+        match fetch_url(&url, None).await {
             Ok(response) => {
                 let status = response.status();
                 if !status.is_success() {
