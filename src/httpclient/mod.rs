@@ -6,15 +6,17 @@ use crate::content::dedup::hard_link_to_identical_sibling;
 use crate::content::get_filename;
 use crate::content::{extensions, try_exists, write_and_postprocess_file, Options};
 use crate::httpclient::fetch::{try_fetch_response, try_head_content_length};
+use crate::httpclient::limits::{data_url_bytes, response_bytes, MAX_BUFFER_BYTES, MAX_FILE_BYTES};
 use crate::httpclient::retry::{retry_operation, should_retry};
 use crate::httpclient::stream::stream_http_to_file;
 use crate::ipfs::config::{
     prioritize_authenticated, IpfsGatewayConfig, IpfsGatewayType, IPFS_GATEWAYS,
 };
 use crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES;
-use crate::url::{get_data_url, is_data_url, resolve_url_with_gateways};
+use crate::url::{is_data_url, resolve_url_with_gateways};
 
 pub mod fetch;
+mod limits;
 pub mod retry;
 pub(crate) mod security;
 pub mod stream;
@@ -53,8 +55,7 @@ impl HttpClient {
 
     pub async fn fetch(&self, url: &str) -> anyhow::Result<Vec<u8>> {
         if is_data_url(url) {
-            return get_data_url(url)
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse data URL: {}", url));
+            return data_url_bytes(url, MAX_BUFFER_BYTES);
         }
 
         let resolved_url = resolve_url_with_gateways(url, &self.ipfs_gateways);
@@ -66,10 +67,7 @@ impl HttpClient {
                 let gateways = gateways.clone();
                 Box::pin(async move {
                     match try_fetch_response(&url, &gateways).await {
-                        (Ok(response), status) => match response.bytes().await {
-                            Ok(b) => (Ok(b.to_vec()), status),
-                            Err(e) => (Err(anyhow::anyhow!(e)), status),
-                        },
+                        (Ok(response), status) => (response_bytes(response).await, status),
                         (Err(err), status) => (Err(err), status),
                     }
                 })
@@ -84,8 +82,7 @@ impl HttpClient {
 
     pub async fn head_content_length(&self, url: &str) -> anyhow::Result<u64> {
         if is_data_url(url) {
-            let data = get_data_url(url)
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse data URL: {}", url))?;
+            let data = data_url_bytes(url, MAX_FILE_BYTES)?;
             return Ok(data.len() as u64);
         }
 
@@ -131,8 +128,7 @@ impl HttpClient {
         })?;
 
         if is_data_url(url) {
-            let content = get_data_url(url)
-                .ok_or_else(|| anyhow::anyhow!("Failed to parse data URL: {}", url))?;
+            let content = data_url_bytes(url, MAX_FILE_BYTES)?;
             if !extensions::has_known_extension(&file_path) {
                 if let Some(detected_ext) = extensions::detect_media_extension(&content) {
                     let current_path_str = file_path.to_string_lossy();
@@ -350,6 +346,21 @@ mod fetch_tests {
         matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
     };
+
+    #[tokio::test]
+    async fn rejects_oversized_buffered_body() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![0; 16 * 1024 * 1024 + 1]))
+            .mount(&server)
+            .await;
+
+        assert!(HttpClient::new()
+            .with_max_retries(0)
+            .fetch(&server.uri())
+            .await
+            .is_err());
+    }
 
     #[tokio::test]
     async fn test_fetch_data_url() {

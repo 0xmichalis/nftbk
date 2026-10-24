@@ -752,6 +752,30 @@ mod fetch_url_tests {
     };
 
     #[tokio::test]
+    async fn rejects_stalled_response() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200).set_delay(std::time::Duration::from_secs(3600)),
+            )
+            .mount(&server)
+            .await;
+        let url = server.uri();
+        let mut request = tokio::spawn(async move { super::fetch_url(&url, None).await });
+        while server.received_requests().await.unwrap().is_empty() {
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+
+        tokio::time::pause();
+        tokio::time::advance(std::time::Duration::from_secs(31)).await;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), &mut request).await;
+        request.abort();
+
+        assert!(result.is_ok());
+        assert!(result.unwrap().unwrap().is_err());
+    }
+
+    #[tokio::test]
     async fn rejects_redirect_to_loopback() {
         let origin = MockServer::start().await;
         let internal = MockServer::start().await;

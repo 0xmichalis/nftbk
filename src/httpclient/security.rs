@@ -1,6 +1,7 @@
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use reqwest::{redirect, ClientBuilder};
@@ -16,6 +17,9 @@ pub(crate) fn client_builder(url: &str) -> anyhow::Result<ClientBuilder> {
 
     Ok(reqwest::Client::builder()
         .user_agent(crate::USER_AGENT)
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
+        .timeout(Duration::from_secs(300))
         .no_proxy()
         .dns_resolver(Arc::new(PublicResolver))
         .redirect(redirect::Policy::custom(|attempt| {
@@ -314,5 +318,51 @@ mod public_resolver_tests {
             .resolve("localhost".parse().unwrap())
             .await
             .is_err());
+    }
+}
+
+#[cfg(test)]
+mod client_builder_tests {
+    use super::*;
+
+    struct PendingResolver;
+
+    impl Resolve for PendingResolver {
+        fn resolve(&self, _: Name) -> Resolving {
+            Box::pin(std::future::pending())
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bounds_dns_resolution_by_connect_timeout() {
+        let url = "http://never-resolves.invalid/";
+        let client = client_builder(url)
+            .unwrap()
+            .dns_resolver(Arc::new(PendingResolver))
+            .build()
+            .unwrap();
+        let start = tokio::time::Instant::now();
+        let error = client.get(url).send().await.unwrap_err();
+
+        assert!(error.is_timeout());
+        assert!(error.is_connect());
+        assert_eq!(start.elapsed(), Duration::from_secs(10));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn bounds_the_total_request_time() {
+        let url = "http://never-resolves.invalid/";
+        let client = client_builder(url)
+            .unwrap()
+            .dns_resolver(Arc::new(PendingResolver))
+            .connect_timeout(Duration::from_secs(600))
+            .read_timeout(Duration::from_secs(600))
+            .build()
+            .unwrap();
+        let start = tokio::time::Instant::now();
+        let error = client.get(url).send().await.unwrap_err();
+
+        assert!(error.is_timeout());
+        assert_eq!(start.elapsed(), Duration::from_secs(300));
     }
 }
