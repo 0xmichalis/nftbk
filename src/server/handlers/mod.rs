@@ -390,7 +390,7 @@ async fn listing(
     Ok(Json(collection))
 }
 
-#[utoipa::path(post,path="/v2/backups",request_body=CreateBackup,responses((status=201,body=Backup),(status=402,description="x402 payment required"),(status=409,body=ApiProblem),(status=422,body=ApiProblem)),security(("bearer_auth"=[])))]
+#[utoipa::path(post,tag="Backups",path="/v2/backups",request_body=CreateBackup,responses((status=201,body=Backup),(status=402,description="x402 payment required"),(status=409,body=ApiProblem),(status=422,body=ApiProblem)),security(("bearer_auth"=[])))]
 pub async fn create_backup(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -448,7 +448,7 @@ pub async fn create_backup(
     Ok(created(Resource::Backup, current, settlement))
 }
 
-#[utoipa::path(get,path="/v2/backups",params(Page),responses((status=200,body=Collection<Backup>)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Backups",path="/v2/backups",params(Page),responses((status=200,body=Collection<Backup>)),security(("bearer_auth"=[])))]
 pub async fn list_backups(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -456,7 +456,7 @@ pub async fn list_backups(
 ) -> Result<Json<Collection<Value>>, ApiError> {
     listing(&state, &owner, Resource::Backup, &page).await
 }
-#[utoipa::path(get,path="/v2/backups/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Backup),(status=304)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Backups",path="/v2/backups/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Backup),(status=304)),security(("bearer_auth"=[])))]
 pub async fn get_backup(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -465,7 +465,7 @@ pub async fn get_backup(
 ) -> Result<Response, ApiError> {
     read(&state, &owner, Resource::Backup, &id, &headers).await
 }
-#[utoipa::path(get,path="/v2/backups/{id}/items",params(("id"=String,Path,description="Resource UUID"),Page),responses((status=200,body=Collection<Item>)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Backups",path="/v2/backups/{id}/items",params(("id"=String,Path,description="Resource UUID"),Page),responses((status=200,body=Collection<Item>)),security(("bearer_auth"=[])))]
 pub async fn list_items(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -481,7 +481,7 @@ pub async fn list_items(
     page.backup_id = Some(id);
     listing(&state, &owner, Resource::Item, &page).await
 }
-#[utoipa::path(get,path="/v2/backups/{id}/items/{item_id}",params(("id"=String,Path,description="Snapshot UUID"),("item_id"=String,Path,description="Item UUID")),responses((status=200,body=Item)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Backups",path="/v2/backups/{id}/items/{item_id}",params(("id"=String,Path,description="Snapshot UUID"),("item_id"=String,Path,description="Item UUID")),responses((status=200,body=Item)),security(("bearer_auth"=[])))]
 pub async fn get_item(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -498,7 +498,7 @@ pub async fn get_item(
         .ok_or(DatabaseError::NotFound)?;
     Ok(representation(Resource::Item, value, &headers))
 }
-#[utoipa::path(get,path="/v2/pins/{id}",params(("id"=String,Path,description="Pin UUID")),responses((status=200,body=Pin)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Pins",path="/v2/pins/{id}",params(("id"=String,Path,description="Pin UUID")),responses((status=200,body=Pin)),security(("bearer_auth"=[])))]
 pub async fn get_pin(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -507,7 +507,7 @@ pub async fn get_pin(
 ) -> Result<Response, ApiError> {
     read(&state, &owner, Resource::Pin, &id, &headers).await
 }
-#[utoipa::path(get,path="/v2/backups/{id}/manifest",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Manifest)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Backups",path="/v2/backups/{id}/manifest",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Manifest)),security(("bearer_auth"=[])))]
 pub async fn manifest(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -692,7 +692,7 @@ async fn create_output(
         settlement,
     ))
 }
-#[utoipa::path(post,path="/v2/archives",request_body=CreateArchive,responses((status=201,body=Archive)),security(("bearer_auth"=[])))]
+#[utoipa::path(post,tag="Archives",path="/v2/archives",request_body=CreateArchive,responses((status=201,body=Archive)),security(("bearer_auth"=[])))]
 pub async fn create_archive(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -713,7 +713,7 @@ pub async fn create_archive(
     )
     .await
 }
-#[utoipa::path(post,path="/v2/pin-sets",request_body=CreatePinSet,responses((status=201,body=PinSet)),security(("bearer_auth"=[])))]
+#[utoipa::path(post,tag="Pin sets",path="/v2/pin-sets",request_body=CreatePinSet,responses((status=201,body=PinSet)),security(("bearer_auth"=[])))]
 pub async fn create_pin_set(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -731,7 +731,7 @@ pub async fn create_pin_set(
     )
     .await
 }
-#[utoipa::path(get,path="/v2/archives",params(Page),responses((status=200,body=Collection<Archive>)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Archives",path="/v2/archives",params(Page),responses((status=200,body=Collection<Archive>)),security(("bearer_auth"=[])))]
 pub async fn list_archives(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -739,7 +739,7 @@ pub async fn list_archives(
 ) -> Result<Json<Collection<Value>>, ApiError> {
     listing(&state, &owner, Resource::Archive, &page).await
 }
-#[utoipa::path(get,path="/v2/pin-sets",params(Page),responses((status=200,body=Collection<PinSet>)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Pin sets",path="/v2/pin-sets",params(Page),responses((status=200,body=Collection<PinSet>)),security(("bearer_auth"=[])))]
 pub async fn list_pin_sets(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -747,7 +747,7 @@ pub async fn list_pin_sets(
 ) -> Result<Json<Collection<Value>>, ApiError> {
     listing(&state, &owner, Resource::PinSet, &page).await
 }
-#[utoipa::path(get,path="/v2/pins",params(Page),responses((status=200,body=Collection<Pin>)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Pins",path="/v2/pins",params(Page),responses((status=200,body=Collection<Pin>)),security(("bearer_auth"=[])))]
 pub async fn list_pins(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -755,7 +755,7 @@ pub async fn list_pins(
 ) -> Result<Json<Collection<Value>>, ApiError> {
     listing(&state, &owner, Resource::Pin, &page).await
 }
-#[utoipa::path(get,path="/v2/archives/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Archive)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Archives",path="/v2/archives/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Archive)),security(("bearer_auth"=[])))]
 pub async fn get_archive(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -764,7 +764,7 @@ pub async fn get_archive(
 ) -> Result<Response, ApiError> {
     read(&state, &owner, Resource::Archive, &id, &headers).await
 }
-#[utoipa::path(get,path="/v2/pin-sets/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=PinSet)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Pin sets",path="/v2/pin-sets/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=PinSet)),security(("bearer_auth"=[])))]
 pub async fn get_pin_set(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -774,7 +774,7 @@ pub async fn get_pin_set(
     read(&state, &owner, Resource::PinSet, &id, &headers).await
 }
 
-#[utoipa::path(post,path="/v2/quotes",request_body=QuoteRequest,responses((status=201,body=Quote)),security(("bearer_auth"=[])))]
+#[utoipa::path(post,tag="Quotes",path="/v2/quotes",request_body=QuoteRequest,responses((status=201,body=Quote)),security(("bearer_auth"=[])))]
 pub async fn create_quote(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -815,7 +815,7 @@ pub async fn create_quote(
         .await?;
     Ok(created(Resource::Quote, value, None))
 }
-#[utoipa::path(get,path="/v2/quotes",params(Page),responses((status=200,body=Collection<Quote>)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Quotes",path="/v2/quotes",params(Page),responses((status=200,body=Collection<Quote>)),security(("bearer_auth"=[])))]
 pub async fn list_quotes(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -823,7 +823,7 @@ pub async fn list_quotes(
 ) -> Result<Json<Collection<Value>>, ApiError> {
     listing(&state, &owner, Resource::Quote, &page).await
 }
-#[utoipa::path(get,path="/v2/operations",params(Page),responses((status=200,body=Collection<Operation>)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Operations",path="/v2/operations",params(Page),responses((status=200,body=Collection<Operation>)),security(("bearer_auth"=[])))]
 pub async fn list_operations(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -831,7 +831,7 @@ pub async fn list_operations(
 ) -> Result<Json<Collection<Value>>, ApiError> {
     listing(&state, &owner, Resource::Operation, &page).await
 }
-#[utoipa::path(get,path="/v2/quotes/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Quote)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Quotes",path="/v2/quotes/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Quote)),security(("bearer_auth"=[])))]
 pub async fn get_quote(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -840,7 +840,7 @@ pub async fn get_quote(
 ) -> Result<Response, ApiError> {
     read(&state, &owner, Resource::Quote, &id, &headers).await
 }
-#[utoipa::path(get,path="/v2/operations/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Operation)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Operations",path="/v2/operations/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Operation)),security(("bearer_auth"=[])))]
 pub async fn get_operation(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -849,7 +849,7 @@ pub async fn get_operation(
 ) -> Result<Response, ApiError> {
     read(&state, &owner, Resource::Operation, &id, &headers).await
 }
-#[utoipa::path(get,path="/v2/operations/{id}/attempts",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Vec<Attempt>)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Operations",path="/v2/operations/{id}/attempts",params(("id"=String,Path,description="Resource UUID")),responses((status=200,body=Vec<Attempt>)),security(("bearer_auth"=[])))]
 pub async fn attempts(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -858,7 +858,7 @@ pub async fn attempts(
     validate_id(&id)?;
     Ok(Json(state.db.attempts(&owner, &id).await?))
 }
-#[utoipa::path(post,path="/v2/operations/{id}/attempts",params(("id"=String,Path,description="Resource UUID")),responses((status=201,body=Attempt)),security(("bearer_auth"=[])))]
+#[utoipa::path(post,tag="Operations",path="/v2/operations/{id}/attempts",params(("id"=String,Path,description="Resource UUID")),responses((status=201,body=Attempt)),security(("bearer_auth"=[])))]
 pub async fn retry(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -877,7 +877,7 @@ pub async fn retry(
     )
         .into_response())
 }
-#[utoipa::path(get,path="/v2/operations/{id}/attempts/{number}",params(("id"=String,Path,description="Resource UUID"),("number"=u32,Path,description="Attempt number")),responses((status=200,body=Attempt)),security(("bearer_auth"=[])))]
+#[utoipa::path(get,tag="Operations",path="/v2/operations/{id}/attempts/{number}",params(("id"=String,Path,description="Resource UUID"),("number"=u32,Path,description="Attempt number")),responses((status=200,body=Attempt)),security(("bearer_auth"=[])))]
 pub async fn get_attempt(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -912,7 +912,7 @@ async fn deletion(
     )
         .into_response())
 }
-#[utoipa::path(delete,path="/v2/backups/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=202,body=Operation)),security(("bearer_auth"=[])))]
+#[utoipa::path(delete,tag="Backups",path="/v2/backups/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=202,body=Operation)),security(("bearer_auth"=[])))]
 pub async fn delete_backup(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -920,7 +920,7 @@ pub async fn delete_backup(
 ) -> Result<Response, ApiError> {
     deletion(&state, &owner, Resource::Backup, &id).await
 }
-#[utoipa::path(delete,path="/v2/archives/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=202,body=Operation)),security(("bearer_auth"=[])))]
+#[utoipa::path(delete,tag="Archives",path="/v2/archives/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=202,body=Operation)),security(("bearer_auth"=[])))]
 pub async fn delete_archive(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -928,7 +928,7 @@ pub async fn delete_archive(
 ) -> Result<Response, ApiError> {
     deletion(&state, &owner, Resource::Archive, &id).await
 }
-#[utoipa::path(delete,path="/v2/pin-sets/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=202,body=Operation)),security(("bearer_auth"=[])))]
+#[utoipa::path(delete,tag="Pin sets",path="/v2/pin-sets/{id}",params(("id"=String,Path,description="Resource UUID")),responses((status=202,body=Operation)),security(("bearer_auth"=[])))]
 pub async fn delete_pin_set(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -937,7 +937,7 @@ pub async fn delete_pin_set(
     deletion(&state, &owner, Resource::PinSet, &id).await
 }
 
-#[utoipa::path(post,path="/v2/archives/{id}/download-links",params(("id"=String,Path,description="Resource UUID")),responses((status=201,description="A signed download URL and its expiration")),security(("bearer_auth"=[])))]
+#[utoipa::path(post,tag="Archives",path="/v2/archives/{id}/download-links",params(("id"=String,Path,description="Resource UUID")),responses((status=201,description="A signed download URL and its expiration")),security(("bearer_auth"=[])))]
 pub async fn download_link(
     AxumState(state): AxumState<AppState>,
     Extension(owner): Extension<String>,
@@ -984,7 +984,7 @@ pub async fn download_link(
 pub struct DownloadQuery {
     pub grant: Option<String>,
 }
-#[utoipa::path(get,path="/v2/archives/{id}/content",params(("id"=String,Path,description="Resource UUID")),responses((status=200,description="Archive bytes"),(status=206,description="Requested byte range"),(status=416,description="Invalid byte range")))]
+#[utoipa::path(get,tag="Archives",path="/v2/archives/{id}/content",params(("id"=String,Path,description="Resource UUID")),responses((status=200,description="Archive bytes"),(status=206,description="Requested byte range"),(status=416,description="Invalid byte range")))]
 pub async fn content(
     AxumState(state): AxumState<AppState>,
     ApiPath(id): ApiPath<String>,

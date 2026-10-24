@@ -21,6 +21,14 @@ use crate::server::AppState;
         create_pin_set,list_pin_sets,get_pin_set,delete_pin_set,list_pins,get_pin,
         create_quote,list_quotes,get_quote,list_operations,get_operation,attempts,get_attempt,retry),
     components(schemas(Nft,Specification,CreateBackup,CreateArchive,CreatePinSet,QuoteRequest,QuoteOutput,OutputRequest,Backup,Archive,PinSet,Pin,Item,Asset,Manifest,Quote,Operation,Attempt,Failure,ApiProblem)),
+    tags(
+        (name = "Backups", description = "NFT snapshots, their items and sealed manifests."),
+        (name = "Archives", description = "Archive creation, retention and downloads."),
+        (name = "Pin sets", description = "IPFS retention and coverage for a snapshot."),
+        (name = "Pins", description = "Observed provider pins and their owned NFT references."),
+        (name = "Quotes", description = "Expiring prices and metadata plans for paid requests."),
+        (name = "Operations", description = "Durable work, execution attempts and retries.")
+    ),
     info(title="nftbk API",version="2.0.0",description="Immutable NFT snapshots, independent archives and IPFS retention, and durable operations."),
     modifiers(&Security)
 )]
