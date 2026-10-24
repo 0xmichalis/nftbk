@@ -44,5 +44,4 @@ Generate and open an HTML coverage report:
 make cover
 ```
 
-The report is written to `target/coverage/tarpaulin-report.html`. See the
-[API validation notes](api-v2.md#validation) for the opt-in PostgreSQL suite.
+The report is written to `target/coverage/tarpaulin-report.html`.
