@@ -64,9 +64,7 @@ SQLX_OFFLINE=true cargo run --bin nftbk-server -- --base-dir ./data
 ```
 
 The binary defaults to `/tmp` for storage. Use a persistent base directory
-for backups you intend to keep. See the
-[storage model](api-v2.md#database-and-storage) for shared volumes, cleanup,
-and coordinated database and filesystem backups.
+for backups you intend to keep.
 
 ### Manual migrations
 
@@ -84,9 +82,6 @@ The running server exposes interactive OpenAPI documentation with example
 requests and responses at
 [/v2/swagger-ui](http://127.0.0.1:8080/v2/swagger-ui). The specification JSON
 is at [/v2/openapi.json](http://127.0.0.1:8080/v2/openapi.json).
-
-See the [API and migration guide](api-v2.md) for resource lifecycles, payment
-recovery, and the coordinated Partal upgrade.
 
 ## Content downloads
 

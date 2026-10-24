@@ -63,21 +63,12 @@ database, manual migrations, and download behavior.
   import, JWT authentication, IPFS pinning, and x402 payments.
 - [Running nftbk](docs/running.md): CLI and server usage, PostgreSQL,
   storage, and content download limits.
-- [API and migration guide](docs/api-v2.md): resources, payment recovery,
-  database model, and upgrading from 1.x.
 - [Development](docs/development.md): checks, SQLx query cache, and coverage.
 
 ## Contribute
 
 Run `make all` before submitting a change. See the
 [development guide](docs/development.md) for the full workflow.
-
-## Donations
-
-To support development, you can donate to:
-
-- Ethereum: `0xd2Be832911A252302bAc09e30Fc124A405E142DF` (michalis.eth)
-- Tezos: `tz1ioFzpKGdwtncBkGunkUD9Sk16NqB2vML6` (michalis.tez)
 
 [ci-badge]: https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml/badge.svg
 [ci]: https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml

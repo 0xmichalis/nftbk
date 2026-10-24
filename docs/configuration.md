@@ -76,8 +76,7 @@ verification_key = "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n"
 ```
 
 The server also accepts a static bearer token from `NFTBK_AUTH_TOKEN`.
-Set the same variable for the CLI when connecting with that token. See the
-[API guide](api-v2.md#identity-and-requests) for principal ownership rules.
+Set the same variable for the CLI when connecting with that token.
 
 ## IPFS pinning
 
@@ -102,8 +101,6 @@ bearer_token_env = "PINATA_TOKEN"
 
 Set the referenced token variables in your environment or `.env`. To enable
 pinning in the CLI, pass `--pin-on-ipfs true` to `create` or `server create`.
-API clients request an IPFS output as described in the
-[API guide](api-v2.md#create-a-snapshot).
 
 ## x402 payments
 
@@ -129,8 +126,5 @@ network = "eip155:84532"             # Facilitator network id
 When enabled, create a quote with `POST /v2/quotes`, wait until it is ready,
 then pass its `id` as `quote_id` in `POST /v2/backups`. Use a stable
 `Idempotency-Key` across the initial request and its x402 payment retry.
-
-See the [API and migration guide](api-v2.md#quotes-and-payments) for quote
-binding, settlement recovery, and payment retries.
 
 [caip2]: https://standards.chainagnostic.org/CAIPs/caip-2
