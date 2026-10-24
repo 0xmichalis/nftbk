@@ -24,6 +24,29 @@ async fn production_client_rejects_initial_private_destinations() {
 }
 
 #[tokio::test]
+async fn production_raw_croquet_requests_reject_private_destinations() {
+    let internal = MockServer::start().await;
+    Mock::given(method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("internal secret"))
+        .mount(&internal)
+        .await;
+    let output = tempfile::TempDir::new().unwrap();
+    let result = nftbk::content::extra::croquet::fetch_croquet_challenge(
+        output.path(),
+        "0xabc",
+        "25811853076941608055270457512038717433705462539422789705262203111341130500763",
+        Some(&internal.uri()),
+    )
+    .await;
+
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "Content URL must use HTTP(S) and a public destination"
+    );
+    assert_eq!(internal.received_requests().await.unwrap().len(), 0);
+}
+
+#[tokio::test]
 async fn production_client_ignores_environment_proxies() {
     if std::env::var_os("NFTBK_PROXY_TEST_CHILD").is_some() {
         assert!(HttpClient::new()

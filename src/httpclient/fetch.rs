@@ -9,14 +9,9 @@ async fn send_request(
     url: &str,
     bearer_token: Option<String>,
 ) -> anyhow::Result<reqwest::Response> {
-    let client = super::security::client_builder(url)?.build()?;
-
-    let mut req = client.request(method, url);
-    if let Some(token) = bearer_token {
-        req = req.bearer_auth(token);
-    }
-
-    Ok(req.send().await.map_err(reqwest::Error::without_url)?)
+    super::HttpClient::new()
+        .send_request(method, url, bearer_token)
+        .await
 }
 
 pub(crate) async fn fetch_url(
@@ -788,9 +783,16 @@ mod fetch_url_tests {
             .mount(&origin)
             .await;
 
-        let result = super::fetch_url(&origin.uri(), None).await;
-
-        assert!(result.is_err());
+        for raw_body in [false, true] {
+            let result = if raw_body {
+                crate::httpclient::HttpClient::new()
+                    .fetch_raw_response(&origin.uri())
+                    .await
+            } else {
+                super::fetch_url(&origin.uri(), None).await
+            };
+            assert!(result.is_err());
+        }
         assert_eq!(internal.received_requests().await.unwrap().len(), 0);
     }
 
@@ -810,9 +812,16 @@ mod fetch_url_tests {
             .mount(&origin)
             .await;
 
-        let result = super::fetch_url(&origin.uri(), None).await;
-
-        assert!(result.is_err());
+        for raw_body in [false, true] {
+            let result = if raw_body {
+                crate::httpclient::HttpClient::new()
+                    .fetch_raw_response(&origin.uri())
+                    .await
+            } else {
+                super::fetch_url(&origin.uri(), None).await
+            };
+            assert!(result.is_err());
+        }
         assert_eq!(internal.received_requests().await.unwrap().len(), 0);
     }
 
