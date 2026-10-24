@@ -97,15 +97,7 @@ async fn reconcile(state: &AppState, claim: &Claim, pin: &ManagedPin) -> Result<
         .providers
         .get(&pin.provider_id)
         .context("Configured provider account is unavailable")?;
-    let matches = provider.list_pins().await?;
-    if let Some(observed) = matches.into_iter().find(|p| {
-        p.cid == pin.cid
-            && p.metadata
-                .as_ref()
-                .and_then(|m| m.get("nftbk_pin_id"))
-                .and_then(|v| v.as_str())
-                == Some(&pin.id)
-    }) {
+    if let Some(observed) = provider.find_pin(&pin.cid, &pin.id).await? {
         state
             .db
             .update_pin(
@@ -191,7 +183,26 @@ async fn pin(state: &AppState, claim: &Claim) -> Result<()> {
             } else if managed.submitted_at.is_some()
                 || managed.operation_id.as_deref() != Some(&claim.operation.id)
             {
-                reconcile(state, claim, &managed).await?;
+                if !reconcile(state, claim, &managed).await?
+                    && managed
+                        .submitted_at
+                        .is_some_and(|at| chrono::Utc::now() - at > chrono::Duration::minutes(15))
+                {
+                    let error = failure("pin_reconciliation_required", "The provider has not confirmed this submission; reconcile the remote request before retrying");
+                    state
+                        .db
+                        .update_pin(
+                            claim,
+                            PinUpdate::Failed {
+                                pin_id: managed.id,
+                                failure: error.clone(),
+                                ambiguous: true,
+                            },
+                        )
+                        .await?;
+                    state.db.progress(claim, Progress::Failed(error)).await?;
+                    return Ok(());
+                }
                 pending = true;
             } else {
                 let request = PinRequest {

@@ -235,6 +235,15 @@ CREATE FUNCTION nftbk_caip2(value TEXT) RETURNS TEXT LANGUAGE SQL IMMUTABLE STRI
  WHEN 'tezos' THEN 'tezos:NetXdQprcVkpaWU' WHEN 'ghostnet' THEN 'tezos:NetXnHfVqm9iesp'
  ELSE value END
 $$;
+DO $$
+DECLARE unsupported TEXT;
+BEGIN
+ SELECT string_agg(DISTINCT chain, ', ' ORDER BY chain) INTO unsupported
+ FROM tokens WHERE nftbk_caip2(chain) !~ '^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$';
+ IF unsupported IS NOT NULL THEN
+  RAISE EXCEPTION 'Map legacy chain names to CAIP-2 IDs before upgrading: %', unsupported;
+ END IF;
+END $$;
 INSERT INTO principals(issuer, subject)
 SELECT DISTINCT CASE WHEN requestor = 'admin' THEN 'nftbk:local' ELSE 'legacy' END, requestor FROM backup_tasks;
 INSERT INTO backups(owner_id, created_at, updated_at, state, specification, specification_hash, provenance, legacy_task_id)
@@ -248,9 +257,9 @@ FROM tokens t JOIN backups b ON b.legacy_task_id=t.task_id
 ON CONFLICT (backup_id,chain_id,contract_address,token_id) DO NOTHING;
 INSERT INTO archives(backup_id, owner_id, created_at, state, format, retention_days, expires_at, storage_key, error, deletion_requested_at)
 SELECT b.id,b.owner_id,b.created_at,
- CASE WHEN a.deleted_at IS NOT NULL THEN 'deleting' WHEN a.status='done' THEN 'ready' WHEN a.status='in_progress' THEN 'queued' WHEN a.status='expired' THEN 'expired' ELSE 'failed' END,
+ CASE WHEN a.deleted_at IS NOT NULL THEN 'deleting' WHEN a.status='done' THEN 'ready' WHEN a.status='in_progress' THEN 'failed' WHEN a.status='expired' THEN 'expired' ELSE 'failed' END,
  a.archive_format,3,a.expires_at,'nftbk-'||a.task_id||'.'||a.archive_format,
- CASE WHEN a.fatal_error IS NOT NULL OR a.error_log IS NOT NULL THEN jsonb_build_object('code','legacy_error','message',concat_ws(E'\n',a.fatal_error,a.error_log),'retryable',true) END,a.deleted_at
+ CASE WHEN a.status='in_progress' AND a.deleted_at IS NULL THEN jsonb_build_object('code','legacy_archive_unavailable','message','Original snapshot bytes are unavailable; create a new backup','retryable',false) WHEN a.fatal_error IS NOT NULL OR a.error_log IS NOT NULL THEN jsonb_build_object('code','legacy_error','message',concat_ws(E'\n',a.fatal_error,a.error_log),'retryable',true) END,a.deleted_at
 FROM archive_requests a JOIN backups b ON b.legacy_task_id=a.task_id;
 INSERT INTO provider_instances(instance_key,provider_type,provider_url)
 SELECT DISTINCT 'legacy:'||provider_type||':'||COALESCE(provider_url,''),provider_type,COALESCE(provider_url,'') FROM pins;
@@ -278,7 +287,9 @@ JOIN provider_instances pi ON pi.instance_key='legacy:'||p.provider_type||':'||C
 JOIN provider_pins pp ON pp.provider_id=pi.id AND pp.request_id=p.request_id
 ON CONFLICT DO NOTHING;
 INSERT INTO operations(owner_id,kind,archive_id,state)
-SELECT owner_id, CASE WHEN state='deleting' THEN 'delete_archive' ELSE 'archive' END,id,'queued' FROM archives WHERE state IN ('queued','deleting');
+SELECT owner_id,'delete_archive',id,'queued' FROM archives WHERE state='deleting';
+INSERT INTO operations(owner_id,kind,archive_id,state,error)
+SELECT owner_id,'archive',id,'failed',error FROM archives WHERE error->>'code'='legacy_archive_unavailable';
 INSERT INTO operations(owner_id,kind,pin_set_id,state)
 SELECT owner_id, CASE WHEN state='deleting' THEN 'delete_pin_set' ELSE 'pin' END,id,'queued' FROM pin_sets WHERE state IN ('running','deleting');
 

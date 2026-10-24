@@ -235,7 +235,6 @@ pub fn generate_cdp_jwt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pkcs8::EncodePublicKey;
     use tokio_test::block_on;
 
     #[test]
@@ -400,18 +399,17 @@ mod tests {
     #[test]
     fn test_verify_jwt_success_and_failures() {
         use p256::ecdsa::SigningKey;
-        use pkcs8::EncodePrivateKey;
-        use rand_core::OsRng;
+        use p256::pkcs8::{EncodePrivateKey, EncodePublicKey};
 
         // Generate ES256 keypair for verification tests
-        let signing_key = SigningKey::random(&mut OsRng);
+        let signing_key = SigningKey::from_slice(&[7; 32]).unwrap();
         let private_pem = signing_key
-            .to_pkcs8_pem(pkcs8::LineEnding::LF)
+            .to_pkcs8_pem(p256::pkcs8::LineEnding::LF)
             .expect("pem")
             .to_string();
         let public_pem = signing_key
             .verifying_key()
-            .to_public_key_pem(pkcs8::LineEnding::LF)
+            .to_public_key_pem(p256::pkcs8::LineEnding::LF)
             .expect("pub pem");
 
         // Make a simple ES256 JWT to validate verify_jwt path

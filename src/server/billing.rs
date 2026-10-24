@@ -1,13 +1,10 @@
-use std::sync::Arc;
-
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Response};
 use base64::Engine;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use x402_axum::layer::{X402Error, X402Paygate};
-use x402_rs::facilitator::Facilitator;
-use x402_rs::types::{PaymentRequirements, Scheme, SettleRequest};
+use x402_types::facilitator::Facilitator;
+use x402_types::proto::{self, v1};
 
 use crate::server::database::r#trait::{PaymentUpdate, QuoteTerms};
 use crate::server::handlers::{problem, ApiError};
@@ -34,21 +31,10 @@ pub fn terms(state: &AppState) -> Result<QuoteTerms, ApiError> {
     let tag = config
         .usdc_price_tag_for_token_amount(1)
         .map_err(ApiError::internal)?;
-    let chain_id = match config.facilitator.network {
-        x402_rs::network::Network::Base => "eip155:8453",
-        x402_rs::network::Network::BaseSepolia => "eip155:84532",
-        _ => {
-            return Err(problem(
-                500,
-                "pricing_unavailable",
-                "Unsupported payment network",
-            ))
-        }
-    };
     Ok(QuoteTerms {
         asset_symbol: config.asset_symbol.clone(),
-        chain_id: chain_id.into(),
-        asset_address: tag.token.address().to_string(),
+        chain_id: config.facilitator.network.chain_id().into(),
+        asset_address: tag.asset,
         asset_decimals: 6,
         pricing_version: state.pricing_version.clone(),
         lifetime_seconds: config.max_timeout_seconds.min(u64::from(u32::MAX)) as u32,
@@ -129,58 +115,78 @@ pub async fn pay(
     let tag = config
         .usdc_price_tag_for_token_amount(amount)
         .map_err(|e| ApiError::internal(e).into_response())?;
-    let extra = tag
-        .token
-        .eip712
-        .as_ref()
-        .map(|e| json!({"name":e.name,"version":e.version}));
-    let requirements = PaymentRequirements {
-        scheme: Scheme::Exact,
-        network: tag.token.network(),
+    let requirements = v1::PaymentRequirements {
+        scheme: tag.scheme,
+        network: tag.network,
         max_amount_required: tag.amount,
-        resource: url::Url::parse(&format!(
+        resource: format!(
             "{}/v2/{}",
             config.base_url.trim_end_matches('/'),
             resource.collection()
-        ))
-        .map_err(|e| ApiError::internal(e).into_response())?,
+        ),
         description: "NFT snapshot retention".into(),
         mime_type: "application/json".into(),
         output_schema: None,
         pay_to: tag.pay_to,
         max_timeout_seconds: config.max_timeout_seconds,
-        asset: tag.token.address(),
-        extra,
+        asset: tag.asset,
+        extra: tag.extra,
     };
-    let offers = vec![requirements];
-    if !headers.contains_key("x-payment") {
-        return Err(X402Error::payment_header_required(offers).into_response());
+    let challenge = |error: &str| {
+        (
+            axum::http::StatusCode::PAYMENT_REQUIRED,
+            axum::Json(v1::PaymentRequired {
+                x402_version: v1::X402Version1,
+                accepts: vec![requirements.clone()],
+                error: Some(error.into()),
+            }),
+        )
+            .into_response()
+    };
+    let payload: v1::PaymentPayload = headers
+        .get("x-payment")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| base64::engine::general_purpose::STANDARD.decode(v).ok())
+        .and_then(|v| serde_json::from_slice(&v).ok())
+        .ok_or_else(|| challenge("A valid X-PAYMENT header is required"))?;
+    if payload.scheme != requirements.scheme || payload.network != requirements.network {
+        return Err(challenge(
+            "Payment scheme or network does not match the quote",
+        ));
     }
-    let facilitator = Arc::new(
-        config
-            .facilitator_client()
-            .map_err(|e| ApiError::internal(e).into_response())?,
-    );
-    let gate = X402Paygate {
-        facilitator: facilitator.clone(),
-        payment_requirements: Arc::new(offers.clone()),
-        settle_before_execution: true,
-    };
-    let payload = gate
-        .extract_payment_payload(headers)
-        .await
-        .map_err(IntoResponse::into_response)?;
-    let verified = gate
-        .verify_payment(payload)
-        .await
-        .map_err(IntoResponse::into_response)?;
-    let settle = SettleRequest {
-        x402_version: verified.x402_version,
-        payment_payload: verified.payment_payload,
-        payment_requirements: verified.payment_requirements,
-    };
-    let encoded = serde_json::to_vec(&settle.payment_payload)
+    let encoded =
+        serde_json::to_vec(&payload).map_err(|e| ApiError::internal(e).into_response())?;
+    let settle: proto::SettleRequest = v1::VerifyRequest {
+        x402_version: v1::X402Version1,
+        payment_payload: payload,
+        payment_requirements: requirements.clone(),
+    }
+    .try_into()
+    .map_err(|e| ApiError::internal(e).into_response())?;
+    let facilitator = config
+        .facilitator_client()
         .map_err(|e| ApiError::internal(e).into_response())?;
+    let verified = facilitator.verify(&settle).await.map_err(|_| {
+        problem(
+            503,
+            "verification_unavailable",
+            "Payment verification is unavailable",
+        )
+        .into_response()
+    })?;
+    match v1::VerifyResponse::try_from(verified) {
+        Ok(v1::VerifyResponse::Valid { payer })
+            if payer.parse::<alloy_primitives::Address>().is_ok() => {}
+        Ok(v1::VerifyResponse::Invalid { reason, .. }) => return Err(challenge(&reason)),
+        _ => {
+            return Err(problem(
+                503,
+                "verification_unavailable",
+                "Invalid facilitator response",
+            )
+            .into_response())
+        }
+    }
     let proof_hash = format!("{:x}", Sha256::digest(encoded));
     state
         .db
@@ -195,9 +201,23 @@ pub async fn pay(
         )
         .await
         .map_err(|e| ApiError::from(e).into_response())?;
-    match facilitator.settle(&settle).await {
-        Ok(reply) if reply.success => {
-            let settlement = json!(reply);
+    let outcome = facilitator.settle(&settle).await;
+    if let Err(error) = &outcome {
+        let error = crate::errors::redact_urls(&error.to_string());
+        tracing::error!(%error, payment_id = %id, resource = %resource.collection(), "Settlement requires reconciliation");
+    }
+    match outcome {
+        Ok(reply)
+            if reply.0["success"] == true
+                && reply.0["network"] == requirements.network
+                && reply.0["payer"]
+                    .as_str()
+                    .is_some_and(|v| v.parse::<alloy_primitives::Address>().is_ok())
+                && reply.0["transaction"]
+                    .as_str()
+                    .is_some_and(|v| v.parse::<alloy_primitives::B256>().is_ok()) =>
+        {
+            let settlement = reply.0;
             state
                 .db
                 .payment(
@@ -210,7 +230,14 @@ pub async fn pay(
                 .map_err(|e| ApiError::from(e).into_response())?;
             Ok(Some(encode_settlement(&settlement)))
         }
-        Ok(reply) => {
+        Ok(reply)
+            if reply.0["success"] == false
+                && reply.0["network"] == requirements.network
+                && reply.0["errorReason"]
+                    .as_str()
+                    .or(reply.0["error_reason"].as_str())
+                    .is_some() =>
+        {
             state
                 .db
                 .payment(
@@ -224,12 +251,13 @@ pub async fn pay(
                 )
                 .await
                 .map_err(|e| ApiError::from(e).into_response())?;
-            Err(
-                X402Error::settlement_failed(format!("{:?}", reply.error_reason), offers)
-                    .into_response(),
-            )
+            Err(challenge(
+                reply.0["errorReason"]
+                    .as_str()
+                    .unwrap_or("Settlement rejected"),
+            ))
         }
-        Err(_) => {
+        _ => {
             state
                 .db
                 .payment(

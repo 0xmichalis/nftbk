@@ -2,7 +2,7 @@
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use alloy::sol_types::SolValue;
+use alloy_sol_types::SolValue;
 use axum::body::{to_bytes, Body};
 use axum::http::{Method, Request, StatusCode};
 use base64::Engine;
@@ -51,7 +51,7 @@ impl TestDatabase {
                 .execute(&mut connection)
                 .await
                 .unwrap();
-            sqlx::raw_sql("INSERT INTO backup_tasks(task_id,requestor,nft_count,storage_mode) VALUES('legacy-task','alice',2,'full'); INSERT INTO archive_requests(task_id,archive_format,status) VALUES('legacy-task','zip','done'); INSERT INTO pin_requests(task_id,status) VALUES('legacy-task','done'); INSERT INTO tokens(task_id,chain,contract_address,token_id) VALUES('legacy-task','ethereum','0x00000000000000000000000000000000000000AB','1'),('legacy-task','tezos','KT1DmEFfeqEC3nEx6bpWKqjNY8FF8RFrR3Gc','2'); INSERT INTO pins(token_id,task_id,provider_type,provider_url,cid,request_id,pin_status) VALUES(1,'legacy-task','pinata','https://provider.example','QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG','remote-1','pinned');").execute(&mut connection).await.unwrap();
+            sqlx::raw_sql("INSERT INTO backup_tasks(task_id,requestor,nft_count,storage_mode) VALUES('legacy-task','alice',2,'full'); INSERT INTO archive_requests(task_id,archive_format,status) VALUES('legacy-task','zip','done'); INSERT INTO backup_tasks(task_id,requestor,nft_count,storage_mode) VALUES('legacy-pending','alice',0,'archive'); INSERT INTO archive_requests(task_id,archive_format,status) VALUES('legacy-pending','zip','in_progress'); INSERT INTO pin_requests(task_id,status) VALUES('legacy-task','done'); INSERT INTO tokens(task_id,chain,contract_address,token_id) VALUES('legacy-task','ethereum','0x00000000000000000000000000000000000000AB','1'),('legacy-task','tezos','KT1DmEFfeqEC3nEx6bpWKqjNY8FF8RFrR3Gc','2'); INSERT INTO pins(token_id,task_id,provider_type,provider_url,cid,request_id,pin_status) VALUES(1,'legacy-task','pinata','https://provider.example','QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG','remote-1','pinned');").execute(&mut connection).await.unwrap();
         }
         let pool = PgPool::connect_with(options.database(&name)).await.unwrap();
         sqlx::migrate!("./migrations").run(&pool).await.unwrap();
@@ -150,8 +150,33 @@ async fn migrates_legacy_records_without_losing_locations_or_ipfs_coverage() {
         .list(Resource::Backup, &owner, &Default::default())
         .await
         .unwrap();
-    assert_eq!(page.data.len(), 1);
-    let backup: Backup = serde_json::from_value(page.data[0].clone()).unwrap();
+    assert_eq!(page.data.len(), 2);
+    let documents = page
+        .data
+        .into_iter()
+        .map(|value| serde_json::from_value::<Backup>(value).unwrap())
+        .collect::<Vec<_>>();
+    let backup = documents
+        .iter()
+        .find(|backup| backup.nft_count == 2)
+        .unwrap();
+    let pending = documents
+        .iter()
+        .find(|backup| backup.nft_count == 0)
+        .unwrap();
+    assert_eq!(pending.archives[0].state, State::Failed);
+    assert_eq!(
+        pending.archives[0].error.as_ref().unwrap().code,
+        "legacy_archive_unavailable"
+    );
+    assert!(!pending.archives[0].error.as_ref().unwrap().retryable);
+    assert!(matches!(
+        database
+            .db
+            .retry(&owner, pending.archives[0].operation_id.as_deref().unwrap())
+            .await,
+        Err(DatabaseError::Conflict(_))
+    ));
     assert_ne!(backup.id, "legacy-task");
     assert_eq!(backup.provenance, "legacy");
     assert_eq!(backup.nft_count, 2);
@@ -172,7 +197,7 @@ async fn migrates_legacy_records_without_losing_locations_or_ipfs_coverage() {
             Resource::Item,
             &owner,
             &nftbk::server::database::r#trait::Page {
-                backup_id: Some(backup.id),
+                backup_id: Some(backup.id.clone()),
                 ..Default::default()
             },
         )

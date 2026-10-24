@@ -1,9 +1,9 @@
 use std::future::Future;
 
 use x402_axum::facilitator_client::{FacilitatorClient, FacilitatorClientError};
-use x402_rs::facilitator::Facilitator;
-use x402_rs::types::{
-    SettleRequest, SettleResponse, SupportedPaymentKindsResponse, VerifyRequest, VerifyResponse,
+use x402_types::facilitator::Facilitator;
+use x402_types::proto::{
+    SettleRequest, SettleResponse, SupportedResponse, VerifyRequest, VerifyResponse,
 };
 
 use super::error_handling::{handle_result, tolerant_parse_supported, tolerant_recover_verify};
@@ -60,9 +60,7 @@ impl Facilitator for SharedFacilitator {
         async move { client.settle(&request).await }
     }
 
-    fn supported(
-        &self,
-    ) -> impl Future<Output = Result<SupportedPaymentKindsResponse, Self::Error>> + Send {
+    fn supported(&self) -> impl Future<Output = Result<SupportedResponse, Self::Error>> + Send {
         let this = self.clone();
         async move {
             handle_result(

@@ -32,9 +32,9 @@ impl Nft {
             self.token_id = "0".to_string();
         }
         if self.chain_id.starts_with("eip155:") {
-            let address: alloy::primitives::Address = self.contract_address.parse()?;
+            let address: alloy_primitives::Address = self.contract_address.parse()?;
             self.contract_address = format!("{address:#x}");
-            alloy::primitives::U256::from_str_radix(&self.token_id, 10)?;
+            alloy_primitives::U256::from_str_radix(&self.token_id, 10)?;
         } else {
             ensure!(
                 self.contract_address.starts_with("KT1")

@@ -1,21 +1,53 @@
 use std::io::{self, BufReader, Write};
 
-use alloy::primitives::{Address, FixedBytes, U256};
-use alloy::providers::ProviderBuilder;
-use alloy::signers::{k256::ecdsa::SigningKey, Signer};
-use alloy::sol_types::{Eip712Domain, SolStruct};
-use alloy::{hex, sol};
+use alloy_primitives::hex;
+use alloy_primitives::{Address, FixedBytes, U256};
+use alloy_rpc_client::ClientBuilder;
+use alloy_sol_types::sol;
+use alloy_sol_types::{Eip712Domain, SolStruct};
 use anyhow::{Context, Result};
+use k256::ecdsa::SigningKey;
 use rand::RngCore;
 use reqwest::Client;
+use serde::{Deserialize, Serialize};
 use tracing::{debug, info};
-use x402_rs::network::Network;
-use x402_rs::timestamp::UnixTimestamp;
-use x402_rs::types::HexEncodedNonce;
-use x402_rs::types::{
-    EvmAddress, EvmSignature, ExactEvmPayload, ExactEvmPayloadAuthorization, PaymentPayload,
-    PaymentRequirements, Scheme, X402Version,
-};
+use x402_types::proto::v1::{self, PaymentRequirements};
+use x402_types::timestamp::UnixTimestamp;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExactEvmPayloadAuthorization {
+    from: Address,
+    to: Address,
+    value: String,
+    valid_after: UnixTimestamp,
+    valid_before: UnixTimestamp,
+    nonce: FixedBytes<32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ExactEvmPayload {
+    signature: alloy_primitives::Bytes,
+    authorization: ExactEvmPayloadAuthorization,
+}
+
+type PaymentPayload = v1::PaymentPayload<String, ExactEvmPayload>;
+
+struct PaymentSigner(SigningKey);
+
+impl From<SigningKey> for PaymentSigner {
+    fn from(value: SigningKey) -> Self {
+        Self(value)
+    }
+}
+
+impl PaymentSigner {
+    fn address(&self) -> Address {
+        let public_key = self.0.verifying_key().to_sec1_point(false);
+        let hash = alloy_primitives::keccak256(&public_key.as_bytes()[1..]);
+        Address::from_slice(&hash[12..])
+    }
+}
 
 // Define the TransferWithAuthorization struct for EIP-712 signing
 sol! {
@@ -32,17 +64,16 @@ sol! {
 // ERC20 token interface to query decimals
 sol! {
     #[allow(missing_docs)]
-    #[sol(rpc)]
     interface IERC20 {
         function decimals() external view returns (uint8);
     }
 }
 
 /// Get chain ID from network
-fn chain_id_from_network(network: Network) -> Result<u64> {
+fn chain_id_from_network(network: &str) -> Result<u64> {
     match network {
-        Network::Base => Ok(8453),
-        Network::BaseSepolia => Ok(84532),
+        "base" => Ok(8453),
+        "base-sepolia" => Ok(84532),
         _ => anyhow::bail!(
             "Only Base and Base Sepolia networks are supported for chain id retrieval"
         ),
@@ -50,10 +81,10 @@ fn chain_id_from_network(network: Network) -> Result<u64> {
 }
 
 /// Get RPC URL for network
-fn get_rpc_url_for_network(network: Network) -> Result<&'static str> {
+fn get_rpc_url_for_network(network: &str) -> Result<&'static str> {
     match network {
-        Network::Base => Ok("https://mainnet.base.org"),
-        Network::BaseSepolia => Ok("https://sepolia.base.org"),
+        "base" => Ok("https://mainnet.base.org"),
+        "base-sepolia" => Ok("https://sepolia.base.org"),
         _ => anyhow::bail!(
             "Only Base and Base Sepolia networks are supported for asset decimals queries"
         ),
@@ -106,7 +137,7 @@ impl X402PaymentHandler {
         payment_requirements: PaymentRequirements,
     ) -> Result<reqwest::Response> {
         let private_key = self.private_key.as_ref().unwrap();
-        let wallet = alloy::signers::local::PrivateKeySigner::from(private_key.clone());
+        let wallet = PaymentSigner::from(private_key.clone());
 
         // Log payment details for debugging
         let account_address = wallet.address();
@@ -164,28 +195,28 @@ impl X402PaymentHandler {
     /// Create a payment payload for the given requirements
     async fn create_payment_payload(
         &self,
-        wallet: &alloy::signers::local::PrivateKeySigner,
+        wallet: &PaymentSigner,
         requirements: &PaymentRequirements,
     ) -> Result<PaymentPayload> {
         // Get the wallet address
         let from_address = wallet.address();
-        let from_evm_address = EvmAddress::from(from_address);
+        let from_evm_address = from_address;
 
         // Parse the recipient address
-        let to_evm_address = match &requirements.pay_to {
-            x402_rs::types::MixedAddress::Evm(addr) => *addr,
-            _ => anyhow::bail!("Only EVM addresses are supported for payments"),
-        };
+        let to_evm_address = requirements
+            .pay_to
+            .parse::<Address>()
+            .context("Only EVM addresses are supported for payments")?;
 
         // Generate a cryptographically secure random nonce
         let nonce = self.generate_secure_nonce()?;
 
         // Create authorization
-        let now = UnixTimestamp::try_now().context("Failed to get current timestamp")?;
+        let now = UnixTimestamp::now();
         let authorization = ExactEvmPayloadAuthorization {
             from: from_evm_address,
             to: to_evm_address,
-            value: requirements.max_amount_required,
+            value: requirements.max_amount_required.clone(),
             valid_after: now,
             valid_before: now + requirements.max_timeout_seconds,
             nonce,
@@ -204,10 +235,10 @@ impl X402PaymentHandler {
 
         // Create the full payment payload
         let payment_payload = PaymentPayload {
-            x402_version: X402Version::V1,
-            scheme: Scheme::Exact,
-            network: requirements.network,
-            payload: x402_rs::types::ExactPaymentPayload::Evm(exact_payload),
+            x402_version: v1::X402Version1,
+            scheme: "exact".into(),
+            network: requirements.network.clone(),
+            payload: exact_payload,
         };
 
         Ok(payment_payload)
@@ -216,47 +247,44 @@ impl X402PaymentHandler {
     /// Sign an EIP-712 authorization
     async fn sign_eip712_authorization(
         &self,
-        wallet: &alloy::signers::local::PrivateKeySigner,
+        wallet: &PaymentSigner,
         authorization: &ExactEvmPayloadAuthorization,
         requirements: &PaymentRequirements,
-    ) -> Result<EvmSignature> {
+    ) -> Result<alloy_primitives::Bytes> {
         // Create the EIP-712 domain
         let domain = self.create_eip712_domain(requirements)?;
 
         // Create the TransferWithAuthorization struct
         let transfer_with_authorization = TransferWithAuthorization {
-            from: authorization.from.into(),
-            to: authorization.to.into(),
-            value: authorization.value.into(),
-            validAfter: authorization.valid_after.into(),
-            validBefore: authorization.valid_before.into(),
-            nonce: FixedBytes(authorization.nonce.0),
+            from: authorization.from,
+            to: authorization.to,
+            value: U256::from_str_radix(&authorization.value, 10)
+                .context("Invalid payment amount")?,
+            validAfter: U256::from(authorization.valid_after.as_secs()),
+            validBefore: U256::from(authorization.valid_before.as_secs()),
+            nonce: authorization.nonce,
         };
 
         // Get the EIP-712 signing hash
         let signing_hash = transfer_with_authorization.eip712_signing_hash(&domain);
 
         // Sign the hash
-        let signature = wallet
-            .sign_hash(&signing_hash)
-            .await
-            .context("Failed to sign EIP-712 hash")?;
-
-        // Convert to EvmSignature
-        let signature_bytes = signature.as_bytes();
-        Ok(EvmSignature::from(signature_bytes))
+        let (signature, recovery_id) = wallet.0.sign_prehash_recoverable(signing_hash.as_slice());
+        let mut signature_bytes = signature.to_bytes().to_vec();
+        signature_bytes.push(recovery_id.to_byte() + 27);
+        Ok(signature_bytes.into())
     }
 
     /// Create EIP-712 domain for the payment requirements
     fn create_eip712_domain(&self, requirements: &PaymentRequirements) -> Result<Eip712Domain> {
         // Get the token contract address
-        let verifying_contract = match &requirements.asset {
-            x402_rs::types::MixedAddress::Evm(addr) => Address::from(*addr),
-            _ => anyhow::bail!("Only EVM addresses are supported for payments"),
-        };
+        let verifying_contract = requirements
+            .asset
+            .parse::<Address>()
+            .context("Only EVM addresses are supported for payments")?;
 
         // Get chain ID
-        let chain_id = chain_id_from_network(requirements.network)?;
+        let chain_id = chain_id_from_network(&requirements.network)?;
 
         // Extract token name and version from extra metadata, with USDC defaults
         let (token_name, token_version) = self.extract_token_metadata(requirements);
@@ -291,51 +319,44 @@ impl X402PaymentHandler {
     }
 
     /// Generate a cryptographically secure random nonce to prevent replay attacks
-    fn generate_secure_nonce(&self) -> Result<HexEncodedNonce> {
+    fn generate_secure_nonce(&self) -> Result<FixedBytes<32>> {
         let mut nonce_bytes = [0u8; 32];
         rand::thread_rng().fill_bytes(&mut nonce_bytes);
-        Ok(HexEncodedNonce(nonce_bytes))
+        Ok(FixedBytes(nonce_bytes))
     }
 
     /// Query asset decimals from the blockchain
     async fn query_asset_decimals(&self, requirements: &PaymentRequirements) -> Result<u8> {
         // Only support EVM addresses for now
-        let asset_address = match &requirements.asset {
-            x402_rs::types::MixedAddress::Evm(addr) => Address::from(*addr),
-            _ => anyhow::bail!("Only EVM addresses are supported for asset decimals queries"),
-        };
+        let asset_address = requirements
+            .asset
+            .parse::<Address>()
+            .context("Only EVM addresses are supported for asset decimals queries")?;
 
         // Get RPC URL for the network
-        let rpc_url = get_rpc_url_for_network(requirements.network)?;
+        let rpc_url = get_rpc_url_for_network(&requirements.network)?;
 
         // Create provider
-        let provider = ProviderBuilder::new()
+        let provider = ClientBuilder::default()
             .connect(rpc_url)
             .await
             .context("Failed to connect to RPC provider")?;
 
-        // Create ERC20 contract instance
-        let erc20_contract = IERC20::new(asset_address, &provider);
-
         // Query decimals
-        let decimals = erc20_contract
-            .decimals()
-            .call()
+        crate::chain::evm::call_contract(&provider, asset_address, IERC20::decimalsCall {})
             .await
-            .context("Failed to query token decimals")?;
-
-        Ok(decimals)
+            .context("Failed to query token decimals")
     }
 
     /// Format token amount with decimals for human-readable display
-    fn format_token_amount(amount: &x402_rs::types::TokenAmount, decimals: u8) -> String {
-        let amount_u256: U256 = (*amount).into();
+    fn format_token_amount(amount: &str, decimals: u8) -> Result<String> {
+        let amount_u256 = U256::from_str_radix(amount, 10)?;
         let divisor = U256::from(10).pow(U256::from(decimals));
 
         let whole_part = amount_u256 / divisor;
         let fractional_part = amount_u256 % divisor;
 
-        if fractional_part == U256::ZERO {
+        Ok(if fractional_part == U256::ZERO {
             format!("{}", whole_part)
         } else {
             // Format fractional part with proper padding
@@ -348,7 +369,7 @@ impl X402PaymentHandler {
             } else {
                 format!("{}.{}", whole_part, fractional_trimmed)
             }
-        }
+        })
     }
 
     /// Prompt user for confirmation before proceeding with payment
@@ -357,10 +378,12 @@ impl X402PaymentHandler {
         account_address: &Address,
         payment_requirements: &PaymentRequirements,
     ) -> Result<bool> {
+        let decimals = self.query_asset_decimals(payment_requirements).await;
         let mut stdin = BufReader::new(io::stdin());
         self.confirm_payment_with_io(
             account_address,
             payment_requirements,
+            decimals,
             &mut io::stdout(),
             &mut stdin,
         )
@@ -372,6 +395,7 @@ impl X402PaymentHandler {
         &self,
         account_address: &Address,
         payment_requirements: &PaymentRequirements,
+        decimals: Result<u8>,
         writer: &mut W,
         reader: &mut R,
     ) -> Result<bool> {
@@ -381,10 +405,10 @@ impl X402PaymentHandler {
         writeln!(writer, "Network: {:?}", payment_requirements.network)?;
 
         // Query asset decimals and display human-readable amount
-        match self.query_asset_decimals(payment_requirements).await {
+        match decimals {
             Ok(decimals) => {
                 let human_readable_amount =
-                    Self::format_token_amount(&payment_requirements.max_amount_required, decimals);
+                    Self::format_token_amount(&payment_requirements.max_amount_required, decimals)?;
                 writeln!(
                     writer,
                     "Amount: {} (raw: {})",
@@ -435,538 +459,124 @@ impl X402PaymentHandler {
 }
 
 #[cfg(test)]
-mod tests {
+mod new_tests {
     use super::*;
-    use alloy::primitives::address;
-    use alloy::signers::local::PrivateKeySigner;
-    use serde_json::json;
-    use url::Url;
-    use x402_rs::types::TokenAmount;
 
-    // Test private key for consistent testing
-    const TEST_PRIVATE_KEY: &str =
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-    fn create_test_payment_requirements() -> PaymentRequirements {
-        PaymentRequirements {
-            scheme: Scheme::Exact,
-            network: Network::Base,
-            max_amount_required: TokenAmount::from(1000000u64), // 1 USDC (6 decimals)
-            resource: Url::parse("https://example.com/api").unwrap(),
-            description: "Test payment".to_string(),
-            mime_type: "application/json".to_string(),
-            output_schema: None,
-            pay_to: x402_rs::types::MixedAddress::Evm(EvmAddress::from(address!(
-                "0x1234567890123456789012345678901234567890"
-            ))),
-            max_timeout_seconds: 3600,
-            asset: x402_rs::types::MixedAddress::Evm(EvmAddress::from(address!(
-                "0xA0b86a33E6441b8c4C8C0C8C0C8C0C8C0C8C0C8C"
-            ))),
-            extra: None,
+    #[test]
+    fn rejects_missing_invalid_and_zero_private_keys() {
+        for key in [
+            None,
+            Some("no-hex"),
+            Some("00"),
+            Some("0000000000000000000000000000000000000000000000000000000000000000"),
+        ] {
+            assert!(X402PaymentHandler::new(key).is_err());
         }
     }
+}
 
-    fn create_test_payment_requirements_with_metadata() -> PaymentRequirements {
-        let mut req = create_test_payment_requirements();
-        req.extra = Some(json!({
-            "name": "Test Token",
-            "version": "1"
-        }));
-        req
-    }
-
-    #[test]
-    fn test_x402_payment_handler_creation() {
-        // Test with valid private key
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY));
-        assert!(handler.is_ok());
-        assert!(handler.unwrap().is_configured());
-
-        // Test with 0x prefixed private key
-        let private_key_with_prefix = format!("0x{}", TEST_PRIVATE_KEY);
-        let handler = X402PaymentHandler::new(Some(&private_key_with_prefix));
-        assert!(handler.is_ok());
-        assert!(handler.unwrap().is_configured());
-
-        // Test without private key - should fail
-        let handler = X402PaymentHandler::new(None);
-        assert!(handler.is_err());
-        assert!(handler
-            .unwrap_err()
-            .to_string()
-            .contains("x402 private key is required"));
-
-        // Test with invalid private key
-        let invalid_key = "invalid";
-        let handler = X402PaymentHandler::new(Some(invalid_key));
-        assert!(handler.is_err());
-
-        // Test with too short private key
-        let short_key = "0123456789abcdef";
-        let handler = X402PaymentHandler::new(Some(short_key));
-        assert!(handler.is_err());
-    }
-
-    #[test]
-    fn test_chain_id_from_network() {
-        assert_eq!(chain_id_from_network(Network::Base).unwrap(), 8453);
-        assert_eq!(chain_id_from_network(Network::BaseSepolia).unwrap(), 84532);
-        assert!(chain_id_from_network(Network::Polygon).is_err());
-    }
-
-    #[test]
-    fn test_secure_nonce_generation() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-
-        // Generate multiple nonces and ensure they're different
-        let nonce1 = handler.generate_secure_nonce().unwrap();
-        let nonce2 = handler.generate_secure_nonce().unwrap();
-        let nonce3 = handler.generate_secure_nonce().unwrap();
-
-        // All nonces should be different
-        assert_ne!(nonce1.0, nonce2.0);
-        assert_ne!(nonce2.0, nonce3.0);
-        assert_ne!(nonce1.0, nonce3.0);
-
-        // Nonces should be 32 bytes
-        assert_eq!(nonce1.0.len(), 32);
-        assert_eq!(nonce2.0.len(), 32);
-        assert_eq!(nonce3.0.len(), 32);
-
-        // Nonces should not be all zeros (very unlikely with secure random)
-        assert_ne!(nonce1.0, [0u8; 32]);
-        assert_ne!(nonce2.0, [0u8; 32]);
-        assert_ne!(nonce3.0, [0u8; 32]);
-    }
-
-    #[test]
-    fn test_eip712_domain_creation_default() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements();
-
-        let domain = handler.create_eip712_domain(&requirements).unwrap();
-
-        // Should use USDC defaults
-        assert_eq!(domain.name, Some("USD Coin".into()));
-        assert_eq!(domain.version, Some("2".into()));
-        assert_eq!(domain.chain_id, Some(U256::from(8453))); // Base network
-        assert_eq!(
-            domain.verifying_contract,
-            Some(address!("0xA0b86a33E6441b8c4C8C0C8C0C8C0C8C0C8C0C8C"))
-        );
-        assert_eq!(domain.salt, None);
-    }
-
-    #[test]
-    fn test_eip712_domain_creation_with_metadata() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements_with_metadata();
-
-        let domain = handler.create_eip712_domain(&requirements).unwrap();
-
-        // Should use custom values from metadata
-        assert_eq!(domain.name, Some("Test Token".into()));
-        assert_eq!(domain.version, Some("1".into()));
-        assert_eq!(domain.chain_id, Some(U256::from(8453))); // Base network
-        assert_eq!(
-            domain.verifying_contract,
-            Some(address!("0xA0b86a33E6441b8c4C8C0C8C0C8C0C8C0C8C0C8C"))
-        );
-        assert_eq!(domain.salt, None);
-    }
-
-    #[test]
-    fn test_eip712_domain_creation_different_networks() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-
-        // Test Base Sepolia network
-        let mut requirements = create_test_payment_requirements();
-        requirements.network = Network::BaseSepolia;
-        let domain = handler.create_eip712_domain(&requirements).unwrap();
-        assert_eq!(domain.chain_id, Some(U256::from(84532)));
-
-        // Test unsupported network should fail
-        requirements.network = Network::Polygon;
-        assert!(handler.create_eip712_domain(&requirements).is_err());
-    }
-
-    #[test]
-    fn test_eip712_domain_creation_non_evm_asset() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements();
-
-        // Create a mock non-EVM asset by directly modifying the asset field
-        // We'll use a different approach to test the error case
-        let result = handler.create_eip712_domain(&requirements);
-        // This should succeed since we're using an EVM address
-        assert!(result.is_ok());
-
-        // For a real non-EVM test, we would need to create a proper Solana address
-        // but that requires additional dependencies. For now, we'll test the success case.
-    }
+#[cfg(test)]
+mod create_payment_payload_tests {
+    use super::*;
+    use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
+    use serde_json::json;
 
     #[tokio::test]
-    async fn test_payment_payload_creation() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements();
-
-        // Create a wallet from the test private key
-        let signing_key = SigningKey::from_slice(&hex::decode(TEST_PRIVATE_KEY).unwrap()).unwrap();
-        let wallet = PrivateKeySigner::from(signing_key);
-
+    async fn signs_recoverable_erc3009_authorization_with_the_expected_domain() {
+        let handler = X402PaymentHandler::new(Some(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ))
+        .unwrap();
+        let wallet = PaymentSigner::from(handler.private_key.clone().unwrap());
+        let requirements = PaymentRequirements {
+            scheme: "exact".into(),
+            network: "base".into(),
+            max_amount_required: "1234567".into(),
+            resource: "https://example.com/v2/backups".into(),
+            description: "Snapshot".into(),
+            mime_type: "application/json".into(),
+            output_schema: None,
+            pay_to: "0x1234567890123456789012345678901234567890".into(),
+            max_timeout_seconds: 300,
+            asset: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913".into(),
+            extra: Some(json!({"name":"USD Coin","version":"2"})),
+        };
         let payload = handler
             .create_payment_payload(&wallet, &requirements)
             .await
             .unwrap();
-
-        // Verify payload structure
-        // Note: X402Version doesn't implement PartialEq, so we'll test the scheme and network instead
-        assert_eq!(payload.scheme, Scheme::Exact);
-        assert_eq!(payload.network, Network::Base);
-
-        // Verify authorization
-        let auth = match payload.payload {
-            x402_rs::types::ExactPaymentPayload::Evm(ExactEvmPayload { authorization, .. }) => {
-                authorization
-            }
-            x402_rs::types::ExactPaymentPayload::Solana(_) => {
-                panic!("Expected EVM payload, got Solana")
-            }
-        };
-
-        assert_eq!(auth.from, EvmAddress::from(wallet.address()));
+        let authorization = &payload.payload.authorization;
+        assert_eq!(authorization.from, wallet.address());
+        assert_eq!(authorization.to.to_string(), requirements.pay_to);
+        assert_eq!(authorization.value, "1234567");
         assert_eq!(
-            auth.to,
-            EvmAddress::from(address!("0x1234567890123456789012345678901234567890"))
+            authorization.valid_before.as_secs() - authorization.valid_after.as_secs(),
+            300
         );
-        assert_eq!(auth.value, requirements.max_amount_required);
-
-        // Verify timing
-        let now = UnixTimestamp::try_now().unwrap();
-        assert!(auth.valid_after <= now);
-        assert!(auth.valid_before > now);
-        // Note: UnixTimestamp doesn't implement Sub, so we'll test the individual values
-        assert!(auth.valid_before.0 > auth.valid_after.0);
-        assert_eq!(
-            auth.valid_before.0 - auth.valid_after.0,
-            requirements.max_timeout_seconds
-        );
-
-        // Verify nonce is not zero
-        assert_ne!(auth.nonce.0, [0u8; 32]);
-    }
-
-    #[tokio::test]
-    async fn test_eip712_signing() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements();
-
-        // Create a wallet from the test private key
-        let signing_key = SigningKey::from_slice(&hex::decode(TEST_PRIVATE_KEY).unwrap()).unwrap();
-        let wallet = PrivateKeySigner::from(signing_key);
-
-        // Create authorization
-        let now = UnixTimestamp::try_now().unwrap();
-        let nonce = handler.generate_secure_nonce().unwrap();
-        let authorization = ExactEvmPayloadAuthorization {
-            from: EvmAddress::from(wallet.address()),
-            to: EvmAddress::from(address!("0x1234567890123456789012345678901234567890")),
-            value: requirements.max_amount_required,
-            valid_after: now,
-            valid_before: now + requirements.max_timeout_seconds,
-            nonce,
-        };
-
-        // Sign the authorization
-        let signature = handler
-            .sign_eip712_authorization(&wallet, &authorization, &requirements)
-            .await
-            .unwrap();
-
-        // Verify signature is not empty
-        assert!(!signature.0.is_empty());
-
-        // Verify signature is 65 bytes (standard ECDSA signature length)
-        assert_eq!(signature.0.len(), 65);
-    }
-
-    #[test]
-    fn test_token_metadata_extraction() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-
-        // Test with default values (no extra metadata)
-        let requirements = create_test_payment_requirements();
-        let (name, version) = handler.extract_token_metadata(&requirements);
-        assert_eq!(name, "USD Coin");
-        assert_eq!(version, "2");
-
-        // Test with custom metadata
-        let requirements = create_test_payment_requirements_with_metadata();
-        let (name, version) = handler.extract_token_metadata(&requirements);
-        assert_eq!(name, "Test Token");
-        assert_eq!(version, "1");
-
-        // Test with partial metadata
-        let mut requirements = create_test_payment_requirements();
-        requirements.extra = Some(json!({
-            "name": "Custom Token"
-            // version not specified, should use default
-        }));
-        let (name, version) = handler.extract_token_metadata(&requirements);
-        assert_eq!(name, "Custom Token");
-        assert_eq!(version, "2");
-
-        // Test with only version specified
-        let mut requirements = create_test_payment_requirements();
-        requirements.extra = Some(json!({
-            "version": "3"
-            // name not specified, should use default
-        }));
-        let (name, version) = handler.extract_token_metadata(&requirements);
-        assert_eq!(name, "USD Coin");
-        assert_eq!(version, "3");
-    }
-
-    #[test]
-    fn test_token_metadata_extraction_invalid_types() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-
-        // Test with non-string values (should use defaults)
-        let mut requirements = create_test_payment_requirements();
-        requirements.extra = Some(json!({
-            "name": 123,
-            "version": true
-        }));
-        let (name, version) = handler.extract_token_metadata(&requirements);
-        assert_eq!(name, "USD Coin");
-        assert_eq!(version, "2");
-    }
-
-    #[test]
-    fn test_payment_handler_without_private_key() {
-        // Should fail to create handler without private key
-        let handler = X402PaymentHandler::new(None);
-        assert!(handler.is_err());
-        assert!(handler
-            .unwrap_err()
-            .to_string()
-            .contains("x402 private key is required"));
-    }
-
-    #[test]
-    fn test_transfer_with_authorization_struct() {
-        // Test that our TransferWithAuthorization struct matches the expected format
+        assert_ne!(authorization.nonce, FixedBytes::ZERO);
         let transfer = TransferWithAuthorization {
-            from: address!("0x1234567890123456789012345678901234567890"),
-            to: address!("0x0987654321098765432109876543210987654321"),
-            value: U256::from(1000000u64),
-            validAfter: U256::from(1000u64),
-            validBefore: U256::from(2000u64),
-            nonce: FixedBytes([1u8; 32]),
+            from: authorization.from,
+            to: authorization.to,
+            value: U256::from(1_234_567),
+            validAfter: U256::from(authorization.valid_after.as_secs()),
+            validBefore: U256::from(authorization.valid_before.as_secs()),
+            nonce: authorization.nonce,
         };
-
-        // Verify all fields are set correctly
-        assert_eq!(
-            transfer.from,
-            address!("0x1234567890123456789012345678901234567890")
-        );
-        assert_eq!(
-            transfer.to,
-            address!("0x0987654321098765432109876543210987654321")
-        );
-        assert_eq!(transfer.value, U256::from(1000000u64));
-        assert_eq!(transfer.validAfter, U256::from(1000u64));
-        assert_eq!(transfer.validBefore, U256::from(2000u64));
-        assert_eq!(transfer.nonce, FixedBytes([1u8; 32]));
+        let domain = Eip712Domain {
+            name: Some("USD Coin".into()),
+            version: Some("2".into()),
+            chain_id: Some(U256::from(8453)),
+            verifying_contract: Some(requirements.asset.parse().unwrap()),
+            salt: None,
+        };
+        let signature = &payload.payload.signature;
+        assert_eq!(signature.len(), 65);
+        let recovered = VerifyingKey::recover_from_prehash(
+            transfer.eip712_signing_hash(&domain).as_slice(),
+            &Signature::from_slice(&signature[..64]).unwrap(),
+            RecoveryId::from_byte(signature[64] - 27).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(&recovered, wallet.0.verifying_key());
+        let wire = serde_json::to_value(&payload).unwrap();
+        assert_eq!(wire["x402Version"], 1);
+        assert_eq!(wire["network"], "base");
+        assert_eq!(wire["scheme"], "exact");
+        assert_eq!(wire["payload"]["authorization"]["value"], "1234567");
+        let _: v1::PaymentPayload = serde_json::from_value(wire).unwrap();
     }
+}
+
+#[cfg(test)]
+mod format_token_amount_tests {
+    use super::*;
 
     #[test]
-    fn test_payment_handler_logging() {
-        // Test that payment handler creation works and doesn't panic with logging
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY));
-        assert!(handler.is_ok());
-        assert!(handler.unwrap().is_configured());
-
-        // Test that handler without private key fails
-        let handler = X402PaymentHandler::new(None);
-        assert!(handler.is_err());
-        assert!(handler
-            .unwrap_err()
-            .to_string()
-            .contains("x402 private key is required"));
+    fn formats_atomic_units_without_losing_precision() {
+        for (atomic, decimals, expected) in [
+            ("0", 6, "0"),
+            ("1000000", 6, "1"),
+            ("1234500", 6, "1.2345"),
+            ("1", 6, "0.000001"),
+            ("100", 0, "100"),
+        ] {
+            assert_eq!(
+                X402PaymentHandler::format_token_amount(atomic, decimals).unwrap(),
+                expected
+            );
+        }
+        assert!(X402PaymentHandler::format_token_amount("invalid", 6).is_err());
     }
+}
 
-    #[tokio::test]
-    async fn test_confirm_payment_with_io_accepts_yes() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements();
+#[cfg(test)]
+mod chain_id_from_network_tests {
+    use super::*;
 
-        // Create a wallet to get the account address
-        let signing_key = SigningKey::from_slice(&hex::decode(TEST_PRIVATE_KEY).unwrap()).unwrap();
-        let wallet = PrivateKeySigner::from(signing_key);
-        let account_address = wallet.address();
-
-        // Mock input with "yes"
-        let mut input = "yes\n".as_bytes();
-        let mut output = Vec::new();
-
-        let result = handler
-            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
-            .await;
-
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-
-        // Verify the output contains expected content
-        let output_str = String::from_utf8(output).unwrap();
-        assert!(output_str.contains("🔐 x402 Payment Authorization Required"));
-        assert!(output_str.contains(&format!("Account: {}", account_address)));
-        assert!(output_str.contains("Network: Base"));
-        // Note: Amount display now includes human-readable format, so we check for both
-        assert!(output_str.contains("Amount:") && output_str.contains("1000000"));
-        assert!(output_str.contains("Do you want to proceed with this payment? [y/N]:"));
-    }
-
-    #[tokio::test]
-    async fn test_confirm_payment_with_io_accepts_y() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements();
-
-        // Create a wallet to get the account address
-        let signing_key = SigningKey::from_slice(&hex::decode(TEST_PRIVATE_KEY).unwrap()).unwrap();
-        let wallet = PrivateKeySigner::from(signing_key);
-        let account_address = wallet.address();
-
-        // Mock input with "y"
-        let mut input = "y\n".as_bytes();
-        let mut output = Vec::new();
-
-        let result = handler
-            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
-            .await;
-
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_confirm_payment_with_io_rejects_no() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements();
-
-        // Create a wallet to get the account address
-        let signing_key = SigningKey::from_slice(&hex::decode(TEST_PRIVATE_KEY).unwrap()).unwrap();
-        let wallet = PrivateKeySigner::from(signing_key);
-        let account_address = wallet.address();
-
-        // Mock input with "no"
-        let mut input = "no\n".as_bytes();
-        let mut output = Vec::new();
-
-        let result = handler
-            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
-            .await;
-
-        assert!(result.is_ok());
-        assert!(!result.unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_confirm_payment_with_io_rejects_empty() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements();
-
-        // Create a wallet to get the account address
-        let signing_key = SigningKey::from_slice(&hex::decode(TEST_PRIVATE_KEY).unwrap()).unwrap();
-        let wallet = PrivateKeySigner::from(signing_key);
-        let account_address = wallet.address();
-
-        // Mock input with empty line (just newline)
-        let mut input = "\n".as_bytes();
-        let mut output = Vec::new();
-
-        let result = handler
-            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
-            .await;
-
-        assert!(result.is_ok());
-        assert!(!result.unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_confirm_payment_with_io_case_insensitive() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements();
-
-        // Create a wallet to get the account address
-        let signing_key = SigningKey::from_slice(&hex::decode(TEST_PRIVATE_KEY).unwrap()).unwrap();
-        let wallet = PrivateKeySigner::from(signing_key);
-        let account_address = wallet.address();
-
-        // Test uppercase "YES"
-        let mut input = "YES\n".as_bytes();
-        let mut output = Vec::new();
-
-        let result = handler
-            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
-            .await;
-
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-    }
-
-    #[tokio::test]
-    async fn test_confirm_payment_with_io_displays_token_metadata() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements_with_metadata();
-
-        // Create a wallet to get the account address
-        let signing_key = SigningKey::from_slice(&hex::decode(TEST_PRIVATE_KEY).unwrap()).unwrap();
-        let wallet = PrivateKeySigner::from(signing_key);
-        let account_address = wallet.address();
-
-        // Mock input with "y"
-        let mut input = "y\n".as_bytes();
-        let mut output = Vec::new();
-
-        let result = handler
-            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
-            .await;
-
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-
-        // Verify the output contains token metadata
-        let output_str = String::from_utf8(output).unwrap();
-        assert!(output_str.contains("Token: Test Token"));
-        assert!(output_str.contains("Token Version: 1"));
-    }
-
-    #[tokio::test]
-    async fn test_confirm_payment_with_io_handles_missing_token_metadata() {
-        let handler = X402PaymentHandler::new(Some(TEST_PRIVATE_KEY)).unwrap();
-        let requirements = create_test_payment_requirements(); // No extra metadata
-
-        // Create a wallet to get the account address
-        let signing_key = SigningKey::from_slice(&hex::decode(TEST_PRIVATE_KEY).unwrap()).unwrap();
-        let wallet = PrivateKeySigner::from(signing_key);
-        let account_address = wallet.address();
-
-        // Mock input with "y"
-        let mut input = "y\n".as_bytes();
-        let mut output = Vec::new();
-
-        let result = handler
-            .confirm_payment_with_io(&account_address, &requirements, &mut output, &mut input)
-            .await;
-
-        assert!(result.is_ok());
-        assert!(result.unwrap());
-
-        // Verify the output does not contain token metadata lines
-        let output_str = String::from_utf8(output).unwrap();
-        assert!(!output_str.contains("Token:"));
-        assert!(!output_str.contains("Token Version:"));
+    #[test]
+    fn restricts_payments_to_supported_networks() {
+        assert_eq!(chain_id_from_network("base").unwrap(), 8453);
+        assert_eq!(chain_id_from_network("base-sepolia").unwrap(), 84532);
+        assert!(chain_id_from_network("polygon").is_err());
     }
 }

@@ -57,7 +57,7 @@ expression = "MIT"
 license-files = []
 
 [bans]
-# The solana/x402 stack pulls many crates at multiple versions; flag, don't fail.
+# The RPC and SDK dependencies pull crates at multiple versions; flag, don't fail.
 multiple-versions = "warn"
 # The direct tezos-* git dependencies carry no version requirement, which counts
 # as a wildcard; warn rather than fail.
@@ -69,4 +69,5 @@ unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = [
     "https://github.com/0xmichalis/tezos-rust-sdk",
+    "https://github.com/alloy-rs/core",
 ]

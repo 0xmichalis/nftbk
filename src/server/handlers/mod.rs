@@ -143,7 +143,7 @@ impl FromRequestParts<AppState> for ApiPage {
                 .is_some_and(|c| c.starts_with("eip155:"))
                 || address.starts_with("0x")
             {
-                let parsed: alloy::primitives::Address = address.parse().map_err(|_| {
+                let parsed: alloy_primitives::Address = address.parse().map_err(|_| {
                     problem(
                         422,
                         "invalid_contract_address",
@@ -1038,26 +1038,17 @@ pub async fn content(
         .await
         .map_err(|_| problem(404, "content_unavailable", "Archive bytes are unavailable"))?;
     let size = metadata.len();
-    let digest = if let Some(digest) = archive.sha256.clone() {
-        if !state.unsafe_skip_checksum_check
-            && crate::server::hashing::compute_file_sha256(&path)
-                .await
-                .map_err(ApiError::internal)?
-                != digest
-        {
-            return Err(problem(
-                500,
-                "integrity_failure",
-                "Archive failed its integrity check",
-            ));
-        }
-        digest
+    let etag = if let Some(digest) = &archive.sha256 {
+        format!("\"{digest}\"")
     } else {
-        crate::server::hashing::compute_file_sha256(&path)
-            .await
+        let modified = metadata
+            .modified()
             .map_err(ApiError::internal)?
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(ApiError::internal)?
+            .as_nanos();
+        format!("W/\"legacy-{size}-{modified}\"")
     };
-    let etag = format!("\"{digest}\"");
     if matches_etag(
         headers
             .get(header::IF_NONE_MATCH)
@@ -1066,10 +1057,28 @@ pub async fn content(
     ) {
         return Ok((StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response());
     }
+    if method == axum::http::Method::GET
+        && !headers.contains_key(header::RANGE)
+        && !state.unsafe_skip_checksum_check
+    {
+        if let Some(digest) = &archive.sha256 {
+            if crate::server::hashing::compute_file_sha256(&path)
+                .await
+                .map_err(ApiError::internal)?
+                != *digest
+            {
+                return Err(problem(
+                    500,
+                    "integrity_failure",
+                    "Archive failed its integrity check",
+                ));
+            }
+        }
+    }
     let range = if headers
         .get(header::IF_RANGE)
         .and_then(|v| v.to_str().ok())
-        .is_none_or(|v| v == etag)
+        .is_none_or(|v| v == etag && !etag.starts_with("W/"))
     {
         headers.get(header::RANGE).and_then(|h| h.to_str().ok())
     } else {

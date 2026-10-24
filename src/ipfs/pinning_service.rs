@@ -54,23 +54,23 @@ impl IpfsPinningClient {
         let mut req = self.http.get(url);
         // Serialize query into query params according to spec
         if let Some(cids) = &query.cid {
-            for cid in cids {
-                req = req.query(&[("cid", cid)]);
-            }
+            req = req.query(&[("cid", cids.join(","))]);
         }
         if let Some(name) = &query.name {
             req = req.query(&[("name", name)]);
         }
         if let Some(statuses) = &query.status {
-            for s in statuses {
-                req = req.query(&[(
-                    "status",
-                    &serde_json::to_string(s)
-                        .unwrap()
-                        .trim_matches('"')
-                        .to_string(),
-                )]);
-            }
+            let statuses = statuses
+                .iter()
+                .map(|status| match status {
+                    super::types::PinStatus::Queued => "queued",
+                    super::types::PinStatus::Pinning => "pinning",
+                    super::types::PinStatus::Pinned => "pinned",
+                    super::types::PinStatus::Failed => "failed",
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            req = req.query(&[("status", statuses)]);
         }
         if let Some(before) = &query.before {
             req = req.query(&[("before", before)]);
@@ -91,6 +91,39 @@ impl IpfsPinningClient {
         let parsed: PinsListResponse = serde_json::from_str(&text)
             .with_context(|| format!("decoding PinsListResponse: {text}"))?;
         Ok(parsed)
+    }
+
+    async fn all_pins(&self, mut query: PinsListQuery) -> Result<Vec<PinResponse>> {
+        query.status = Some(vec![
+            super::types::PinStatus::Queued,
+            super::types::PinStatus::Pinning,
+            super::types::PinStatus::Pinned,
+            super::types::PinStatus::Failed,
+        ]);
+        query.limit = Some(1000);
+        let mut pins = vec![];
+        loop {
+            let response = self.list_pins(&query).await?;
+            let complete = response.results.len() as u64 >= response.count;
+            let next = response.results.last().map(|pin| pin.created.clone());
+            pins.extend(response.results.into_iter().map(|pin| {
+                let size = pin.extract_size();
+                PinResponse {
+                    id: pin.requestid,
+                    cid: pin.pin.cid,
+                    status: Self::convert_status(pin.status),
+                    provider_type: self.provider_type().into(),
+                    provider_url: self.provider_url().into(),
+                    metadata: pin.pin.meta.map(|m| m.0),
+                    size,
+                }
+            }));
+            if complete || next.is_none() {
+                return Ok(pins);
+            }
+            anyhow::ensure!(next != query.before, "Provider pagination did not advance");
+            query.before = next;
+        }
     }
 
     pub async fn replace_pin(&self, request_id: &str, pin: &Pin) -> Result<PinStatusResponse> {
@@ -178,29 +211,26 @@ impl IpfsPinningProvider for IpfsPinningClient {
     }
 
     async fn list_pins(&self) -> Result<Vec<PinResponse>> {
-        // Call the internal list_pins with default empty query
-        let query = PinsListQuery::default();
-        let response = self.list_pins(&query).await?;
+        self.all_pins(PinsListQuery::default()).await
+    }
 
-        // Convert all pins to unified PinResponse
-        let pins = response
-            .results
-            .into_iter()
-            .map(|pin_status| {
-                let size = pin_status.extract_size();
-                PinResponse {
-                    id: pin_status.requestid,
-                    cid: pin_status.pin.cid,
-                    status: Self::convert_status(pin_status.status),
-                    provider_type: self.provider_type().to_string(),
-                    provider_url: self.provider_url().to_string(),
-                    metadata: pin_status.pin.meta.map(|m| m.0),
-                    size,
-                }
+    async fn find_pin(&self, cid: &str, pin_id: &str) -> Result<Option<PinResponse>> {
+        let pins = self
+            .all_pins(PinsListQuery {
+                cid: Some(vec![cid.into()]),
+                name: Some(format!("nftbk-{pin_id}")),
+                ..Default::default()
             })
-            .collect();
-
-        Ok(pins)
+            .await?;
+        Ok(pins.into_iter().find(|pin| {
+            pin.cid == cid
+                && pin
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("nftbk_pin_id"))
+                    .and_then(|id| id.as_str())
+                    == Some(pin_id)
+        }))
     }
 
     async fn delete_pin(&self, request_id: &str) -> Result<()> {
@@ -324,11 +354,9 @@ mod tests {
 
         Mock::given(method("GET"))
             .and(path("/pins"))
-            .and(query_param("cid", "bafy1"))
-            .and(query_param("cid", "bafy2"))
+            .and(query_param("cid", "bafy1,bafy2"))
             .and(query_param("name", "x"))
-            .and(query_param("status", "pinned"))
-            .and(query_param("status", "failed"))
+            .and(query_param("status", "pinned,failed"))
             .and(query_param("before", "2020-01-01T00:00:00Z"))
             .and(query_param("after", "2019-01-01T00:00:00Z"))
             .and(query_param("limit", "10"))
@@ -392,5 +420,52 @@ mod tests {
 
         let client = IpfsPinningClient::new(server.uri(), None);
         client.delete_pin("req-123").await.unwrap();
+    }
+}
+
+#[cfg(test)]
+mod find_pin_tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::{
+        matchers::{method, path, query_param},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    #[tokio::test]
+    async fn reconciles_pending_requests_on_later_pages_without_submitting_again() {
+        let server = MockServer::start().await;
+        let pin = |id: &str, created: &str, tag: &str| json!({"requestid":id,"created":created,"status":"queued","pin":{"cid":"bafy-test","name":"nftbk-local","meta":{"nftbk_pin_id":tag}}});
+        Mock::given(method("GET"))
+            .and(path("/pins"))
+            .and(query_param("cid", "bafy-test"))
+            .and(query_param("name", "nftbk-local"))
+            .and(query_param("status", "queued,pinning,pinned,failed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"count":2,"results":[pin("unrelated","2026-10-23T12:00:00Z","other")]}),
+            ))
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/pins"))
+            .and(query_param("before", "2026-10-23T12:00:00Z"))
+            .and(query_param("status", "queued,pinning,pinned,failed"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"count":1,"results":[pin("remote-request","2026-10-22T12:00:00Z","local")]}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = IpfsPinningClient::new(server.uri(), None);
+        let recovered = client
+            .find_pin("bafy-test", "local")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(recovered.id, "remote-request");
+        assert_eq!(recovered.status, PinResponseStatus::Queued);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
     }
 }

@@ -2,13 +2,10 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use alloy::{
-    contract::Error,
-    primitives::{Address, U256},
-    providers::ProviderBuilder,
-    sol,
-};
-use anyhow::Result;
+use alloy_primitives::{Address, Bytes, U256};
+use alloy_rpc_client::{ClientBuilder, RpcClient};
+use alloy_sol_types::{sol, SolCall};
+use anyhow::{Error, Result};
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 use tracing::debug;
@@ -20,24 +17,21 @@ use crate::httpclient::HttpClient;
 use crate::ipfs::IpfsPinningProvider;
 use crate::types::StorageConfig;
 
-// Type alias for the provider returned by alloy::providers::ProviderBuilder::new().connect()
-type EvmProvider = alloy::providers::fillers::FillProvider<
-    alloy::providers::fillers::JoinFill<
-        alloy::providers::Identity,
-        alloy::providers::fillers::JoinFill<
-            alloy::providers::fillers::GasFiller,
-            alloy::providers::fillers::JoinFill<
-                alloy::providers::fillers::BlobGasFiller,
-                alloy::providers::fillers::JoinFill<
-                    alloy::providers::fillers::NonceFiller,
-                    alloy::providers::fillers::ChainIdFiller,
-                >,
-            >,
-        >,
-    >,
-    alloy::providers::RootProvider<alloy::network::Ethereum>,
-    alloy::network::Ethereum,
->;
+pub type EvmProvider = RpcClient;
+
+pub async fn call_contract<C: SolCall>(
+    rpc: &RpcClient,
+    address: Address,
+    call: C,
+) -> Result<C::Return> {
+    let result: Bytes = rpc
+        .request(
+            "eth_call",
+            serde_json::json!([{"to":address,"data":alloy_primitives::hex::encode_prefixed(call.abi_encode())},"latest"]),
+        )
+        .await?;
+    Ok(C::abi_decode_returns_validate(&result)?)
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NFTMetadata {
@@ -126,7 +120,6 @@ pub struct Assets {
 // ERC721/ERC1155 minimal ABI to get the token URI
 sol! {
     #[allow(missing_docs)]
-    #[sol(rpc)]
     interface INFT {
         function tokenURI(uint256 tokenId) external view returns (string);
         function uri(uint256 id) external view returns (string);
@@ -147,20 +140,27 @@ struct CryptoPunks<'a> {
 #[async_trait::async_trait]
 impl<'a> CryptoPunksContract for CryptoPunks<'a> {
     async fn punk_image_svg(&self, punk_id: u16) -> Result<String, Error> {
-        let c = ICryptoPunks::new(self.address, self.rpc);
-        c.punkImageSvg(punk_id).call().await
+        call_contract(
+            self.rpc,
+            self.address,
+            ICryptoPunks::punkImageSvgCall { punkId: punk_id },
+        )
+        .await
     }
 
     async fn punk_attributes(&self, punk_id: u16) -> Result<String, Error> {
-        let c = ICryptoPunks::new(self.address, self.rpc);
-        c.punkAttributes(punk_id).call().await
+        call_contract(
+            self.rpc,
+            self.address,
+            ICryptoPunks::punkAttributesCall { punkId: punk_id },
+        )
+        .await
     }
 }
 
 // CryptoPunks contract ABI
 sol! {
     #[allow(missing_docs)]
-    #[sol(rpc)]
     interface ICryptoPunks {
         function punkImageSvg(uint16 punkId) external view returns (string);
         function punkAttributes(uint16 punkId) external view returns (string);
@@ -206,7 +206,7 @@ impl EvmChainProcessor {
         storage_config: StorageConfig,
         max_content_request_retries: u32,
     ) -> anyhow::Result<Self> {
-        let rpc = ProviderBuilder::new().connect(rpc_url).await?;
+        let rpc = ClientBuilder::default().connect(rpc_url).await?;
         let ipfs_pinning_providers: Vec<Box<dyn IpfsPinningProvider>> = storage_config
             .ipfs_pinning_configs
             .iter()
@@ -354,23 +354,20 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
             return Ok(special_uri);
         }
 
-        let nft = INFT::new(token_addr, &self.rpc);
-
         let uri = match try_call(|| {
-            let nft = nft.clone();
-            async move { nft.tokenURI(token_id).call().await }
+            call_contract(
+                &self.rpc,
+                token_addr,
+                INFT::tokenURICall { tokenId: token_id },
+            )
         })
         .await
         {
             Ok(uri) => Ok(uri),
-            Err(e) if !is_rate_limited(&e) => {
-                let uri = try_call(|| {
-                    let nft = nft.clone();
-                    async move { nft.uri(token_id).call().await }
-                })
-                .await?;
-                Ok(uri)
-            }
+            Err(e) if !is_rate_limited(&e) => Ok(try_call(|| {
+                call_contract(&self.rpc, token_addr, INFT::uriCall { id: token_id })
+            })
+            .await?),
             Err(e) => Err(e),
         }?;
 
@@ -594,7 +591,7 @@ mod replace_id_pattern_tests {
 
     #[tokio::test]
     async fn replaces_supported_patterns() {
-        use alloy::primitives::U256;
+        use alloy_primitives::U256;
         let ens_uri = "https://metadata.ens.domains/mainnet/0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401/0x{id}";
         let token_id = U256::from(123456u64);
         let expected_uri = "https://metadata.ens.domains/mainnet/0xD4416b13d2b3a9aBae7AcD5D6C2BbDBE25686401/0x1e240";
@@ -624,7 +621,7 @@ mod generate_beeple_uri_tests {
 
     #[test]
     fn constructs_expected_urls() {
-        use alloy::primitives::U256;
+        use alloy_primitives::U256;
         let token_id = U256::from(100010189u64);
         assert_eq!(
             generate_beeple_uri(&token_id),
@@ -746,17 +743,17 @@ mod generate_cryptopunks_data_uri_tests {
 
     #[async_trait::async_trait]
     impl CryptoPunksContract for MockPunks {
-        async fn punk_image_svg(&self, _punk_id: u16) -> Result<String, alloy::contract::Error> {
+        async fn punk_image_svg(&self, _punk_id: u16) -> Result<String, anyhow::Error> {
             Ok("data:image/svg+xml;utf8,<svg></svg>".to_string())
         }
-        async fn punk_attributes(&self, _punk_id: u16) -> Result<String, alloy::contract::Error> {
+        async fn punk_attributes(&self, _punk_id: u16) -> Result<String, anyhow::Error> {
             Ok("Male, Earring, Mohawk".to_string())
         }
     }
 
     #[tokio::test]
     async fn generates_valid_data_uri_with_mocked_contract() {
-        use alloy::primitives::U256;
+        use alloy_primitives::U256;
         let token_id = U256::from(0u64);
         let data_uri = generate_cryptopunks_data_uri_from_contract(&MockPunks, &token_id)
             .await

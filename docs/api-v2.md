@@ -254,6 +254,8 @@ directories belonging to expired worker leases are removed automatically.
    Migration `002_api_v2.sql` appends the new schema and copies legacy resources;
    migration `001` and the 1.x tables remain unchanged. Legacy artifact paths
    remain usable. Legacy IDs are recorded internally as `legacy_task_id`.
+   Unfinished legacy archives fail explicitly and require a new backup because
+   their original snapshot bytes are unavailable.
 4. Check migrated owners, archive availability and IPFS counts. With one JWT
    issuer, startup adopts legacy subjects into it. With multiple issuers, map
    `principals.issuer='legacy'` subjects to the correct issuer manually before

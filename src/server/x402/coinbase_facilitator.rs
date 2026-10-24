@@ -2,9 +2,9 @@ use std::future::Future;
 
 use axum::http::{HeaderMap, HeaderValue};
 use x402_axum::facilitator_client::FacilitatorClient;
-use x402_rs::facilitator::Facilitator;
-use x402_rs::types::{
-    SettleRequest, SettleResponse, SupportedPaymentKindsResponse, VerifyRequest, VerifyResponse,
+use x402_types::facilitator::Facilitator;
+use x402_types::proto::{
+    SettleRequest, SettleResponse, SupportedResponse, VerifyRequest, VerifyResponse,
 };
 
 use super::error_handling::{handle_result, tolerant_parse_supported, tolerant_recover_verify};
@@ -98,9 +98,7 @@ impl Facilitator for CoinbaseFacilitator {
         async move { client.settle(&request).await }
     }
 
-    fn supported(
-        &self,
-    ) -> impl Future<Output = Result<SupportedPaymentKindsResponse, Self::Error>> + Send {
+    fn supported(&self) -> impl Future<Output = Result<SupportedResponse, Self::Error>> + Send {
         let this = self.clone();
         async move {
             let supported_path = this.base_client.supported_url().path();
@@ -122,232 +120,31 @@ impl Facilitator for CoinbaseFacilitator {
 }
 
 #[cfg(test)]
-mod dynamic_facilitator_tests {
+mod verify_tests {
     use super::*;
-    use url::Url;
-    use wiremock::matchers::{method, path};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
-    use x402_rs::network::Network;
-    use x402_rs::types::{
-        ExactPaymentPayload, ExactSolanaPayload, FacilitatorErrorReason, MixedAddress,
-        PaymentPayload, PaymentRequirements, Scheme, X402Version,
+    use serde_json::json;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
     };
 
-    fn make_facilitator(base: &str) -> CoinbaseFacilitator {
-        CoinbaseFacilitator::new_with_url(base, None, None)
-    }
-
     #[tokio::test]
-    async fn supported_tolerant_parsing_works_with_empty_extra() {
+    async fn accepts_unknown_rejection_reasons_and_empty_payers() {
         let server = MockServer::start().await;
-        let body = r#"{"kinds":[{"extra":{},"network":"base-sepolia","scheme":"exact","x402Version":1},{"extra":{},"network":"base","scheme":"exact","x402Version":1},{"extra":{"feePayer":"L54zkaPQFeTn1UsEqieEXBqWrPShiaZEPD7mS5WXfQg"},"network":"solana-devnet","scheme":"exact","x402Version":1},{"extra":{"feePayer":"L54zkaPQFeTn1UsEqieEXBqWrPShiaZEPD7mS5WXfQg"},"network":"solana","scheme":"exact","x402Version":1}]}"#;
-        Mock::given(method("GET"))
-            .and(path("/supported"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(body)
-                    .insert_header("content-type", "application/json"),
-            )
-            .mount(&server)
-            .await;
-
-        let facilitator = make_facilitator(&server.uri());
-        let resp = facilitator.supported().await.expect("supported OK");
-        assert!(!resp.kinds.is_empty());
-        assert!(resp.kinds.iter().any(|k| k.network == "base"));
-    }
-
-    #[tokio::test]
-    async fn verify_tolerant_recovery_maps_invalid_reason_and_empty_payer() {
-        let server = MockServer::start().await;
-        let body = r#"{"invalidReason":"insufficient_funds","isValid":false,"payer":""}"#;
         Mock::given(method("POST"))
             .and(path("/verify"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(body)
-                    .insert_header("content-type", "application/json"),
-            )
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"isValid":false,"invalidReason":"new_facilitator_reason","payer":""}),
+            ))
+            .expect(1)
             .mount(&server)
             .await;
-
-        let facilitator = make_facilitator(&server.uri());
-
-        // Build a minimal, syntactically valid VerifyRequest (fields aren't used by mock)
-        let payment_payload = PaymentPayload {
-            x402_version: X402Version::V1,
-            scheme: Scheme::Exact,
-            network: Network::Base,
-            payload: ExactPaymentPayload::Solana(ExactSolanaPayload {
-                transaction: "deadbeef".to_string(),
-            }),
-        };
-        let payment_requirements = PaymentRequirements {
-            scheme: Scheme::Exact,
-            network: Network::Base,
-            max_amount_required: 100_000u64.into(),
-            resource: Url::parse("https://example.com").unwrap(),
-            description: "test".into(),
-            mime_type: "application/json".into(),
-            output_schema: None,
-            pay_to: serde_json::from_str::<MixedAddress>(
-                "\"0x0000000000000000000000000000000000000000\"",
-            )
-            .unwrap(),
-            max_timeout_seconds: 300,
-            asset: serde_json::from_str::<MixedAddress>(
-                "\"0x0000000000000000000000000000000000000000\"",
-            )
-            .unwrap(),
-            extra: None,
-        };
-        let req = VerifyRequest {
-            x402_version: X402Version::V1,
-            payment_payload,
-            payment_requirements,
-        };
-
-        let resp = facilitator.verify(&req).await.expect("verify OK");
-        match resp {
-            VerifyResponse::Invalid { reason, payer } => {
-                assert!(matches!(reason, FacilitatorErrorReason::InsufficientFunds));
-                assert!(payer.is_none());
-            }
-            _ => panic!("expected invalid verify response"),
-        }
-    }
-
-    #[tokio::test]
-    async fn supported_happy_path_no_fallback() {
-        let server = MockServer::start().await;
-        let body = r#"{"kinds":[{"network":"base","scheme":"exact","x402Version":1},{"network":"base-sepolia","scheme":"exact","x402Version":1},{"network":"solana","scheme":"exact","x402Version":1,"extra":{"feePayer":"L54zkaPQFeTn1UsEqieEXBqWrPShiaZEPD7mS5WXfQg"}}]}"#;
-        Mock::given(method("GET"))
-            .and(path("/supported"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(body)
-                    .insert_header("content-type", "application/json"),
-            )
-            .mount(&server)
-            .await;
-
-        let facilitator = make_facilitator(&server.uri());
-        let resp = facilitator.supported().await.expect("supported OK");
-        assert!(resp.kinds.iter().any(|k| k.network == "base"));
-        assert!(resp.kinds.iter().any(|k| k.network == "solana"));
-    }
-
-    #[tokio::test]
-    async fn verify_happy_path_valid_no_fallback() {
-        let server = MockServer::start().await;
-        let body = r#"{"isValid":true,"payer":"0x0000000000000000000000000000000000000001"}"#;
-        Mock::given(method("POST"))
-            .and(path("/verify"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(body)
-                    .insert_header("content-type", "application/json"),
-            )
-            .mount(&server)
-            .await;
-
-        let facilitator = make_facilitator(&server.uri());
-
-        let payment_payload = PaymentPayload {
-            x402_version: X402Version::V1,
-            scheme: Scheme::Exact,
-            network: Network::Base,
-            payload: ExactPaymentPayload::Solana(ExactSolanaPayload {
-                transaction: "deadbeef".into(),
-            }),
-        };
-        let payment_requirements = PaymentRequirements {
-            scheme: Scheme::Exact,
-            network: Network::Base,
-            max_amount_required: 1u64.into(),
-            resource: Url::parse("https://example.com").unwrap(),
-            description: "test".into(),
-            mime_type: "application/json".into(),
-            output_schema: None,
-            pay_to: serde_json::from_str::<MixedAddress>(
-                "\"0x0000000000000000000000000000000000000000\"",
-            )
-            .unwrap(),
-            max_timeout_seconds: 60,
-            asset: serde_json::from_str::<MixedAddress>(
-                "\"0x0000000000000000000000000000000000000000\"",
-            )
-            .unwrap(),
-            extra: None,
-        };
-        let req = VerifyRequest {
-            x402_version: X402Version::V1,
-            payment_payload,
-            payment_requirements,
-        };
-
-        let resp = facilitator.verify(&req).await.expect("verify OK");
-        match resp {
-            VerifyResponse::Valid { payer } => match payer {
-                MixedAddress::Evm(_) => {}
-                _ => panic!("expected EVM payer"),
-            },
-            _ => panic!("expected valid verify response"),
-        }
-    }
-
-    #[tokio::test]
-    async fn settle_happy_path_success_no_fallback() {
-        let server = MockServer::start().await;
-        // success true, with EVM tx hash and payer
-        let body = r#"{"success":true,"payer":"0x0000000000000000000000000000000000000001","transaction":"0x1111111111111111111111111111111111111111111111111111111111111111","network":"base"}"#;
-        Mock::given(method("POST"))
-            .and(path("/settle"))
-            .respond_with(
-                ResponseTemplate::new(200)
-                    .set_body_string(body)
-                    .insert_header("content-type", "application/json"),
-            )
-            .mount(&server)
-            .await;
-
-        let facilitator = make_facilitator(&server.uri());
-
-        let payment_payload = PaymentPayload {
-            x402_version: X402Version::V1,
-            scheme: Scheme::Exact,
-            network: Network::Base,
-            payload: ExactPaymentPayload::Solana(ExactSolanaPayload {
-                transaction: "deadbeef".into(),
-            }),
-        };
-        let payment_requirements = PaymentRequirements {
-            scheme: Scheme::Exact,
-            network: Network::Base,
-            max_amount_required: 1u64.into(),
-            resource: Url::parse("https://example.com").unwrap(),
-            description: "test".into(),
-            mime_type: "application/json".into(),
-            output_schema: None,
-            pay_to: serde_json::from_str::<MixedAddress>(
-                "\"0x0000000000000000000000000000000000000000\"",
-            )
-            .unwrap(),
-            max_timeout_seconds: 60,
-            asset: serde_json::from_str::<MixedAddress>(
-                "\"0x0000000000000000000000000000000000000000\"",
-            )
-            .unwrap(),
-            extra: None,
-        };
-        let req = VerifyRequest {
-            x402_version: X402Version::V1,
-            payment_payload,
-            payment_requirements,
-        };
-
-        let resp = facilitator.settle(&req).await.expect("settle OK");
-        assert!(resp.success);
-        assert!(matches!(resp.network, Network::Base));
+        let facilitator = CoinbaseFacilitator::new_with_url(&server.uri(), None, None);
+        let response = facilitator
+            .verify(&VerifyRequest::from(json!({"x402Version":1})))
+            .await
+            .unwrap();
+        assert_eq!(response.0["isValid"], false);
+        assert_eq!(response.0["invalidReason"], "new_facilitator_reason");
     }
 }

@@ -87,6 +87,7 @@ where
     .await
     .context("NFT RPC observation timed out")??;
     let raw = processor.http_client().fetch(&uri).await?;
+    let metadata: C::Metadata = serde_json::from_slice(&raw)?;
     let blob = state.storage.put(state.db.as_ref(), claim, &raw).await?;
     item.metadata_uri = Some(uri.clone());
     item.metadata_sha256 = Some(blob.sha256.clone());
@@ -106,7 +107,6 @@ where
         state: State::Ready,
         error: None,
     });
-    let metadata: C::Metadata = serde_json::from_slice(&raw)?;
     let mut seen = HashSet::new();
     for (uri, options) in C::collect_urls(&metadata) {
         if !seen.insert(uri.clone()) {
@@ -603,7 +603,7 @@ mod estimate_price_tests {
 mod observe_tests {
     use std::sync::Arc;
 
-    use alloy::sol_types::SolValue;
+    use alloy_sol_types::SolValue;
     use serde_json::json;
     use wiremock::{
         matchers::{method, path},
@@ -651,5 +651,56 @@ mod observe_tests {
         assert_eq!(item.assets[1].filename.as_deref(), Some("index.html"));
         assert_eq!(item.assets[1].role, "animation");
         assert_eq!(db.blobs.lock().unwrap().len(), 1);
+    }
+}
+
+#[cfg(test)]
+mod observe_with_tests {
+    use super::*;
+    use crate::server::database::mock::{state, MockDatabase};
+    use alloy_sol_types::SolValue;
+    use serde_json::json;
+    use std::sync::Arc;
+    use wiremock::{
+        matchers::{method, path},
+        Mock, MockServer, ResponseTemplate,
+    };
+
+    #[tokio::test]
+    async fn rejects_invalid_metadata_before_retaining_blobs_or_mutating_the_item() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(MockDatabase::default());
+        let mut state = state(db.clone(), directory.path());
+        let server = MockServer::start().await;
+        let uri = format!("{}/metadata", server.uri());
+        Mock::given(method("POST")).and(path("/rpc"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"jsonrpc":"2.0","id":0,"result":format!("0x{}",hex::encode(uri.abi_encode()))})))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/metadata"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string("<html>upstream failure</html>"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Arc::make_mut(&mut state.chain_config)
+            .0
+            .insert("eip155:1".into(), format!("{}/rpc", server.uri()));
+        let mut item = new_item(
+            "snapshot",
+            Nft {
+                chain_id: "eip155:1".into(),
+                contract_address: "0x00000000000000000000000000000000000000ab".into(),
+                token_id: "42".into(),
+            },
+        );
+        let claim:Claim = serde_json::from_value(json!({"operation":{"id":"op","kind":"capture","target_id":"snapshot","state":"running","attempts":1,"created_at":Utc::now(),"updated_at":Utc::now(),"error":null},"owner_id":"owner","lease_token":"lease","specification":null,"plan":[]})).unwrap();
+        assert!(observe(&state, &claim, &mut item).await.is_err());
+        assert!(item.metadata_uri.is_none());
+        assert!(item.metadata_sha256.is_none());
+        assert!(item.observed_at.is_none());
+        assert!(item.assets.is_empty());
+        assert!(db.blobs.lock().unwrap().is_empty());
     }
 }

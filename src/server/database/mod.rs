@@ -482,10 +482,19 @@ impl Database for Db {
             .bind(owner)
             .execute(&mut *tx)
             .await?;
-        let row=sqlx::query("SELECT kind,COALESCE(backup_id,archive_id,pin_set_id,quote_id)::text AS target,state FROM operations WHERE id=$1::text::uuid AND owner_id=$2::text::uuid FOR UPDATE").bind(id).bind(owner).fetch_optional(&mut *tx).await?.ok_or(DatabaseError::NotFound)?;
+        let row=sqlx::query("SELECT kind,COALESCE(backup_id,archive_id,pin_set_id,quote_id)::text AS target,state,error FROM operations WHERE id=$1::text::uuid AND owner_id=$2::text::uuid FOR UPDATE").bind(id).bind(owner).fetch_optional(&mut *tx).await?.ok_or(DatabaseError::NotFound)?;
         if row.get::<String, _>("state") != "failed" {
             return Err(DatabaseError::Conflict(
                 "Only a failed operation can be retried".into(),
+            ));
+        }
+        if row
+            .get::<Option<Value>, _>("error")
+            .as_ref()
+            .is_some_and(|error| error["retryable"] == false)
+        {
+            return Err(DatabaseError::Conflict(
+                "This operation cannot be retried; create a new resource".into(),
             ));
         }
         let kind = row.get::<String, _>("kind");

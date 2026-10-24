@@ -103,7 +103,7 @@ pub async fn run(
         .execute(original.try_clone().context("Request cannot be retried")?)
         .await?;
     if response.status() == reqwest::StatusCode::PAYMENT_REQUIRED {
-        let payment: x402_rs::types::PaymentRequiredResponse = response.json().await?;
+        let payment: x402_types::proto::v1::PaymentRequired = response.json().await?;
         let requirement = payment
             .accepts
             .into_iter()

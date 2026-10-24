@@ -69,6 +69,19 @@ pub trait IpfsPinningProvider: Send + Sync {
     /// List all pins from the provider
     async fn list_pins(&self) -> Result<Vec<PinResponse>>;
 
+    /// Recover a submitted request using its CID and durable correlation metadata.
+    async fn find_pin(&self, cid: &str, pin_id: &str) -> Result<Option<PinResponse>> {
+        Ok(self.list_pins().await?.into_iter().find(|pin| {
+            pin.cid == cid
+                && pin
+                    .metadata
+                    .as_ref()
+                    .and_then(|meta| meta.get("nftbk_pin_id"))
+                    .and_then(|id| id.as_str())
+                    == Some(pin_id)
+        }))
+    }
+
     /// Delete a pin by its request ID
     async fn delete_pin(&self, request_id: &str) -> Result<()>;
 }
