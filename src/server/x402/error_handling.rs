@@ -334,3 +334,46 @@ mod handle_result_tests {
         ));
     }
 }
+
+#[cfg(test)]
+mod tolerant_parse_supported_tests {
+    use super::*;
+
+    #[test]
+    fn accepts_empty_optional_metadata_and_rejects_non_json_responses() {
+        let parsed = tolerant_parse_supported(
+            r#"{"kinds":[{"x402Version":1,"scheme":"exact","network":"base","extra":{}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.kinds.len(), 1);
+        assert!(tolerant_parse_supported("<html>Unavailable</html>").is_none());
+    }
+}
+
+#[cfg(test)]
+mod tolerant_recover_verify_tests {
+    use super::*;
+
+    #[test]
+    fn preserves_payment_challenges_and_unknown_rejection_reasons() {
+        let challenge = tolerant_recover_verify(r#"{"error":"payment_required","accepts":[]}"#)
+            .unwrap()
+            .unwrap_err();
+        assert!(matches!(
+            challenge,
+            FacilitatorClientError::HttpStatus {
+                status: StatusCode::PAYMENT_REQUIRED,
+                ..
+            }
+        ));
+        let invalid = tolerant_recover_verify(
+            r#"{"isValid":false,"invalidReason":"future_reason","payer":""}"#,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(invalid.0["invalidReason"], "future_reason");
+        assert_eq!(invalid.0["isValid"], false);
+        assert!(tolerant_recover_verify(r#"{"isValid":true,"payer":""}"#).is_none());
+        assert!(tolerant_recover_verify("not json").is_none());
+    }
+}

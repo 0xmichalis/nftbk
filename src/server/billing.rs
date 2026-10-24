@@ -412,4 +412,124 @@ mod pay_tests {
         );
         assert_eq!(db.payment_updates.lock().unwrap().len(), 2);
     }
+
+    #[tokio::test]
+    async fn validates_facilitator_results_before_activating_paid_work() {
+        let valid = json!({"isValid":true,"payer":"0x0000000000000000000000000000000000000001"});
+        let success = json!({"success":true,"payer":"0x0000000000000000000000000000000000000001","network":"base-sepolia","transaction":format!("0x{}","11".repeat(32))});
+        let cases = vec![
+            (valid.clone(), success.clone(), 200, Some(false)),
+            (
+                valid.clone(),
+                json!({"success":false,"network":"base-sepolia","errorReason":"insufficient_funds"}),
+                402,
+                Some(false),
+            ),
+            (
+                valid.clone(),
+                json!({"success":true,"network":"base-sepolia"}),
+                503,
+                Some(true),
+            ),
+            (
+                valid,
+                json!({"success":true,"network":"base","transaction":format!("0x{}","11".repeat(32)),"payer":"0x0000000000000000000000000000000000000001"}),
+                503,
+                Some(true),
+            ),
+            (
+                json!({"isValid":false,"invalidReason":"insufficient_funds","payer":""}),
+                success.clone(),
+                402,
+                None,
+            ),
+            (json!({"isValid":true,"payer":""}), success, 503, None),
+        ];
+        for (verification, settlement, status, ambiguous) in cases {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .and(path("/verify"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(verification))
+                .expect(1)
+                .mount(&server)
+                .await;
+            Mock::given(method("POST"))
+                .and(path("/settle"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(settlement))
+                .expect(usize::from(ambiguous.is_some()) as u64)
+                .mount(&server)
+                .await;
+            let directory = tempfile::tempdir().unwrap();
+            let db = Arc::new(MockDatabase {
+                document: Some(quote()),
+                payment: Mutex::new(Some(json!({"state":"pending","quote_id":OWNER}))),
+                ..Default::default()
+            });
+            let mut state = state(db.clone(), directory.path());
+            state.x402_config = Some(config(&server.uri()));
+            let payload = json!({"x402Version":1,"scheme":"exact","network":"base-sepolia","payload":{"signature":format!("0x{}","11".repeat(65)),"authorization":{"from":"0x0000000000000000000000000000000000000001","to":"0x0000000000000000000000000000000000000002","value":"123","validAfter":"0","validBefore":"9999999999","nonce":format!("0x{}","22".repeat(32))}}});
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                "x-payment",
+                base64::engine::general_purpose::STANDARD
+                    .encode(payload.to_string())
+                    .parse()
+                    .unwrap(),
+            );
+            let result = pay(&state, Resource::Backup, OWNER, OWNER, &headers).await;
+            if status == 200 {
+                assert!(result.unwrap().is_some());
+            } else {
+                assert_eq!(result.unwrap_err().status(), status);
+            }
+            let updates = db.payment_updates.lock().unwrap();
+            if let Some(ambiguous) = ambiguous {
+                assert!(matches!(&updates[0], PaymentUpdate::Begin { .. }));
+                if status == 200 {
+                    assert!(matches!(&updates[1], PaymentUpdate::Settled(_)));
+                } else {
+                    assert!(
+                        matches!(&updates[1],PaymentUpdate::Failed {ambiguous:value,..} if *value==ambiguous)
+                    );
+                }
+            } else {
+                assert!(updates.is_empty());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn reuses_existing_settlements_and_bypasses_the_facilitator_for_zero_charges() {
+        let server = MockServer::start().await;
+        for paid in [true, false] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut quote = quote();
+            quote["amount_atomic"] = json!("0");
+            let db = Arc::new(MockDatabase {
+                document: Some(quote),
+                payment: Mutex::new(Some(if paid {
+                    json!({"state":"paid","settlement":{"success":true}})
+                } else {
+                    json!({"state":"pending","quote_id":OWNER})
+                })),
+                ..Default::default()
+            });
+            let mut state = state(db.clone(), directory.path());
+            state.x402_config = Some(config(&server.uri()));
+            assert_eq!(terms(&state).unwrap().chain_id, "eip155:84532");
+            let encoded = pay(&state, Resource::Backup, OWNER, OWNER, &HeaderMap::new())
+                .await
+                .unwrap()
+                .unwrap();
+            let settlement: Document = serde_json::from_slice(
+                &base64::engine::general_purpose::STANDARD
+                    .decode(encoded)
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(settlement["success"], true);
+            assert_eq!(db.payment_updates.lock().unwrap().len(), usize::from(!paid));
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
 }

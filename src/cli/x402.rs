@@ -198,6 +198,10 @@ impl X402PaymentHandler {
         wallet: &PaymentSigner,
         requirements: &PaymentRequirements,
     ) -> Result<PaymentPayload> {
+        anyhow::ensure!(
+            requirements.scheme == "exact",
+            "Only exact payments are supported"
+        );
         // Get the wallet address
         let from_address = wallet.address();
         let from_evm_address = from_address;
@@ -218,7 +222,11 @@ impl X402PaymentHandler {
             to: to_evm_address,
             value: requirements.max_amount_required.clone(),
             valid_after: now,
-            valid_before: now + requirements.max_timeout_seconds,
+            valid_before: UnixTimestamp::from_secs(
+                now.as_secs()
+                    .checked_add(requirements.max_timeout_seconds)
+                    .context("Payment validity overflows the timestamp")?,
+            ),
             nonce,
         };
 
@@ -350,6 +358,10 @@ impl X402PaymentHandler {
 
     /// Format token amount with decimals for human-readable display
     fn format_token_amount(amount: &str, decimals: u8) -> Result<String> {
+        anyhow::ensure!(
+            decimals <= 77,
+            "Token decimals exceed the supported precision"
+        );
         let amount_u256 = U256::from_str_radix(amount, 10)?;
         let divisor = U256::from(10).pow(U256::from(decimals));
 
@@ -476,7 +488,7 @@ mod new_tests {
 }
 
 #[cfg(test)]
-mod create_payment_payload_tests {
+mod sign_eip712_authorization_tests {
     use super::*;
     use k256::ecdsa::{RecoveryId, Signature, VerifyingKey};
     use serde_json::json;
@@ -578,5 +590,140 @@ mod chain_id_from_network_tests {
         assert_eq!(chain_id_from_network("base").unwrap(), 8453);
         assert_eq!(chain_id_from_network("base-sepolia").unwrap(), 84532);
         assert!(chain_id_from_network("polygon").is_err());
+    }
+}
+
+#[cfg(test)]
+mod confirm_payment_with_io_tests {
+    use super::*;
+    use serde_json::json;
+
+    pub(super) fn requirements() -> PaymentRequirements {
+        serde_json::from_value(json!({"scheme":"exact","network":"base","maxAmountRequired":"1234567","resource":"https://example.com/v2/backups","description":"Retain snapshot","mimeType":"application/json","payTo":"0x1234567890123456789012345678901234567890","maxTimeoutSeconds":300,"asset":"0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913","extra":{"name":"USD Coin","version":"2"}})).unwrap()
+    }
+
+    #[tokio::test]
+    async fn requires_explicit_confirmation_and_displays_the_complete_payment_terms() {
+        let handler = X402PaymentHandler::new(Some(
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ))
+        .unwrap();
+        let requirements = requirements();
+        let address = PaymentSigner::from(handler.private_key.clone().unwrap()).address();
+        for (input, expected) in [
+            ("y\n", true),
+            (" YES \n", true),
+            ("no\n", false),
+            ("\n", false),
+            ("", false),
+        ] {
+            let mut output = vec![];
+            let mut reader = std::io::Cursor::new(input.as_bytes());
+            assert_eq!(
+                handler
+                    .confirm_payment_with_io(
+                        &address,
+                        &requirements,
+                        Ok(6),
+                        &mut output,
+                        &mut reader
+                    )
+                    .await
+                    .unwrap(),
+                expected
+            );
+            let output = String::from_utf8(output).unwrap();
+            for term in [
+                "1.234567 (raw: 1234567)",
+                "USD Coin",
+                "Token Version: 2",
+                "Retain snapshot",
+                "300 seconds",
+                "https://example.com/v2/backups",
+                requirements.pay_to.as_str(),
+            ] {
+                assert!(output.contains(term), "Missing payment term: {term}");
+            }
+        }
+        let mut output = vec![];
+        let mut reader = std::io::Cursor::new(b"n\n");
+        assert!(!handler
+            .confirm_payment_with_io(
+                &address,
+                &requirements,
+                Err(anyhow::anyhow!("RPC unavailable")),
+                &mut output,
+                &mut reader
+            )
+            .await
+            .unwrap());
+        assert!(String::from_utf8(output)
+            .unwrap()
+            .contains("1234567 (failed to query decimals: RPC unavailable)"));
+    }
+}
+
+#[cfg(test)]
+mod create_payment_payload_tests {
+    use super::confirm_payment_with_io_tests::requirements;
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn rejects_unsupported_or_malformed_payment_terms_before_signing() {
+        let handler = X402PaymentHandler::new(Some(
+            "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        ))
+        .unwrap();
+        assert!(handler.is_configured());
+        let wallet = PaymentSigner::from(handler.private_key.clone().unwrap());
+        for field in [
+            "scheme",
+            "network",
+            "asset",
+            "pay_to",
+            "max_amount_required",
+            "timeout",
+        ] {
+            let mut requirements = requirements();
+            match field {
+                "scheme" => requirements.scheme = "upto".into(),
+                "network" => requirements.network = "polygon".into(),
+                "asset" => requirements.asset = "invalid".into(),
+                "pay_to" => requirements.pay_to = "invalid".into(),
+                "max_amount_required" => requirements.max_amount_required = "-1".into(),
+                "timeout" => requirements.max_timeout_seconds = u64::MAX,
+                _ => unreachable!(),
+            }
+            assert!(
+                handler
+                    .create_payment_payload(&wallet, &requirements)
+                    .await
+                    .is_err(),
+                "Accepted invalid {field}"
+            );
+        }
+        let mut requirements = requirements();
+        requirements.network = "base-sepolia".into();
+        requirements.extra = Some(json!({"name":"Custom USDC","version":"3"}));
+        let domain = handler.create_eip712_domain(&requirements).unwrap();
+        assert_eq!(domain.chain_id, Some(U256::from(84532)));
+        assert_eq!(domain.name.as_deref(), Some("Custom USDC"));
+        assert_eq!(domain.version.as_deref(), Some("3"));
+        requirements.extra = None;
+        assert_eq!(
+            handler.extract_token_metadata(&requirements),
+            ("USD Coin".into(), "2".into())
+        );
+        assert_eq!(
+            get_rpc_url_for_network("base").unwrap(),
+            "https://mainnet.base.org"
+        );
+        assert_eq!(
+            get_rpc_url_for_network("base-sepolia").unwrap(),
+            "https://sepolia.base.org"
+        );
+        assert!(get_rpc_url_for_network("other").is_err());
+        assert!(X402PaymentHandler::format_token_amount("1", 255).is_err());
     }
 }
