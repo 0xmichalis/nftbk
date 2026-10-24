@@ -1,10 +1,12 @@
 use anyhow::Result;
+use reqwest::Method;
 use std::path::Path;
 use std::path::PathBuf;
 use tokio::fs;
 use tracing::{debug, info};
 
 use crate::httpclient::stream::{stream_gzip_http_to_file, stream_http_to_file};
+use crate::httpclient::HttpClient;
 
 pub async fn fetch_croquet_challenge(
     output_path: &Path,
@@ -69,6 +71,7 @@ async fn fetch_croquet_challenge_content_with_base_url(
         ("bb0101.wasm.gz", "bb0101_uncompressed.wasm"),
     ];
 
+    let http_client = HttpClient::new();
     let mut files_created = Vec::new();
     for (source_file, target_file) in files {
         let url = format!("{base_url}/bb0101/Build/{source_file}");
@@ -82,21 +85,14 @@ async fn fetch_croquet_challenge_content_with_base_url(
         }
 
         let is_gzipped = source_file.ends_with(".gz");
-        let builder = crate::httpclient::security::client_builder(&url)?;
         // The .gz files are decompressed by stream_gzip_http_to_file, so for them
         // reqwest must hand over the body as served, whatever Content-Encoding
         // says.
-        let builder = if is_gzipped {
-            builder.no_gzip().no_brotli().no_deflate().no_zstd()
+        let response = if is_gzipped {
+            http_client.fetch_raw_response(&url).await?
         } else {
-            builder
+            http_client.send_request(Method::GET, &url, None).await?
         };
-        let response = builder
-            .build()?
-            .get(&url)
-            .send()
-            .await
-            .map_err(reqwest::Error::without_url)?;
         let status = response.status();
         if !status.is_success() {
             return Err(anyhow::anyhow!(
