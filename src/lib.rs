@@ -4,6 +4,7 @@ pub mod cli;
 pub mod consts;
 pub mod content;
 pub mod envvar;
+mod errors;
 pub mod httpclient;
 pub mod ipfs;
 pub mod logging;

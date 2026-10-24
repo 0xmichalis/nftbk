@@ -16,7 +16,7 @@ async fn send_request(
         req = req.bearer_auth(token);
     }
 
-    Ok(req.send().await?)
+    Ok(req.send().await.map_err(reqwest::Error::without_url)?)
 }
 
 pub(crate) async fn fetch_url(

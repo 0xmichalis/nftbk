@@ -42,6 +42,9 @@ allow large NFT media while bounding memory, disk use and stalled requests.
 Failed downloads remove partial files. Larger artwork needs another backup
 method.
 
+Backup error messages omit HTTP(S) and WebSocket endpoint URLs, including
+error logs stored by earlier versions, to keep RPC credentials private.
+
 ### Generate config from gallery.so
 
 If you already have a [Gallery](https://gallery.so) account and gallery, you can

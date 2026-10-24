@@ -230,6 +230,8 @@ pub struct MockDatabase {
     pub update_pin_statuses_calls: std::sync::Mutex<u32>,
     pub get_incomplete_backup_tasks_calls: std::sync::Mutex<u32>,
     pub set_backup_error_calls: std::sync::Mutex<u32>,
+    pub persisted_error_logs: std::sync::Mutex<Vec<String>>,
+    pub persisted_backup_errors: std::sync::Mutex<Vec<String>>,
 }
 
 impl MockDatabase {
@@ -528,6 +530,10 @@ impl Database for MockDatabase {
 
     async fn set_backup_error(&self, _task_id: &str, _error: &str) -> Result<(), sqlx::Error> {
         *self.set_backup_error_calls.lock().unwrap() += 1;
+        self.persisted_backup_errors
+            .lock()
+            .unwrap()
+            .push(_error.to_string());
         if let Some(error) = &self.set_backup_error_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
@@ -541,6 +547,12 @@ impl Database for MockDatabase {
         _archive_error_log: Option<&str>,
         _ipfs_error_log: Option<&str>,
     ) -> Result<(), sqlx::Error> {
+        self.persisted_error_logs.lock().unwrap().extend(
+            _archive_error_log
+                .into_iter()
+                .chain(_ipfs_error_log)
+                .map(str::to_string),
+        );
         if let Some(error) = &self.set_error_logs_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
@@ -553,6 +565,10 @@ impl Database for MockDatabase {
         _task_id: &str,
         _error_log: &str,
     ) -> Result<(), sqlx::Error> {
+        self.persisted_error_logs
+            .lock()
+            .unwrap()
+            .push(_error_log.to_string());
         if let Some(error) = &self.update_archive_request_error_log_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {
@@ -565,6 +581,10 @@ impl Database for MockDatabase {
         _task_id: &str,
         _error_log: &str,
     ) -> Result<(), sqlx::Error> {
+        self.persisted_error_logs
+            .lock()
+            .unwrap()
+            .push(_error_log.to_string());
         if let Some(error) = &self.update_pin_request_error_log_error {
             Err(sqlx::Error::Configuration(error.clone().into()))
         } else {

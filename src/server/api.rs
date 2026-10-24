@@ -5,6 +5,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
+use crate::errors::redact_urls;
+
 #[derive(Debug, Serialize, Deserialize, Clone, ToSchema)]
 pub struct Tokens {
     /// The blockchain identifier (ethereum, polygon, tezos, base, arbitrum)
@@ -135,8 +137,8 @@ impl BackupResponse {
                 .archive_status
                 .as_ref()
                 .map(|s: &crate::server::database::ArchiveStatus| s.as_str().to_string()),
-            fatal_error: task.archive_fatal_error.clone(),
-            error_log: task.archive_error_log.clone(),
+            fatal_error: task.archive_fatal_error.as_deref().map(redact_urls),
+            error_log: task.archive_error_log.as_deref().map(redact_urls),
             deleted_at: task
                 .archive_deleted_at
                 .as_ref()
@@ -147,8 +149,8 @@ impl BackupResponse {
                 .ipfs_status
                 .as_ref()
                 .map(|s: &crate::server::database::IpfsStatus| s.as_str().to_string()),
-            fatal_error: task.ipfs_fatal_error.clone(),
-            error_log: task.ipfs_error_log.clone(),
+            fatal_error: task.ipfs_fatal_error.as_deref().map(redact_urls),
+            error_log: task.ipfs_error_log.as_deref().map(redact_urls),
             deleted_at: task
                 .pins_deleted_at
                 .as_ref()
@@ -208,6 +210,21 @@ mod from_backup_task_tests {
             archive_deleted_at: Some(Utc.timestamp_opt(1_700_000_800, 0).unwrap()),
             pins_deleted_at: Some(Utc.timestamp_opt(1_700_000_900, 0).unwrap()),
         }
+    }
+
+    #[test]
+    fn removes_rpc_keys_from_previously_stored_errors() {
+        let mut task = sample_task();
+        let error = Some("RPC failed at https://example.invalid/v2/not-a-real-key".to_string());
+        task.archive_error_log = error.clone();
+        task.archive_fatal_error = error.clone();
+        task.ipfs_error_log = error.clone();
+        task.ipfs_fatal_error = error;
+        let response = BackupResponse::from_backup_task(&task, Vec::new(), 0, 1, 10);
+        let json = serde_json::to_string(&response).unwrap();
+
+        assert!(!json.contains("not-a-real-key"));
+        assert!(!json.contains("https://"));
     }
 
     #[test]

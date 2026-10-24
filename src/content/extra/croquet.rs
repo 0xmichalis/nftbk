@@ -91,7 +91,12 @@ async fn fetch_croquet_challenge_content_with_base_url(
         } else {
             builder
         };
-        let response = builder.build()?.get(&url).send().await?;
+        let response = builder
+            .build()?
+            .get(&url)
+            .send()
+            .await
+            .map_err(reqwest::Error::without_url)?;
         let status = response.status();
         if !status.is_success() {
             return Err(anyhow::anyhow!(

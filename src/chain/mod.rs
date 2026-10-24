@@ -7,6 +7,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::content::extra::fetch_and_write_extra;
 use crate::content::{read_metadata, write_metadata, Options};
+use crate::errors::redact_urls;
 use crate::ipfs::url::extract_ipfs_cid;
 use crate::ipfs::{IpfsPinningProvider, PinRequest};
 
@@ -40,7 +41,7 @@ fn process<T>(
     match result {
         Ok(value) => Ok(Some(value)),
         Err(e) => {
-            let full_msg = format!("{error_msg}: {e}");
+            let full_msg = redact_urls(&format!("{error_msg}: {e}"));
             if exit_on_error {
                 return Err(anyhow!(full_msg));
             }
@@ -525,7 +526,7 @@ where
             Err(err) => {
                 warn!(
                     token = %token,
-                    error = %err,
+                    error = %redact_urls(&err.to_string()),
                     "Failed to get token URI during size estimation; skipping token"
                 );
                 continue;
@@ -608,6 +609,68 @@ where
 mod process_tests {
     use super::*;
     use anyhow::anyhow;
+
+    #[tokio::test]
+    async fn removes_rpc_key_from_recorded_transport_errors() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let rpc_url = format!("http://{address}/v2/not-a-real-key");
+        for exit_on_error in [false, true] {
+            let error = reqwest::Client::new()
+                .get(&rpc_url)
+                .send()
+                .await
+                .unwrap_err();
+            let mut errors = Vec::new();
+            let result = process::<()>(
+                Err(error.into()),
+                "RPC failed".into(),
+                exit_on_error,
+                &mut errors,
+            );
+            let message = if exit_on_error {
+                result.unwrap_err().to_string()
+            } else {
+                errors.pop().unwrap()
+            };
+
+            assert!(!message.contains("not-a-real-key"));
+            assert!(!message.contains("http://"));
+        }
+    }
+
+    #[tokio::test]
+    async fn removes_rpc_key_from_alloy_errors() {
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::method("POST"))
+            .respond_with(wiremock::ResponseTemplate::new(401))
+            .mount(&server)
+            .await;
+        let processor = super::evm::EvmChainProcessor::new(
+            &format!("{}/v2/not-a-real-key", server.uri()),
+            crate::StorageConfig {
+                output_path: None,
+                prune_redundant: false,
+                ipfs_pinning_configs: vec![],
+            },
+            0,
+        )
+        .await
+        .unwrap();
+        let token = super::common::ContractTokenId {
+            address: "0x0000000000000000000000000000000000000001".into(),
+            token_id: "1".into(),
+            chain_name: "ethereum".into(),
+        };
+        let error = processor.get_uri(&token).await.unwrap_err();
+        let mut errors = Vec::new();
+        process::<()>(Err(error), "RPC failed".into(), false, &mut errors).unwrap();
+
+        assert_eq!(errors.len(), 1);
+        assert!(!errors[0].contains("not-a-real-key"));
+        assert!(!errors[0].contains("http://"));
+    }
 
     #[test]
     fn test_process_success() {
@@ -1607,7 +1670,13 @@ mod process_nfts_tests {
         assert_eq!(archive_out.files.len(), 1); // Should have metadata.json
         assert_eq!(archive_out.errors.len(), 1); // Content download error should go to archive_errors
         assert!(archive_out.errors[0].contains("Failed to fetch"));
-        assert!(archive_out.errors[0].contains("image"));
+        assert_eq!(
+            archive_out.errors[0],
+            format!(
+                "Failed to fetch content for {}: HTTP error: status 500 Internal Server Error from [redacted URL]",
+                create_test_token()
+            )
+        );
 
         // Verify that IPFS operations were not attempted
         assert!(ipfs_out.pin_requests.is_empty());
