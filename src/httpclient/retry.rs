@@ -51,10 +51,24 @@ pub(crate) fn should_retry(error: &anyhow::Error, status: Option<reqwest::Status
         "tcp connect error",
     ];
 
-    let err_str = format!("{error}");
-    let is_streaming_error = RETRIABLE_ERRORS
-        .iter()
-        .any(|substr| err_str.contains(substr));
+    let is_streaming_error = error.chain().any(|cause| {
+        // std::io::Error::source skips its inner error, so inspect it directly.
+        let cause = cause
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .map_or(cause, |inner| inner);
+        if let Some(error) = cause.downcast_ref::<reqwest::Error>() {
+            return error.is_timeout()
+                || error.is_connect()
+                || error.is_body()
+                || error.is_decode();
+        }
+
+        let message = cause.to_string();
+        RETRIABLE_ERRORS
+            .iter()
+            .any(|substr| message.contains(substr))
+    });
 
     let is_http_error = if let Some(status_code) = status {
         status_code.is_server_error() || status_code.as_u16() == 429
@@ -63,6 +77,56 @@ pub(crate) fn should_retry(error: &anyhow::Error, status: Option<reqwest::Status
     };
 
     is_streaming_error || is_http_error
+}
+
+#[cfg(test)]
+mod should_retry_tests {
+    use super::*;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn retries_request_timeout_under_context() {
+        let server = MockServer::start().await;
+        Mock::given(wiremock::matchers::method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(1)))
+            .mount(&server)
+            .await;
+        let error = reqwest::Client::builder()
+            .timeout(Duration::from_millis(50))
+            .build()
+            .unwrap()
+            .get(server.uri())
+            .send()
+            .await
+            .unwrap_err();
+        assert!(error.is_timeout());
+
+        let error = anyhow::Error::new(error.without_url()).context("Fetching metadata failed");
+        assert!(should_retry(&error, None));
+    }
+
+    #[tokio::test]
+    async fn retries_http_body_error_wrapped_in_io_error() {
+        let chunks = futures_util::stream::iter([Err::<Vec<u8>, _>(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "simulated disconnect",
+        ))]);
+        let response: reqwest::Response =
+            axum::http::Response::new(reqwest::Body::wrap_stream(chunks)).into();
+        let error = response.bytes().await.unwrap_err();
+        assert!(error.is_body() || error.is_decode());
+
+        let error = anyhow::Error::new(std::io::Error::other(error.without_url()))
+            .context("Failed to stream content to file video.mp4");
+        assert!(should_retry(&error, Some(reqwest::StatusCode::OK)));
+    }
+
+    #[test]
+    fn retries_legacy_transport_errors_under_context() {
+        let error = anyhow::anyhow!("end of file before message length reached")
+            .context("Failed to stream content to file video.mp4");
+        assert!(should_retry(&error, Some(reqwest::StatusCode::OK)));
+    }
 }
 
 #[cfg(test)]

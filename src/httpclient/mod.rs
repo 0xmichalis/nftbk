@@ -1126,3 +1126,65 @@ mod head_content_length_tests {
         assert_eq!(size, 2048);
     }
 }
+
+#[cfg(test)]
+mod fetch_and_stream_to_file_tests {
+    use super::*;
+    use flate2::{write::GzEncoder, Compression};
+    use std::io::Write;
+    use tempfile::TempDir;
+    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+
+    #[tokio::test]
+    async fn retries_failed_body_and_replaces_partial_file() {
+        let server = MockServer::start().await;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&vec![b'x'; 64 * 1024]).unwrap();
+        let mut truncated = encoder.finish().unwrap();
+        truncated.truncate(truncated.len() - 8);
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Encoding", "gzip")
+                    .set_body_bytes(truncated),
+            )
+            .with_priority(1)
+            .up_to_n_times(1)
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(b"complete video"))
+            .with_priority(2)
+            .expect(1)
+            .mount(&server)
+            .await;
+        let out = TempDir::new().unwrap();
+        let path = out.path().join("video.mp4");
+
+        let saved = fetch_and_stream_to_file(&server.uri(), &path, 1, &[])
+            .await
+            .unwrap();
+
+        assert_eq!(saved, path);
+        assert_eq!(tokio::fs::read(saved).await.unwrap(), b"complete video");
+    }
+
+    #[tokio::test]
+    async fn does_not_retry_missing_content() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(404))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let out = TempDir::new().unwrap();
+        let path = out.path().join("video.mp4");
+
+        let error = fetch_and_stream_to_file(&server.uri(), &path, 1, &[])
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("404 Not Found"));
+        assert!(!path.exists());
+    }
+}
