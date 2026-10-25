@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Context, Result};
 use async_compression::tokio::bufread::GzipDecoder;
 use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
@@ -12,13 +12,7 @@ pub(crate) async fn stream_reader_to_file<R: AsyncRead + Unpin>(
 ) -> anyhow::Result<std::path::PathBuf> {
     let copied = tokio::io::copy(&mut reader.take(MAX_FILE_BYTES + 1), file)
         .await
-        .map_err(|e| {
-            anyhow::anyhow!(
-                "Failed to stream content to file {}: {}",
-                file_path.display(),
-                e
-            )
-        })?;
+        .with_context(|| format!("Failed to stream content to file {}", file_path.display()))?;
     check_size(copied, MAX_FILE_BYTES)?;
     file.flush()
         .await
@@ -150,7 +144,12 @@ mod stream_http_to_file_tests {
         let out = TempDir::new().unwrap();
         let file_path = out.path().join("large.bin");
 
-        assert!(stream_http_to_file(response, &file_path).await.is_err());
+        let error = stream_http_to_file(response, &file_path).await.unwrap_err();
+        assert_eq!(error.to_string(), "Content exceeds 268435456 byte limit");
+        assert!(!crate::httpclient::retry::should_retry(
+            &error,
+            Some(reqwest::StatusCode::OK)
+        ));
         assert!(!file_path.exists());
     }
 
@@ -176,7 +175,9 @@ mod stream_http_to_file_tests {
         let out = TempDir::new().unwrap();
         let file_path = out.path().join("image");
 
-        assert!(stream_http_to_file(response, &file_path).await.is_err());
+        let error = stream_http_to_file(response, &file_path).await.unwrap_err();
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        assert!(format!("{error:#}").contains("body read timed out"));
         assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
     }
 
