@@ -13,6 +13,7 @@ permissions:
 concurrency:
   group: auto-tag
   cancel-in-progress: false
+  queue: max
 
 jobs:
   auto-tag:
