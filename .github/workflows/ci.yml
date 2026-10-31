@@ -211,20 +211,13 @@ jobs:
         fetch-depth: 0  # Full clone to ensure git history is available
         persist-credentials: false
 
-    - name: Log in to GHCR
-      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-    - name: Build Docker image
-      run: |
-        GIT_COMMIT=$(git rev-parse --short HEAD)
-        docker build --pull --build-arg GIT_COMMIT="$GIT_COMMIT" -t "$IMAGE_NAME:sha-$GITHUB_SHA" .
-
     # latest only ever points at a signed digest of main's newest commit.
     - name: Publish signed image
       id: push
-      uses: 0xmichalis/repo-tooling/actions/publish-image@ed1b0c7db2764f49a7144c7eff80351a90b65ded # v1.0.0
+      uses: 0xmichalis/repo-tooling/actions/publish-image@07457c5c82d294d8060f4dc1d8156c799f3d9a9f
       with:
         image: ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+        build-context: .
         signing-key: ${{ secrets.COSIGN_PRIVATE_KEY }}
         signing-password: ${{ secrets.COSIGN_PASSWORD }}
         token: ${{ github.token }}
