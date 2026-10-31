@@ -32,7 +32,7 @@ RUN cargo build --release --bin nftbk-server
 
 
 # Runtime stage
-FROM gcr.io/distroless/cc-debian12:nonroot
+FROM gcr.io/distroless/cc-debian13:nonroot
 
 WORKDIR /app
 
