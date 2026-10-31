@@ -33,6 +33,8 @@ jobs:
     concurrency:
       group: publish-latest
       cancel-in-progress: false
+      # Keep a pending release queued instead of letting a newer run cancel it.
+      queue: max
     permissions:
       contents: read
       packages: write # push to GHCR
@@ -110,7 +112,9 @@ jobs:
         GH_TOKEN: ${{ github.token }}
         IMAGE: ${{ env.IMAGE_NAME }}@${{ steps.push.outputs.digest }}
       run: |
-        if [ "$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" != "$(git rev-parse HEAD)" ]; then
+        main_sha=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)
+        test -n "$main_sha"
+        if [ "$main_sha" != "$(git rev-parse HEAD)" ]; then
           echo "::notice::$RELEASE_TAG is not main's head; leaving latest unchanged."
           exit 0
         fi
