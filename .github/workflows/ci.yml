@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -40,7 +40,7 @@ jobs:
 
     - name: Cache cargo-sort binary
       id: cache-cargo-sort
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ runner.tool_cache }}/cargo-sort
         key: cargo-sort-bin-${{ env.CARGO_SORT_VERSION }}
@@ -63,7 +63,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -73,7 +73,7 @@ jobs:
         rustup show
 
     - name: Cache build artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/registry
@@ -89,24 +89,24 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
     - name: Lint Dockerfile
-      uses: hadolint/hadolint-action@v3.3.0
+      uses: hadolint/hadolint-action@v3.5.0
       with:
         dockerfile: "Dockerfile"
 
     - name: Lint Markdown
-      uses: DavidAnson/markdownlint-cli2-action@v20
+      uses: DavidAnson/markdownlint-cli2-action@v25
 
   sqlx:
     name: Check SQLx Cache
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -116,7 +116,7 @@ jobs:
         rustup show
 
     - name: Cache build artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/registry
@@ -126,7 +126,7 @@ jobs:
 
     - name: Cache sqlx-cli binary
       id: cache-sqlx-cli
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ runner.tool_cache }}/sqlx-cli
         key: sqlx-cli-bin-${{ env.SQLX_CLI_VERSION }}
@@ -146,7 +146,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -156,7 +156,7 @@ jobs:
         rustup show
 
     - name: Cache cargo registry and git
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/registry
@@ -165,7 +165,7 @@ jobs:
 
     - name: Cache cargo-deny binary
       id: cache-cargo-deny
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ runner.tool_cache }}/cargo-deny
         key: cargo-deny-bin-${{ env.CARGO_DENY_VERSION }}
@@ -188,7 +188,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -198,7 +198,7 @@ jobs:
         rustup show
 
     - name: Cache cargo registry and git
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/registry
@@ -207,7 +207,7 @@ jobs:
 
     - name: Cache cargo-vet binary
       id: cache-cargo-vet
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ runner.tool_cache }}/cargo-vet
         key: cargo-vet-bin-${{ env.CARGO_VET_VERSION }}
@@ -241,7 +241,7 @@ jobs:
           --health-retries 10
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v7
       with:
         fetch-depth: 0
 
@@ -251,7 +251,7 @@ jobs:
         rustup show
 
     - name: Cache build artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/registry
@@ -261,7 +261,7 @@ jobs:
 
     - name: Cache cargo-tarpaulin binary
       id: cache-cargo-tarpaulin
-      uses: actions/cache@v4
+      uses: actions/cache@v6
       with:
         path: ${{ runner.tool_cache }}/cargo-tarpaulin
         key: cargo-tarpaulin-bin-${{ env.CARGO_TARPAULIN_VERSION }}
