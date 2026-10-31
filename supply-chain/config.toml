@@ -47,7 +47,7 @@ criteria = "safe-to-deploy"
 [[exemptions.alloy-primitives]]
 version = "1.6.1@git:13dd0788817029241f11fd30f3b197da46e396fe"
 criteria = "safe-to-deploy"
-notes = "Temporary upstream Alloy PR 1147 pinned by commit to use patched k256 0.14 / crypto-bigint 0.7.6. Protocol encoding and recoverable signing are regression-tested; pending independent source audit."
+notes = "Temporary upstream Alloy PR 1147 pinned by commit to use patched k256 0.14 / crypto-bigint 0.7. Protocol encoding and recoverable signing are regression-tested; pending independent source audit."
 
 [[exemptions.alloy-pubsub]]
 version = "1.2.1"
@@ -433,7 +433,7 @@ version = "0.8.21"
 criteria = "safe-to-deploy"
 
 [[exemptions.crypto-bigint]]
-version = "0.7.6"
+version = "0.7.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.crypto-common]]
@@ -453,7 +453,7 @@ version = "3.5.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.ctutils]]
-version = "0.4.5"
+version = "0.4.7"
 criteria = "safe-to-deploy"
 
 [[exemptions.curve25519-dalek]]
