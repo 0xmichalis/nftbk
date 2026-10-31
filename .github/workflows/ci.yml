@@ -23,26 +23,15 @@ env:
 
 jobs:
   checks:
-    uses: 0xmichalis/repo-tooling/.github/workflows/rust-ci.yml@bb4f2db0ec44c77fa32c4bd4a7125b432b94b21b
+    uses: 0xmichalis/repo-tooling/.github/workflows/rust-ci.yml@657d4c30746413b9a6d4e18a76665b8b4dbd6eb1
     with:
       run-tests: false
 
   markdownlint:
-    uses: 0xmichalis/repo-tooling/.github/workflows/markdownlint.yml@bb4f2db0ec44c77fa32c4bd4a7125b432b94b21b
+    uses: 0xmichalis/repo-tooling/.github/workflows/markdownlint.yml@657d4c30746413b9a6d4e18a76665b8b4dbd6eb1
 
   lint:
-    name: Check Linting
-    runs-on: ubuntu-latest
-
-    steps:
-    - uses: actions/checkout@v7
-      with:
-        fetch-depth: 0
-
-    - name: Lint Dockerfile
-      uses: hadolint/hadolint-action@v3.5.0
-      with:
-        dockerfile: "Dockerfile"
+    uses: 0xmichalis/repo-tooling/.github/workflows/dockerfile-lint.yml@657d4c30746413b9a6d4e18a76665b8b4dbd6eb1
 
   sqlx:
     name: Check SQLx Cache
