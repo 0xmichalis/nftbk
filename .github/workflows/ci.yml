@@ -23,12 +23,12 @@ env:
 
 jobs:
   checks:
-    uses: 0xmichalis/repo-tooling/.github/workflows/rust-ci.yml@24900c8f7f3b05bdfcf31bae16e6e1e1b3c23029
+    uses: 0xmichalis/repo-tooling/.github/workflows/rust-ci.yml@bb4f2db0ec44c77fa32c4bd4a7125b432b94b21b
     with:
       run-tests: false
 
   markdownlint:
-    uses: 0xmichalis/repo-tooling/.github/workflows/markdownlint.yml@24900c8f7f3b05bdfcf31bae16e6e1e1b3c23029
+    uses: 0xmichalis/repo-tooling/.github/workflows/markdownlint.yml@bb4f2db0ec44c77fa32c4bd4a7125b432b94b21b
 
   lint:
     name: Check Linting
