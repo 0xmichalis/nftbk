@@ -23,12 +23,9 @@ env:
   # Resolved once. On workflow_dispatch github.ref_name is the branch the
   # workflow was dispatched from ("main"), not the tag being released.
   RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/nftbk-server
 
 jobs:
   docker:
-    name: Build, Sign and Push Docker Image
-    runs-on: ubuntu-latest
     # Shared with ci.yml so an older run cannot move latest after a newer one.
     concurrency:
       group: publish-latest
@@ -37,61 +34,14 @@ jobs:
       queue: max
     permissions:
       contents: read
-      packages: write # push to GHCR
-
-    steps:
-    # A tag name may legally contain shell metacharacters, and it reaches several
-    # `run:` scripts below. Reject anything that is not a plain version tag before
-    # it is used, and pass it through env rather than `${{ }}` interpolation.
-    - name: Validate release tag
-      run: |
-        if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.]+)?$ ]]; then
-          echo "refusing to release a tag that is not vMAJOR.MINOR.PATCH: $RELEASE_TAG" >&2
-          exit 1
-        fi
-
-    # On a tag push this is the tag; on workflow_dispatch it must be stated
-    # explicitly, or checkout would silently build the default branch and
-    # publish it under the tag's name.
-    #
-    # persist-credentials: false keeps the token out of .git/config; the Docker
-    # build context would otherwise be able to read it.
-    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      with:
-        ref: ${{ env.RELEASE_TAG }}
-        persist-credentials: false
-
-    # The tag is the release's identity, so the code it points at must agree.
-    - name: Check Cargo.toml version matches the tag
-      run: |
-        set -euo pipefail
-        VERSION=$(grep -m1 '^version\s*=' Cargo.toml | sed -E 's/version\s*=\s*"([^"]+)".*/\1/')
-        if [[ "v$VERSION" != "$RELEASE_TAG" ]]; then
-          echo "Cargo.toml version v$VERSION does not match tag $RELEASE_TAG" >&2
-          exit 1
-        fi
-
-    - name: Log in to GHCR
-      run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-
-    - name: Build Docker image
-      run: |
-        set -euo pipefail
-        GIT_COMMIT=$(git rev-parse --short HEAD)
-        docker build --pull \
-          --build-arg GIT_COMMIT="$GIT_COMMIT" \
-          -t "$IMAGE_NAME:$RELEASE_TAG" \
-          .
-
-    # latest only ever points at a signed digest of main's newest commit.
-    - name: Publish signed image
-      id: push
-      uses: 0xmichalis/repo-tooling/actions/publish-image@ed1b0c7db2764f49a7144c7eff80351a90b65ded # v1.0.0
-      with:
-        image: ${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}
-        signing-key: ${{ secrets.COSIGN_PRIVATE_KEY }}
-        signing-password: ${{ secrets.COSIGN_PASSWORD }}
-        token: ${{ github.token }}
+      packages: write
+    uses: 0xmichalis/repo-tooling/.github/workflows/rust-docker-publish.yml@fa6609fe11a40dab9da1e5ea3efd5c02da6c1504
+    with:
+      image: ghcr.io/${{ github.repository_owner }}/nftbk-server
+      release-tag: ${{ github.event.inputs.tag || github.ref_name }}
+    secrets:
+      signing-key: ${{ secrets.COSIGN_PRIVATE_KEY }}
+      signing-password: ${{ secrets.COSIGN_PASSWORD }}
 
   release:
     name: Publish Release
@@ -105,6 +55,8 @@ jobs:
       with:
         tag_name: ${{ env.RELEASE_TAG }}
         draft: false
+        prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
+        make_latest: ${{ contains(env.RELEASE_TAG, '-') && 'false' || 'legacy' }}
         generate_release_notes: true
         body: |
-          Docker image: `${{ env.IMAGE_NAME }}:${{ env.RELEASE_TAG }}`
+          Docker image: `${{ needs.docker.outputs.image }}`
