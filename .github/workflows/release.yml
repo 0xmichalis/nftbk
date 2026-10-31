@@ -35,7 +35,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: 0xmichalis/repo-tooling/.github/workflows/rust-docker-publish.yml@f9c06aba6da39eb3c4b5d50583653a4437fa03dd
+    uses: 0xmichalis/repo-tooling/.github/workflows/rust-docker-publish.yml@fa6609fe11a40dab9da1e5ea3efd5c02da6c1504
     with:
       image: ghcr.io/${{ github.repository_owner }}/nftbk-server
       release-tag: ${{ github.event.inputs.tag || github.ref_name }}
@@ -56,7 +56,7 @@ jobs:
         tag_name: ${{ env.RELEASE_TAG }}
         draft: false
         prerelease: ${{ contains(env.RELEASE_TAG, '-') }}
-        make_latest: ${{ contains(env.RELEASE_TAG, '-') && 'false' || 'true' }}
+        make_latest: ${{ contains(env.RELEASE_TAG, '-') && 'false' || 'legacy' }}
         generate_release_notes: true
         body: |
           Docker image: `${{ needs.docker.outputs.image }}`

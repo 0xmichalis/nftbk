@@ -31,7 +31,7 @@ jobs:
     uses: 0xmichalis/repo-tooling/.github/workflows/markdownlint.yml@657d4c30746413b9a6d4e18a76665b8b4dbd6eb1
 
   lint:
-    uses: 0xmichalis/repo-tooling/.github/workflows/dockerfile-lint.yml@657d4c30746413b9a6d4e18a76665b8b4dbd6eb1
+    uses: 0xmichalis/repo-tooling/.github/workflows/dockerfile-lint.yml@fa6609fe11a40dab9da1e5ea3efd5c02da6c1504
 
   sqlx:
     name: Check SQLx Cache
@@ -197,7 +197,7 @@ jobs:
     permissions:
       packages: write
       contents: read
-    uses: 0xmichalis/repo-tooling/.github/workflows/rust-docker-publish.yml@f9c06aba6da39eb3c4b5d50583653a4437fa03dd
+    uses: 0xmichalis/repo-tooling/.github/workflows/rust-docker-publish.yml@fa6609fe11a40dab9da1e5ea3efd5c02da6c1504
     with:
       image: ghcr.io/${{ github.repository_owner }}/nftbk-server
     secrets:
