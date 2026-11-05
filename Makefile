@@ -65,7 +65,7 @@ cover-lcov:
 
 .PHONY: test
 test:
-	@SQLX_OFFLINE=true cargo test
+	@SQLX_OFFLINE=true cargo test --tests -- -Z unstable-options --report-time
 
 .PHONY: check
 check:

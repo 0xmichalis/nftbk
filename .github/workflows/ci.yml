@@ -164,6 +164,11 @@ jobs:
       run: cargo install --root "${{ runner.tool_cache }}/cargo-tarpaulin" --version ${{ env.CARGO_TARPAULIN_VERSION }} --locked cargo-tarpaulin
 
     - name: Run tests with coverage
+      # Tarpaulin launches test binaries itself, bypassing the cargo `runner`
+      # that unlocks `--report-time`, so this step sets the variable directly.
+      # The `checks` job still builds on plain stable.
+      env:
+        RUSTC_BOOTSTRAP: "1"
       run: |
         cargo tarpaulin \
           --workspace \
@@ -173,13 +178,14 @@ jobs:
           --skip-clean \
           --timeout 120 \
           --out Lcov \
-          --output-dir .
+          --output-dir . \
+          -- -Z unstable-options --report-time
 
     - name: Validate PostgreSQL migration and API lifecycles
       env:
         NFTBK_INTEGRATION_DATABASE_URL: postgres://nftbk:nftbk@localhost:5432/nftbk_v2
         SQLX_OFFLINE: "true"
-      run: cargo test --test api_v2_postgres -- --ignored
+      run: cargo test --test api_v2_postgres -- --ignored -Z unstable-options --report-time
 
     - name: Upload coverage to Coveralls
       uses: coverallsapp/github-action@v2
