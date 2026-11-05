@@ -5,8 +5,10 @@
 config_*.toml
 config.toml
 # The bare config.toml rule above also matches supply-chain/config.toml (the
-# cargo-vet store), which must be committed for `cargo vet` to work.
+# cargo-vet store), which must be committed for `cargo vet` to work, and
+# .cargo/config.toml (the cargo test runner).
 !supply-chain/config.toml
+!.cargo/config.toml
 /nft_backup*
 /*.json
 !.sqlx/*

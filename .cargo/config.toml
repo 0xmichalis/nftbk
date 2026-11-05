@@ -1,0 +1,9 @@
+# libtest's `--report-time` (prints per-test wall time next to `ok`) is
+# nightly-gated, and the gate is a runtime check on `RUSTC_BOOTSTRAP` inside the
+# test harness. `runner` prefixes every binary cargo launches (`cargo test`,
+# `run`, `bench`, examples) but never rustc itself — the alternative (`[env]`)
+# would also reach rustc, which flips every crate's fingerprint and silently
+# unlocks `#![feature(..)]` on stable. `env` is not a Windows binary, so this
+# stays scoped to unix.
+[target.'cfg(unix)']
+runner = ["env", "RUSTC_BOOTSTRAP=1"]
