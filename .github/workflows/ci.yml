@@ -23,15 +23,15 @@ env:
 
 jobs:
   checks:
-    uses: 0xmichalis/repo-tooling/.github/workflows/rust-ci.yml@657d4c30746413b9a6d4e18a76665b8b4dbd6eb1
+    uses: 0xmichalis/repo-tooling/.github/workflows/rust-ci.yml@8f5e2c876d4c1e711bdf8bdea66188daff8e6166
     with:
       run-tests: false
 
   markdownlint:
-    uses: 0xmichalis/repo-tooling/.github/workflows/markdownlint.yml@657d4c30746413b9a6d4e18a76665b8b4dbd6eb1
+    uses: 0xmichalis/repo-tooling/.github/workflows/markdownlint.yml@8f5e2c876d4c1e711bdf8bdea66188daff8e6166
 
   lint:
-    uses: 0xmichalis/repo-tooling/.github/workflows/dockerfile-lint.yml@fa6609fe11a40dab9da1e5ea3efd5c02da6c1504
+    uses: 0xmichalis/repo-tooling/.github/workflows/dockerfile-lint.yml@8f5e2c876d4c1e711bdf8bdea66188daff8e6166
 
   sqlx:
     name: Check SQLx Cache
@@ -203,7 +203,7 @@ jobs:
     permissions:
       packages: write
       contents: read
-    uses: 0xmichalis/repo-tooling/.github/workflows/rust-docker-publish.yml@fa6609fe11a40dab9da1e5ea3efd5c02da6c1504
+    uses: 0xmichalis/repo-tooling/.github/workflows/rust-docker-publish.yml@8f5e2c876d4c1e711bdf8bdea66188daff8e6166
     with:
       image: ghcr.io/${{ github.repository_owner }}/nftbk-server
     secrets:
