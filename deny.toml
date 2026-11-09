@@ -63,6 +63,10 @@ multiple-versions = "warn"
 # as a wildcard; warn rather than fail.
 wildcards = "warn"
 
+[[bans.deny]]
+# The SQLite advisory exception is valid only while this backend is unused.
+name = "libsqlite3-sys"
+
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
