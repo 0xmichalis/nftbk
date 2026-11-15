@@ -12,6 +12,7 @@ use url::{Host, Url};
 use crate::content::dedup::hard_link_to_identical_sibling;
 use crate::content::get_filename;
 use crate::content::{Options, extensions, try_exists, write_and_postprocess_file};
+use crate::envvar::ProcessEnv;
 use crate::httpclient::fetch::{try_fetch_response, try_head_content_length};
 use crate::httpclient::limits::{MAX_BUFFER_BYTES, MAX_FILE_BYTES, data_url_bytes, response_bytes};
 use crate::httpclient::retry::{retry_operation, should_retry};
@@ -35,7 +36,7 @@ pub struct HttpClient {
 
 impl HttpClient {
     pub fn new() -> Self {
-        let ipfs_gateways = prioritize_authenticated(IPFS_GATEWAYS);
+        let ipfs_gateways = prioritize_authenticated(IPFS_GATEWAYS, &ProcessEnv);
         Self {
             ipfs_gateways,
             max_retries: DEFAULT_MAX_CONTENT_REQUEST_RETRIES,
@@ -130,7 +131,7 @@ impl HttpClient {
                 let url = resolved_url.clone();
                 let gateways = gateways.clone();
                 Box::pin(async move {
-                    match try_fetch_response(&url, &gateways).await {
+                    match try_fetch_response(&url, &gateways, &ProcessEnv).await {
                         (Ok(response), status) => (response_bytes(response).await, status),
                         (Err(err), status) => (Err(err), status),
                     }
@@ -157,7 +158,7 @@ impl HttpClient {
             || {
                 let url = resolved_url.clone();
                 let gateways = gateways.clone();
-                Box::pin(async move { try_head_content_length(&url, &gateways).await })
+                Box::pin(async move { try_head_content_length(&url, &gateways, &ProcessEnv).await })
             },
             self.max_retries,
             should_retry,
@@ -263,7 +264,7 @@ impl HttpClient {
         anyhow::Result<reqwest::Response>,
         Option<reqwest::StatusCode>,
     ) {
-        try_fetch_response(url, &self.ipfs_gateways).await
+        try_fetch_response(url, &self.ipfs_gateways, &ProcessEnv).await
     }
 
     pub(crate) async fn fetch_and_stream_to_file(
@@ -288,7 +289,7 @@ async fn fetch_and_stream_to_file(
             let file_path = file_path.to_path_buf();
             let gateways = gateways.to_owned();
             Box::pin(async move {
-                match try_fetch_response(&url, &gateways).await {
+                match try_fetch_response(&url, &gateways, &ProcessEnv).await {
                     (Ok(response), status) => {
                         (stream_http_to_file(response, &file_path).await, status)
                     }

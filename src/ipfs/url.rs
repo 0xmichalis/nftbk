@@ -1,5 +1,6 @@
 use data_encoding::BASE32_NOPAD;
 
+use crate::envvar::Env;
 use crate::ipfs::config::{IPFS_GATEWAYS, IpfsGatewayConfig, IpfsGatewayType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -171,13 +172,14 @@ fn extract_ipfs_path_from_gateway_url(url: &str) -> Option<String> {
 pub fn generate_url_for_gateways(
     url: &str,
     gateways: &[IpfsGatewayConfig],
+    env: &dyn Env,
 ) -> Option<Vec<GatewayUrl>> {
     extract_ipfs_path_from_gateway_url(url).map(|ipfs_path| {
         gateways
             .iter()
             .map(|gw| GatewayUrl {
                 url: construct_gateway_url(url, &ipfs_path, gw),
-                bearer_token: gw.resolve_bearer_token(),
+                bearer_token: gw.resolve_bearer_token(env),
             })
             .collect()
     })
@@ -226,6 +228,8 @@ pub fn get_ipfs_gateway_urls(url: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
     use crate::ipfs::config::{IPFS_GATEWAYS, IpfsGatewayType};
 
@@ -480,7 +484,7 @@ mod tests {
         fn builds_all_from_path_gateway_url() {
             let url =
                 "https://foo.com/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/123?foo=bar";
-            let urls = generate_url_for_gateways(url, TEST_GATEWAYS).unwrap();
+            let urls = generate_url_for_gateways(url, TEST_GATEWAYS, &HashMap::new()).unwrap();
             assert_eq!(urls.len(), TEST_GATEWAYS.len());
             let expected_urls = vec![
                 "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/123?foo=bar".to_string(),
@@ -494,24 +498,29 @@ mod tests {
                 );
             }
             assert!(
-                generate_url_for_gateways("https://foo.com/notipfs/QmHash", IPFS_GATEWAYS)
-                    .is_none()
+                generate_url_for_gateways(
+                    "https://foo.com/notipfs/QmHash",
+                    IPFS_GATEWAYS,
+                    &HashMap::new()
+                )
+                .is_none()
             );
-            assert!(generate_url_for_gateways("", IPFS_GATEWAYS).is_none());
+            assert!(generate_url_for_gateways("", IPFS_GATEWAYS, &HashMap::new()).is_none());
         }
 
         #[test]
         fn builds_all_from_raw_codec_cidv1_url() {
             let url =
                 "https://ipfs.io/ipfs/bafkreicrxtc2cws6ci7bqgtygx4cvvro3szoq5sn27mhu4wdzjmwlmcesa";
-            let urls = generate_url_for_gateways(url, IPFS_GATEWAYS).unwrap();
+            let urls = generate_url_for_gateways(url, IPFS_GATEWAYS, &HashMap::new()).unwrap();
             assert_eq!(urls.len(), IPFS_GATEWAYS.len());
         }
 
         #[test]
         fn builds_all_from_subdomain_gateway_url() {
             let subdomain_url = "https://bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya.ipfs.nftstorage.link/1080P%20NFT/012_placeholder_minted_UnisocksRedemptionGoesLive.mp4?id=12";
-            let urls = generate_url_for_gateways(subdomain_url, TEST_GATEWAYS).unwrap();
+            let urls =
+                generate_url_for_gateways(subdomain_url, TEST_GATEWAYS, &HashMap::new()).unwrap();
             assert_eq!(urls.len(), TEST_GATEWAYS.len());
             let expected_urls = vec![
                 "https://ipfs.io/ipfs/bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya/1080P%20NFT/012_placeholder_minted_UnisocksRedemptionGoesLive.mp4?id=12".to_string(),
@@ -527,7 +536,8 @@ mod tests {
 
             let subdomain_url_no_path = "https://bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya.ipfs.nftstorage.link";
             let urls_no_path =
-                generate_url_for_gateways(subdomain_url_no_path, TEST_GATEWAYS).unwrap();
+                generate_url_for_gateways(subdomain_url_no_path, TEST_GATEWAYS, &HashMap::new())
+                    .unwrap();
             assert_eq!(urls_no_path.len(), TEST_GATEWAYS.len());
             let expected_subdomain = "https://bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya.ipfs.4everland.io";
             assert!(urls_no_path.iter().any(|g| g.url == expected_subdomain));
@@ -633,7 +643,9 @@ mod tests {
         #[test]
         fn includes_expected_gateways() {
             let ipfs_url = "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
-            if let Some(gateway_urls) = generate_url_for_gateways(ipfs_url, IPFS_GATEWAYS) {
+            if let Some(gateway_urls) =
+                generate_url_for_gateways(ipfs_url, IPFS_GATEWAYS, &HashMap::new())
+            {
                 assert!(!gateway_urls.is_empty());
                 let gateway_strings: Vec<&str> =
                     gateway_urls.iter().map(|g| g.url.as_str()).collect();

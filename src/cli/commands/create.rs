@@ -4,6 +4,7 @@ use anyhow::Result;
 use tracing::error;
 
 use crate::cli::config::{create_backup_config, load_config, load_token_config};
+use crate::envvar::ProcessEnv;
 
 pub async fn run(
     config_path: PathBuf,
@@ -15,7 +16,7 @@ pub async fn run(
 ) -> Result<()> {
     let token_config = load_token_config(&tokens_config_path).await?;
     let config = load_config(config_path.as_path())?;
-    let chain_config = config.chain_config()?;
+    let chain_config = config.chain_config(&ProcessEnv)?;
     let ipfs_pinning_configs = config.ipfs_pinning_providers().to_vec();
 
     // Validate IPFS pinning configuration

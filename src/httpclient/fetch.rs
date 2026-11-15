@@ -1,6 +1,7 @@
 use reqwest::{Method, header::CONTENT_LENGTH};
 use tracing::{info, warn};
 
+use crate::envvar::Env;
 use crate::ipfs::config::IpfsGatewayConfig;
 use crate::ipfs::url::{GatewayUrl, generate_url_for_gateways};
 
@@ -30,8 +31,8 @@ pub(crate) async fn head_url(
 
 /// Bearer token of the gateway that `url` points at, if it is one of the
 /// configured gateways and has a resolvable token.
-fn bearer_token_for(url: &str, gateways: &[IpfsGatewayConfig]) -> Option<String> {
-    generate_url_for_gateways(url, gateways)?
+fn bearer_token_for(url: &str, gateways: &[IpfsGatewayConfig], env: &dyn Env) -> Option<String> {
+    generate_url_for_gateways(url, gateways, env)?
         .into_iter()
         .find(|gw| gw.url == url)
         .and_then(|gw| gw.bearer_token)
@@ -44,18 +45,19 @@ pub(crate) fn create_http_error(status: reqwest::StatusCode, url: &str) -> anyho
 pub(crate) async fn try_fetch_response(
     url: &str,
     gateways: &[IpfsGatewayConfig],
+    env: &dyn Env,
 ) -> (
     anyhow::Result<reqwest::Response>,
     Option<reqwest::StatusCode>,
 ) {
-    match fetch_url(url, bearer_token_for(url, gateways)).await {
+    match fetch_url(url, bearer_token_for(url, gateways, env)).await {
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
                 (Ok(response), Some(status))
             } else {
                 let error = create_http_error(status, url);
-                match retry_with_gateways(url, error, gateways).await {
+                match retry_with_gateways(url, error, gateways, env).await {
                     Ok(alt_response) => {
                         let alt_status = alt_response.status();
                         if alt_status.is_success() {
@@ -71,7 +73,7 @@ pub(crate) async fn try_fetch_response(
                 }
             }
         }
-        Err(e) => match retry_with_gateways(url, e, gateways).await {
+        Err(e) => match retry_with_gateways(url, e, gateways, env).await {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() {
@@ -94,8 +96,9 @@ async fn retry_with_gateways_with_method(
     original_error: anyhow::Error,
     gateways: &[IpfsGatewayConfig],
     method: Method,
+    env: &dyn Env,
 ) -> anyhow::Result<reqwest::Response> {
-    let gateway_urls = match generate_url_for_gateways(url, gateways) {
+    let gateway_urls = match generate_url_for_gateways(url, gateways, env) {
         Some(urls) => {
             warn!(
                 "IPFS gateway error for {}, retrying with other gateways: {}",
@@ -152,19 +155,21 @@ pub(crate) async fn retry_with_gateways(
     url: &str,
     original_error: anyhow::Error,
     gateways: &[IpfsGatewayConfig],
+    env: &dyn Env,
 ) -> anyhow::Result<reqwest::Response> {
-    retry_with_gateways_with_method(url, original_error, gateways, Method::GET).await
+    retry_with_gateways_with_method(url, original_error, gateways, Method::GET, env).await
 }
 
 async fn try_get_content_length(
     url: &str,
     gateways: &[IpfsGatewayConfig],
+    env: &dyn Env,
 ) -> (anyhow::Result<u64>, Option<reqwest::StatusCode>) {
     info!(
         "HEAD denied for {}; falling back to GET for size estimation",
         url
     );
-    match fetch_url(url, bearer_token_for(url, gateways)).await {
+    match fetch_url(url, bearer_token_for(url, gateways, env)).await {
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
@@ -181,7 +186,8 @@ async fn try_get_content_length(
                 }
             } else {
                 let error = create_http_error(status, url);
-                match retry_with_gateways_with_method(url, error, gateways, Method::GET).await {
+                match retry_with_gateways_with_method(url, error, gateways, Method::GET, env).await
+                {
                     Ok(alt_response) => {
                         let alt_status = alt_response.status();
                         if alt_status.is_success() {
@@ -207,7 +213,7 @@ async fn try_get_content_length(
                 }
             }
         }
-        Err(e) => match retry_with_gateways_with_method(url, e, gateways, Method::GET).await {
+        Err(e) => match retry_with_gateways_with_method(url, e, gateways, Method::GET, env).await {
             Ok(response) => {
                 let status = response.status();
                 if status.is_success() {
@@ -246,8 +252,9 @@ fn extract_content_length(response: &reqwest::Response) -> Option<u64> {
 pub(crate) async fn try_head_content_length(
     url: &str,
     gateways: &[IpfsGatewayConfig],
+    env: &dyn Env,
 ) -> (anyhow::Result<u64>, Option<reqwest::StatusCode>) {
-    match head_url(url, bearer_token_for(url, gateways)).await {
+    match head_url(url, bearer_token_for(url, gateways, env)).await {
         Ok(response) => {
             let status = response.status();
             if status.is_success() {
@@ -263,10 +270,11 @@ pub(crate) async fn try_head_content_length(
                     )
                 }
             } else if status == reqwest::StatusCode::FORBIDDEN {
-                return try_get_content_length(url, gateways).await;
+                return try_get_content_length(url, gateways, env).await;
             } else {
                 let error = create_http_error(status, url);
-                match retry_with_gateways_with_method(url, error, gateways, Method::HEAD).await {
+                match retry_with_gateways_with_method(url, error, gateways, Method::HEAD, env).await
+                {
                     Ok(alt_response) => {
                         let alt_status = alt_response.status();
                         if alt_status.is_success() {
@@ -283,7 +291,7 @@ pub(crate) async fn try_head_content_length(
                             }
                         } else if alt_status == reqwest::StatusCode::FORBIDDEN {
                             let fallback_url = alt_response.url().to_string();
-                            return try_get_content_length(&fallback_url, gateways).await;
+                            return try_get_content_length(&fallback_url, gateways, env).await;
                         } else {
                             (
                                 Err(create_http_error(alt_status, alt_response.url().as_str())),
@@ -295,35 +303,39 @@ pub(crate) async fn try_head_content_length(
                 }
             }
         }
-        Err(e) => match retry_with_gateways_with_method(url, e, gateways, Method::HEAD).await {
-            Ok(response) => {
-                let status = response.status();
-                if status.is_success() {
-                    if let Some(len) = extract_content_length(&response) {
-                        (Ok(len), Some(status))
+        Err(e) => {
+            match retry_with_gateways_with_method(url, e, gateways, Method::HEAD, env).await {
+                Ok(response) => {
+                    let status = response.status();
+                    if status.is_success() {
+                        if let Some(len) = extract_content_length(&response) {
+                            (Ok(len), Some(status))
+                        } else {
+                            (
+                                Err(anyhow::anyhow!(
+                                    "HEAD response missing Content-Length for {}",
+                                    response.url()
+                                )),
+                                Some(status),
+                            )
+                        }
+                    } else if status == reqwest::StatusCode::FORBIDDEN {
+                        let fallback_url = response.url().to_string();
+                        return try_get_content_length(&fallback_url, gateways, env).await;
                     } else {
-                        (
-                            Err(anyhow::anyhow!(
-                                "HEAD response missing Content-Length for {}",
-                                response.url()
-                            )),
-                            Some(status),
-                        )
+                        (Err(create_http_error(status, url)), Some(status))
                     }
-                } else if status == reqwest::StatusCode::FORBIDDEN {
-                    let fallback_url = response.url().to_string();
-                    return try_get_content_length(&fallback_url, gateways).await;
-                } else {
-                    (Err(create_http_error(status, url)), Some(status))
                 }
+                Err(gateway_err) => (Err(gateway_err), None),
             }
-            Err(gateway_err) => (Err(gateway_err), None),
-        },
+        }
     }
 }
 
 #[cfg(test)]
 mod try_get_content_length_tests {
+    use std::collections::HashMap;
+
     use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType};
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
@@ -353,7 +365,7 @@ mod try_get_content_length_tests {
             .mount(&mock_server)
             .await;
 
-        let (res, status) = super::try_get_content_length(&url, &[]).await;
+        let (res, status) = super::try_get_content_length(&url, &[], &HashMap::new()).await;
         assert_eq!(status, Some(reqwest::StatusCode::OK));
         assert_eq!(res.unwrap(), 1234);
     }
@@ -379,7 +391,8 @@ mod try_get_content_length_tests {
 
         let gateways = vec![gw(&server_a.uri()), gw(&server_b.uri())];
 
-        let (res, status) = super::try_get_content_length(&original_url, &gateways).await;
+        let (res, status) =
+            super::try_get_content_length(&original_url, &gateways, &HashMap::new()).await;
         assert_eq!(status, Some(reqwest::StatusCode::OK));
         assert_eq!(res.unwrap(), 4096);
     }
@@ -387,6 +400,8 @@ mod try_get_content_length_tests {
 
 #[cfg(test)]
 mod try_fetch_response_tests {
+    use std::collections::HashMap;
+
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -425,7 +440,8 @@ mod try_fetch_response_tests {
             .await;
 
         let url = format!("{}{content_path}", origin.uri());
-        let (result, status) = super::try_fetch_response(&url, &[gw(&fallback.uri())]).await;
+        let (result, status) =
+            super::try_fetch_response(&url, &[gw(&fallback.uri())], &HashMap::new()).await;
         assert_eq!(status, Some(reqwest::StatusCode::NOT_FOUND));
         let message = format!("{:#}", result.unwrap_err());
         assert!(message.contains("404 Not Found"));
@@ -434,9 +450,8 @@ mod try_fetch_response_tests {
 
     #[tokio::test]
     async fn primary_gateway_request_carries_its_bearer_token() {
-        // SAFETY: Test-only. Other tests read the environment through std::env, which
-        // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
-        unsafe { std::env::set_var("NFTBK_TEST_PRIMARY_GW_TOKEN", "secret") };
+        let env = HashMap::from([("NFTBK_TEST_PRIMARY_GW_TOKEN", "secret")]);
+
         let mock_server = MockServer::start().await;
         let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
         let url = format!("{}/ipfs/{}?edition_number=20", mock_server.uri(), cid);
@@ -451,7 +466,7 @@ mod try_fetch_response_tests {
         let mut primary = gw(&mock_server.uri());
         primary.bearer_token_env = Some("NFTBK_TEST_PRIMARY_GW_TOKEN");
 
-        let (res, status) = super::try_fetch_response(&url, &[primary]).await;
+        let (res, status) = super::try_fetch_response(&url, &[primary], &env).await;
         assert_eq!(status, Some(reqwest::StatusCode::OK));
         assert!(res.is_ok());
     }
@@ -468,7 +483,7 @@ mod try_fetch_response_tests {
             .mount(&mock_server)
             .await;
 
-        let (res, status) = super::try_fetch_response(&url, &[]).await;
+        let (res, status) = super::try_fetch_response(&url, &[], &HashMap::new()).await;
         assert!(status.is_some());
         assert_eq!(status.unwrap(), reqwest::StatusCode::OK);
         assert!(res.is_ok());
@@ -489,7 +504,7 @@ mod try_fetch_response_tests {
             .mount(&mock_server)
             .await;
 
-        let (res, status) = super::try_fetch_response(&url, &[]).await;
+        let (res, status) = super::try_fetch_response(&url, &[], &HashMap::new()).await;
         assert!(status.is_some());
         assert_eq!(status.unwrap(), reqwest::StatusCode::NOT_FOUND);
         assert!(res.is_err());
@@ -510,7 +525,7 @@ mod try_fetch_response_tests {
             .mount(&mock_server)
             .await;
 
-        let (res, status) = super::try_fetch_response(&url, &[]).await;
+        let (res, status) = super::try_fetch_response(&url, &[], &HashMap::new()).await;
         assert!(status.is_some());
         assert_eq!(status.unwrap(), reqwest::StatusCode::INTERNAL_SERVER_ERROR);
         assert!(res.is_err());
@@ -545,7 +560,8 @@ mod try_fetch_response_tests {
         let gateways = vec![gw(&server_a.uri()), gw(&server_b.uri())];
 
         // Act
-        let (res, status) = super::try_fetch_response(&original_url, &gateways).await;
+        let (res, status) =
+            super::try_fetch_response(&original_url, &gateways, &HashMap::new()).await;
 
         // Assert
         assert!(res.is_ok());
@@ -574,7 +590,8 @@ mod try_fetch_response_tests {
         let gateways = vec![gw(dead_gateway_base), gw(&server_b.uri())];
 
         // Act
-        let (res, status) = super::try_fetch_response(&original_url, &gateways).await;
+        let (res, status) =
+            super::try_fetch_response(&original_url, &gateways, &HashMap::new()).await;
 
         // Assert
         assert!(res.is_ok());
@@ -586,6 +603,8 @@ mod try_fetch_response_tests {
 
 #[cfg(test)]
 mod retry_with_gateways_tests {
+    use std::collections::HashMap;
+
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -631,8 +650,13 @@ mod retry_with_gateways_tests {
         ];
 
         // Act
-        let res =
-            super::retry_with_gateways(&original_url, anyhow::anyhow!("orig err"), &gateways).await;
+        let res = super::retry_with_gateways(
+            &original_url,
+            anyhow::anyhow!("orig err"),
+            &gateways,
+            &HashMap::new(),
+        )
+        .await;
 
         // Assert
         assert!(res.is_ok());
@@ -671,8 +695,13 @@ mod retry_with_gateways_tests {
         ];
 
         // Act
-        let res =
-            super::retry_with_gateways(&original_url, anyhow::anyhow!("orig err"), &gateways).await;
+        let res = super::retry_with_gateways(
+            &original_url,
+            anyhow::anyhow!("orig err"),
+            &gateways,
+            &HashMap::new(),
+        )
+        .await;
 
         // Assert
         assert!(res.is_ok());
@@ -706,8 +735,13 @@ mod retry_with_gateways_tests {
         ];
 
         // Act
-        let res =
-            super::retry_with_gateways(&original_url, anyhow::anyhow!("orig err"), &gateways).await;
+        let res = super::retry_with_gateways(
+            &original_url,
+            anyhow::anyhow!("orig err"),
+            &gateways,
+            &HashMap::new(),
+        )
+        .await;
 
         // Assert
         assert!(res.is_ok());
@@ -746,8 +780,13 @@ mod retry_with_gateways_tests {
         ];
 
         // Act
-        let res =
-            super::retry_with_gateways(&original_url, anyhow::anyhow!("orig err"), &gateways).await;
+        let res = super::retry_with_gateways(
+            &original_url,
+            anyhow::anyhow!("orig err"),
+            &gateways,
+            &HashMap::new(),
+        )
+        .await;
 
         // Assert: error should reflect the last error (502)
         assert!(res.is_err());
@@ -765,7 +804,9 @@ mod retry_with_gateways_tests {
         let gateways = vec![gw("https://ipfs.io")];
 
         // Act
-        let res = super::retry_with_gateways(non_ipfs_url, original_error, &gateways).await;
+        let res =
+            super::retry_with_gateways(non_ipfs_url, original_error, &gateways, &HashMap::new())
+                .await;
 
         // Assert: should return the original error without trying IPFS gateways
         assert!(res.is_err());

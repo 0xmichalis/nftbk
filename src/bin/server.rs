@@ -4,7 +4,7 @@ use clap::Parser;
 use dotenvy::dotenv;
 use tracing::{error, info};
 
-use nftbk::envvar::{is_defined, should_enable_color};
+use nftbk::envvar::{ProcessEnv, is_defined, should_enable_color};
 use nftbk::logging;
 use nftbk::logging::LogLevel;
 use nftbk::server::config::{Config, load_and_validate_config};
@@ -68,7 +68,7 @@ async fn main() {
     // We are consuming config both from the environment and from the command line
     dotenv().ok();
     let args = Args::parse();
-    let enable_color = should_enable_color(args.no_color);
+    let enable_color = should_enable_color(args.no_color, &ProcessEnv);
     logging::init(args.log_level, enable_color);
     info!(
         "Version: {} {} (commit {})",
@@ -90,7 +90,7 @@ async fn main() {
         jwt_credentials,
         x402_config,
         ipfs_pinning_configs,
-    } = match load_and_validate_config(&args.config) {
+    } = match load_and_validate_config(&args.config, &ProcessEnv) {
         Ok(config) => config,
         Err(e) => {
             error!("Failed to load and validate config: {}", e);

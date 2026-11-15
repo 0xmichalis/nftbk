@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use tokio::fs;
 
+use crate::envvar::Env;
 use crate::ipfs::IpfsPinningConfig;
 use crate::server::config::ConfigRaw;
 use crate::types::{BackupConfig, ChainConfig, TokenConfig};
@@ -32,13 +33,13 @@ pub async fn load_token_config(path: &PathBuf) -> Result<TokenConfig> {
     Ok(token_config)
 }
 
-pub async fn load_chain_config(path: &PathBuf) -> Result<ChainConfig> {
+pub async fn load_chain_config(path: &PathBuf, env: &dyn Env) -> Result<ChainConfig> {
     let chains_content = fs::read_to_string(path)
         .await
         .context("Failed to read chains config file")?;
     let mut chain_config: ChainConfig =
         toml::from_str(&chains_content).context("Failed to parse chains config file")?;
-    chain_config.resolve_env_vars()?;
+    chain_config.resolve_env_vars(env)?;
     Ok(chain_config)
 }
 
@@ -166,7 +167,7 @@ tezos = "https://tezos.publicnode.com"
 "#;
             std::fs::write(temp_file.path(), config_content).unwrap();
 
-            let result = load_chain_config(&temp_file.path().to_path_buf()).await;
+            let result = load_chain_config(&temp_file.path().to_path_buf(), &HashMap::new()).await;
             assert!(result.is_ok());
 
             let config = result.unwrap();
@@ -183,9 +184,7 @@ tezos = "https://tezos.publicnode.com"
 
         #[tokio::test]
         async fn resolves_environment_variables() {
-            // SAFETY: Test-only. Other tests read the environment through std::env, which
-            // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
-            unsafe { std::env::set_var("TEST_RPC_URL", "https://test.example.com") };
+            let env = HashMap::from([("TEST_RPC_URL", "https://test.example.com")]);
 
             let temp_file = NamedTempFile::new().unwrap();
             let config_content = r#"
@@ -193,7 +192,7 @@ ethereum = "${TEST_RPC_URL}"
 "#;
             std::fs::write(temp_file.path(), config_content).unwrap();
 
-            let result = load_chain_config(&temp_file.path().to_path_buf()).await;
+            let result = load_chain_config(&temp_file.path().to_path_buf(), &env).await;
             assert!(result.is_ok());
 
             let config = result.unwrap();
@@ -201,10 +200,6 @@ ethereum = "${TEST_RPC_URL}"
                 config.0.get("eip155:1").unwrap(),
                 "https://test.example.com"
             );
-
-            // SAFETY: Test-only. Other tests read the environment through std::env, which
-            // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
-            unsafe { std::env::remove_var("TEST_RPC_URL") };
         }
 
         #[tokio::test]
@@ -215,7 +210,7 @@ ethereum = "${MISSING_VAR}"
 "#;
             std::fs::write(temp_file.path(), config_content).unwrap();
 
-            let result = load_chain_config(&temp_file.path().to_path_buf()).await;
+            let result = load_chain_config(&temp_file.path().to_path_buf(), &HashMap::new()).await;
             assert!(result.is_err());
             assert!(
                 result
@@ -228,7 +223,7 @@ ethereum = "${MISSING_VAR}"
         #[tokio::test]
         async fn returns_error_for_missing_file() {
             let non_existent_path = PathBuf::from("/non/existent/path.toml");
-            let result = load_chain_config(&non_existent_path).await;
+            let result = load_chain_config(&non_existent_path, &HashMap::new()).await;
             assert!(result.is_err());
             assert!(
                 result

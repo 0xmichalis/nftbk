@@ -4,7 +4,7 @@ use dotenvy::dotenv;
 use tracing::debug;
 
 use nftbk::cli::Cli;
-use nftbk::envvar::should_enable_color;
+use nftbk::envvar::{ProcessEnv, should_enable_color};
 use nftbk::logging;
 
 #[tokio::main]
@@ -12,7 +12,7 @@ async fn main() -> Result<()> {
     dotenv().ok();
     let cli = Cli::parse();
     let log_level = cli.log_level;
-    let enable_color = should_enable_color(cli.no_color);
+    let enable_color = should_enable_color(cli.no_color, &ProcessEnv);
     logging::init(log_level, enable_color);
     debug!(
         "Version: {} {} (commit {})",

@@ -3,6 +3,7 @@ use serde::Deserialize;
 
 use super::provider::IpfsPinningProvider;
 use super::{IpfsPinningClient, PinataClient};
+use crate::envvar::Env;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum IpfsGatewayType {
@@ -19,9 +20,9 @@ pub struct IpfsGatewayConfig {
 }
 
 impl IpfsGatewayConfig {
-    pub fn resolve_bearer_token(&self) -> Option<String> {
+    pub fn resolve_bearer_token(&self, env: &dyn Env) -> Option<String> {
         let env_name = self.bearer_token_env?;
-        std::env::var(env_name)
+        env.var(env_name)
             .ok()
             .filter(|token| !token.trim().is_empty())
     }
@@ -45,11 +46,14 @@ pub const IPFS_GATEWAYS: &[IpfsGatewayConfig] = &[
 /// Order gateways so that those with a resolvable bearer token are tried first.
 /// Authenticated gateways are far less likely to rate-limit or block requests
 /// than public ones, so they make the best primary choice.
-pub fn prioritize_authenticated(gateways: &[IpfsGatewayConfig]) -> Vec<IpfsGatewayConfig> {
+pub fn prioritize_authenticated(
+    gateways: &[IpfsGatewayConfig],
+    env: &dyn Env,
+) -> Vec<IpfsGatewayConfig> {
     let (authenticated, public): (Vec<_>, Vec<_>) = gateways
         .iter()
         .cloned()
-        .partition(|gw| gw.resolve_bearer_token().is_some());
+        .partition(|gw| gw.resolve_bearer_token(env).is_some());
     authenticated.into_iter().chain(public).collect()
 }
 
@@ -127,6 +131,8 @@ impl IpfsPinningConfig {
 
 #[cfg(test)]
 mod prioritize_authenticated_tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     const PATH: IpfsGatewayType = IpfsGatewayType::Path;
@@ -141,15 +147,13 @@ mod prioritize_authenticated_tests {
 
     #[test]
     fn authenticated_gateways_come_first_preserving_relative_order() {
-        // SAFETY: Test-only. Other tests read the environment through std::env, which
-        // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
-        unsafe { std::env::set_var("NFTBK_TEST_GW_TOKEN_A", "tok") };
+        let env = HashMap::from([("NFTBK_TEST_GW_TOKEN_A", "tok")]);
         let gateways = [
             gw("https://a", None),
             gw("https://b", Some("NFTBK_TEST_GW_TOKEN_A")),
             gw("https://c", None),
         ];
-        let ordered: Vec<&str> = prioritize_authenticated(&gateways)
+        let ordered: Vec<&str> = prioritize_authenticated(&gateways, &env)
             .iter()
             .map(|g| g.url)
             .collect();
@@ -158,11 +162,9 @@ mod prioritize_authenticated_tests {
 
     #[test]
     fn blank_token_is_treated_as_absent() {
-        // SAFETY: Test-only. Other tests read the environment through std::env, which
-        // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
-        unsafe { std::env::set_var("NFTBK_TEST_GW_TOKEN_BLANK", "  ") };
+        let env = HashMap::from([("NFTBK_TEST_GW_TOKEN_BLANK", "  ")]);
         let gateway = gw("https://a", Some("NFTBK_TEST_GW_TOKEN_BLANK"));
-        assert_eq!(gateway.resolve_bearer_token(), None);
+        assert_eq!(gateway.resolve_bearer_token(&env), None);
     }
 
     #[test]
@@ -171,7 +173,7 @@ mod prioritize_authenticated_tests {
             gw("https://a", None),
             gw("https://b", Some("NFTBK_TEST_GW_TOKEN_UNSET")),
         ];
-        let ordered: Vec<&str> = prioritize_authenticated(&gateways)
+        let ordered: Vec<&str> = prioritize_authenticated(&gateways, &HashMap::new())
             .iter()
             .map(|g| g.url)
             .collect();

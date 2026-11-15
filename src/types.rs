@@ -6,7 +6,7 @@ use std::sync::atomic::AtomicBool;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::envvar::resolve_env_placeholders;
+use crate::envvar::{Env, resolve_env_placeholders};
 
 /// Represents a token with its associated pin responses
 #[derive(Debug, Clone)]
@@ -37,7 +37,7 @@ pub struct ChainConfig(pub HashMap<String, String>);
 impl ChainConfig {
     /// Resolves environment variable references in the form ${VAR_NAME} in all values.
     /// Returns an error if any referenced environment variable is not set.
-    pub fn resolve_env_vars(&mut self) -> Result<()> {
+    pub fn resolve_env_vars(&mut self, env: &dyn Env) -> Result<()> {
         let mut normalized = HashMap::new();
         for (chain, endpoint) in self.0.drain() {
             let canonical = crate::chain::id::canonical_chain_id(&chain).to_string();
@@ -49,7 +49,7 @@ impl ChainConfig {
         }
         self.0 = normalized;
         for (key, value) in self.0.iter_mut() {
-            let resolved = resolve_env_placeholders(value).with_context(|| {
+            let resolved = resolve_env_placeholders(value, env).with_context(|| {
                 format!("Failed resolving env vars referenced in '{value}' for chain '{key}'")
             })?;
             *value = resolved;
