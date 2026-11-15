@@ -2320,20 +2320,6 @@ version = "0.1.1"
 notes = "This is a trivial crate."
 aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
 
-[[audits.mozilla.audits.proc-macro-error-attr2]]
-who = "Kagami Sascha Rosylight <saschanaz@outlook.com>"
-criteria = "safe-to-deploy"
-version = "2.0.0"
-notes = "No unsafe block."
-aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
-
-[[audits.mozilla.audits.proc-macro-error2]]
-who = "Kagami Sascha Rosylight <saschanaz@outlook.com>"
-criteria = "safe-to-deploy"
-version = "2.0.1"
-notes = "No unsafe block with a lovely `#![forbid(unsafe_code)]`."
-aggregated-from = "https://raw.githubusercontent.com/mozilla-firefox/firefox/main/supply-chain/audits.toml"
-
 [[audits.mozilla.audits.quinn-udp]]
 who = "Max Inden <mail@max-inden.de>"
 criteria = "safe-to-deploy"
