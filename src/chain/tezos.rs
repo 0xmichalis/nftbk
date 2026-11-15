@@ -109,16 +109,17 @@ impl crate::chain::NFTChainProcessor for TezosChainProcessor {
 
         // Helper function to add non-empty URLs
         let mut add_if_not_empty = |url: &Option<String>, name: &str| {
-            if let Some(url) = url {
-                if !url.is_empty() && seen.insert(url.clone()) {
-                    urls_to_download.push((
-                        url.clone(),
-                        Options {
-                            fallback_filename: Some(name.to_string()),
-                            overriden_filename: None,
-                        },
-                    ));
-                }
+            if let Some(url) = url
+                && !url.is_empty()
+                && seen.insert(url.clone())
+            {
+                urls_to_download.push((
+                    url.clone(),
+                    Options {
+                        fallback_filename: Some(name.to_string()),
+                        overriden_filename: None,
+                    },
+                ));
             }
         };
 
@@ -197,35 +198,33 @@ fn get_uri_from_token_metadata(json_value: &serde_json::Value) -> Option<String>
             for elt in seq_arr {
                 if let Some(obj) = elt.as_object() {
                     let args = obj.get("args").and_then(|a| a.as_array());
-                    if let Some(args) = args {
-                        if args.len() == 2 {
-                            let key = args[0].as_object().and_then(|b| {
-                                if let Some(s) = b.get("string").and_then(|v| v.as_str()) {
-                                    Some(s.to_string())
-                                } else if let Some(bytes) = b.get("bytes").and_then(|v| v.as_str())
-                                {
-                                    hex::decode(bytes)
-                                        .ok()
-                                        .and_then(|bytes| String::from_utf8(bytes).ok())
-                                } else {
-                                    None
-                                }
-                            });
-                            let value = args[1]
-                                .as_object()
-                                .and_then(|b| b.get("bytes"))
-                                .and_then(|v| v.as_str())
-                                .and_then(|hex_str| hex::decode(hex_str).ok())
-                                .and_then(|bytes| String::from_utf8(bytes).ok());
-                            if let (Some(key), Some(value)) = (key, value) {
-                                // Try to parse as JSON, otherwise store as string
-                                if let Ok(json_val) =
-                                    serde_json::from_str::<serde_json::Value>(&value)
-                                {
-                                    map.insert(key, json_val);
-                                } else {
-                                    map.insert(key, serde_json::Value::String(value));
-                                }
+                    if let Some(args) = args
+                        && args.len() == 2
+                    {
+                        let key = args[0].as_object().and_then(|b| {
+                            if let Some(s) = b.get("string").and_then(|v| v.as_str()) {
+                                Some(s.to_string())
+                            } else if let Some(bytes) = b.get("bytes").and_then(|v| v.as_str()) {
+                                hex::decode(bytes)
+                                    .ok()
+                                    .and_then(|bytes| String::from_utf8(bytes).ok())
+                            } else {
+                                None
+                            }
+                        });
+                        let value = args[1]
+                            .as_object()
+                            .and_then(|b| b.get("bytes"))
+                            .and_then(|v| v.as_str())
+                            .and_then(|hex_str| hex::decode(hex_str).ok())
+                            .and_then(|bytes| String::from_utf8(bytes).ok());
+                        if let (Some(key), Some(value)) = (key, value) {
+                            // Try to parse as JSON, otherwise store as string
+                            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&value)
+                            {
+                                map.insert(key, json_val);
+                            } else {
+                                map.insert(key, serde_json::Value::String(value));
                             }
                         }
                     }

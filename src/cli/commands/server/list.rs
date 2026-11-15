@@ -1,5 +1,5 @@
 use anyhow::Result;
-use prettytable::{row, Table};
+use prettytable::{Table, row};
 
 pub async fn run(server_address: String, show_errors: bool) -> Result<()> {
     let client =

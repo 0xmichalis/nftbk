@@ -1,5 +1,5 @@
 use nftbk::httpclient::HttpClient;
-use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
 #[tokio::test]
 async fn production_client_rejects_initial_private_destinations() {
@@ -16,10 +16,12 @@ async fn production_client_rejects_initial_private_destinations() {
             "Content URL must use HTTP(S) and a public destination"
         );
     }
-    assert!(client
-        .fetch(&internal.uri().replace("127.0.0.1", "localhost"))
-        .await
-        .is_err());
+    assert!(
+        client
+            .fetch(&internal.uri().replace("127.0.0.1", "localhost"))
+            .await
+            .is_err()
+    );
     assert_eq!(internal.received_requests().await.unwrap().len(), 0);
 }
 
@@ -49,11 +51,13 @@ async fn production_raw_croquet_requests_reject_private_destinations() {
 #[tokio::test]
 async fn production_client_ignores_environment_proxies() {
     if std::env::var_os("NFTBK_PROXY_TEST_CHILD").is_some() {
-        assert!(HttpClient::new()
-            .with_max_retries(0)
-            .fetch("http://content.invalid/")
-            .await
-            .is_err());
+        assert!(
+            HttpClient::new()
+                .with_max_retries(0)
+                .fetch("http://content.invalid/")
+                .await
+                .is_err()
+        );
         return;
     }
 

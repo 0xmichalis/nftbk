@@ -1,14 +1,14 @@
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use sha2::{Digest, Sha256};
 use tracing::info;
 
 use crate::ipfs::IpfsPinningConfig;
 use crate::server::auth::jwt::JwtCredential;
-use crate::server::database::r#trait::Database;
 use crate::server::database::Db;
+use crate::server::database::r#trait::Database;
 use crate::server::model::ProviderMap;
 use crate::server::storage::BlobStore;
 use crate::server::x402::X402Config;

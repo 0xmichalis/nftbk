@@ -647,19 +647,23 @@ mod confirm_payment_with_io_tests {
         }
         let mut output = vec![];
         let mut reader = std::io::Cursor::new(b"n\n");
-        assert!(!handler
-            .confirm_payment_with_io(
-                &address,
-                &requirements,
-                Err(anyhow::anyhow!("RPC unavailable")),
-                &mut output,
-                &mut reader
-            )
-            .await
-            .unwrap());
-        assert!(String::from_utf8(output)
-            .unwrap()
-            .contains("1234567 (failed to query decimals: RPC unavailable)"));
+        assert!(
+            !handler
+                .confirm_payment_with_io(
+                    &address,
+                    &requirements,
+                    Err(anyhow::anyhow!("RPC unavailable")),
+                    &mut output,
+                    &mut reader
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("1234567 (failed to query decimals: RPC unavailable)")
+        );
     }
 }
 

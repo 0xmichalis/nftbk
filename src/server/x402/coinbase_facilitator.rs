@@ -47,10 +47,10 @@ impl CoinbaseFacilitator {
         let token = generate_cdp_jwt(api_key_id, api_key_secret, method, host, url_path, None)
             .unwrap_or_default();
         let mut headers = HeaderMap::new();
-        if !token.is_empty() {
-            if let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}")) {
-                headers.insert("authorization", value);
-            }
+        if !token.is_empty()
+            && let Ok(value) = HeaderValue::from_str(&format!("Bearer {token}"))
+        {
+            headers.insert("authorization", value);
         }
         self.base_client.clone().with_headers(headers)
     }
@@ -124,8 +124,8 @@ mod verify_tests {
     use super::*;
     use serde_json::json;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     #[tokio::test]

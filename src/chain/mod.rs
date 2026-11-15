@@ -1,12 +1,12 @@
 use std::collections::HashSet;
 use std::sync::atomic::Ordering;
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use tracing::{debug, error, info, warn};
 
 use crate::content::extra::fetch_and_write_extra;
-use crate::content::{read_metadata, write_metadata, Options};
+use crate::content::{Options, read_metadata, write_metadata};
 use crate::errors::redact_urls;
 use crate::ipfs::url::extract_ipfs_cid;
 use crate::ipfs::{IpfsPinningProvider, PinRequest};
@@ -20,13 +20,13 @@ pub mod tezos;
 
 /// Check for shutdown signal and return error if shutdown is requested
 fn check_shutdown_signal(config: &crate::ProcessManagementConfig) -> anyhow::Result<()> {
-    if let Some(ref shutdown_flag) = config.shutdown_flag {
-        if shutdown_flag.load(Ordering::Relaxed) {
-            warn!("Received shutdown signal, stopping NFT processing");
-            return Err(anyhow::anyhow!(
-                "NFT processing interrupted by shutdown signal"
-            ));
-        }
+    if let Some(ref shutdown_flag) = config.shutdown_flag
+        && shutdown_flag.load(Ordering::Relaxed)
+    {
+        warn!("Received shutdown signal, stopping NFT processing");
+        return Err(anyhow::anyhow!(
+            "NFT processing interrupted by shutdown signal"
+        ));
     }
     Ok(())
 }
@@ -263,15 +263,15 @@ where
     }
 
     // If local storage is configured, write metadata
-    if let Some(output_path) = processor.output_path() {
-        if let Some(path) = process(
+    if let Some(output_path) = processor.output_path()
+        && let Some(path) = process(
             write_metadata(token_uri, token, output_path, metadata).await,
             format!("Failed to write metadata for {token}"),
             exit_on_error,
             archive_errors,
-        )? {
-            saved_path = Some(path);
-        }
+        )?
+    {
+        saved_path = Some(path);
     }
 
     Ok((pin_responses, saved_path))
@@ -471,15 +471,15 @@ where
         }
 
         // Fetch extra content if needed
-        if let Some(out) = output_path {
-            if let Some(extra_files) = process(
+        if let Some(out) = output_path
+            && let Some(extra_files) = process(
                 fetch_and_write_extra(&token, out, get_extra_content_uri(&metadata)).await,
                 format!("Failed to fetch extra content for {token}"),
                 config.exit_on_error,
                 &mut archive_errors,
-            )? {
-                files.extend(extra_files);
-            }
+            )?
+        {
+            files.extend(extra_files);
         }
     }
 
@@ -582,24 +582,25 @@ where
             }
         }
 
-        if let Some(extra_uri) = get_extra_content_uri(&metadata) {
-            if !extra_uri.is_empty() && seen_urls.insert(extra_uri.to_string()) {
-                let size = match processor.http_client().head_content_length(extra_uri).await {
-                    Ok(size) => size,
-                    Err(err) => {
-                        warn!(
-                            token = %token,
-                            url = %redact_urls(extra_uri),
-                            error = %redact_urls(&err.to_string()),
-                            "Failed to HEAD extra content during size estimation; skipping URL"
-                        );
-                        continue;
-                    }
-                };
-                total_size = total_size
-                    .checked_add(size)
-                    .context("Total size overflow while adding extra content")?;
-            }
+        if let Some(extra_uri) = get_extra_content_uri(&metadata)
+            && !extra_uri.is_empty()
+            && seen_urls.insert(extra_uri.to_string())
+        {
+            let size = match processor.http_client().head_content_length(extra_uri).await {
+                Ok(size) => size,
+                Err(err) => {
+                    warn!(
+                        token = %token,
+                        url = %redact_urls(extra_uri),
+                        error = %redact_urls(&err.to_string()),
+                        "Failed to HEAD extra content during size estimation; skipping URL"
+                    );
+                    continue;
+                }
+            };
+            total_size = total_size
+                .checked_add(size)
+                .context("Total size overflow while adding extra content")?;
         }
     }
 
@@ -611,7 +612,7 @@ mod process_tests {
     use super::*;
     use anyhow::anyhow;
     use std::time::Duration;
-    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     #[tokio::test]
     async fn removes_rpc_key_from_recorded_transport_errors() {
@@ -816,14 +817,14 @@ mod process_nfts_tests {
     use super::*;
     use crate::content::Options;
     use crate::ipfs::IpfsPinningClient;
-    use crate::{chain::common::ContractTokenId, ProcessManagementConfig};
+    use crate::{ProcessManagementConfig, chain::common::ContractTokenId};
     use anyhow::anyhow;
-    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
     use tempfile::TempDir;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     // Mock metadata type for testing
@@ -1385,8 +1386,8 @@ mod process_nfts_tests {
 
         // Verify that archive operations succeeded (metadata writing works)
         assert_eq!(archive_out.files.len(), 1); // Should have metadata.json
-                                                // Note: IPFS URLs can't be downloaded via HTTP, so content download errors go to archive_errors
-                                                // This is expected behavior - only metadata.json gets written, content download fails
+        // Note: IPFS URLs can't be downloaded via HTTP, so content download errors go to archive_errors
+        // This is expected behavior - only metadata.json gets written, content download fails
 
         // Verify that IPFS operations failed and errors went to ipfs_errors
         assert_eq!(ipfs_out.pin_requests.len(), 0); // No successful pins
@@ -1584,10 +1585,12 @@ mod process_nfts_tests {
         assert!(ipfs_out.errors.is_empty(), "{:?}", ipfs_out.errors);
         // metadata.json (already present) plus the image from the local metadata
         assert_eq!(archive_out.files.len(), 2);
-        assert!(archive_out
-            .files
-            .iter()
-            .any(|f| f.file_name().unwrap() == "metadata.json"));
+        assert!(
+            archive_out
+                .files
+                .iter()
+                .any(|f| f.file_name().unwrap() == "metadata.json")
+        );
     }
 
     #[tokio::test]
@@ -1779,10 +1782,10 @@ mod process_nfts_tests {
 #[cfg(test)]
 mod size_nfts_tests {
     use super::*;
+    use crate::ProcessManagementConfig;
     use crate::chain::common::ContractTokenId;
     use crate::content::Options;
     use crate::ipfs::IpfsPinningProvider;
-    use crate::ProcessManagementConfig;
     use std::sync::Arc;
 
     #[derive(Clone)]

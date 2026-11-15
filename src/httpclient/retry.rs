@@ -1,4 +1,4 @@
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use std::time::Duration;
 use tokio::time::sleep;
 use tracing::warn;
@@ -168,11 +168,11 @@ mod tests {
     mod retry_operation_tests {
         use super::*;
         use std::sync::{
-            atomic::{AtomicU32, Ordering},
             Arc,
+            atomic::{AtomicU32, Ordering},
         };
         use tokio::task::yield_now;
-        use tokio::time::{advance, Duration as TokioDuration};
+        use tokio::time::{Duration as TokioDuration, advance};
 
         async fn advance_n(n: usize) {
             for _ in 0..n {

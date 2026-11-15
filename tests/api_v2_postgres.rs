@@ -1,12 +1,12 @@
 //! Explicitly opt-in PostgreSQL integration tests. Unit tests mock Database.
-use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use alloy_sol_types::SolValue;
-use axum::body::{to_bytes, Body};
+use axum::body::{Body, to_bytes};
 use axum::http::{Method, Request, StatusCode};
 use base64::Engine;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sqlx::postgres::PgConnectOptions;
 use sqlx::{Connection, PgConnection, PgPool};
 use tower::ServiceExt;
@@ -14,13 +14,13 @@ use uuid::Uuid;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use nftbk::ChainConfig;
 use nftbk::model::*;
-use nftbk::server::database::r#trait::{Create, Creation, Database, DatabaseError, Progress};
 use nftbk::server::database::Db;
+use nftbk::server::database::r#trait::{Create, Creation, Database, DatabaseError, Progress};
 use nftbk::server::router::build_router;
 use nftbk::server::storage::BlobStore;
-use nftbk::server::{workers, AppState};
-use nftbk::ChainConfig;
+use nftbk::server::{AppState, workers};
 
 struct TestDatabase {
     admin: PgPool,
@@ -360,10 +360,12 @@ async fn captures_original_metadata_and_runs_independent_archive_and_download_li
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
-    assert!(to_bytes(response.into_body(), 100)
-        .await
-        .unwrap()
-        .is_empty());
+    assert!(
+        to_bytes(response.into_body(), 100)
+            .await
+            .unwrap()
+            .is_empty()
+    );
     let mut zip = zip::ZipArchive::new(std::io::Cursor::new(archive_bytes)).unwrap();
     let mut archived_metadata = Vec::new();
     std::io::Read::read_to_end(
@@ -463,12 +465,14 @@ async fn fences_stale_workers_and_scopes_resource_reads_to_the_owner() {
         .await
         .unwrap();
     let id = created["id"].as_str().unwrap();
-    assert!(database
-        .db
-        .get(Resource::Backup, &other, id)
-        .await
-        .unwrap()
-        .is_none());
+    assert!(
+        database
+            .db
+            .get(Resource::Backup, &other, id)
+            .await
+            .unwrap()
+            .is_none()
+    );
     let first = database.db.claim().await.unwrap().unwrap();
     sqlx::query(
         "UPDATE operations SET lease_until=now()-interval '1 second' WHERE id=$1::text::uuid",

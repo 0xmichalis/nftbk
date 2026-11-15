@@ -4,24 +4,24 @@ use axum::body::Body;
 use axum::extract::{
     FromRequest, FromRequestParts, OriginalUri, Path, Query, Request, State as AxumState,
 };
-use axum::http::{header, request::Parts, HeaderMap, StatusCode};
+use axum::http::{HeaderMap, StatusCode, header, request::Parts};
 use axum::response::{IntoResponse, Response};
 use axum::{Extension, Json};
 use chrono::Utc;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
+use crate::server::AppState;
 use crate::server::api::{ApiProblem, ProblemJson};
 use crate::server::billing;
 use crate::server::database::r#trait::{Create, Creation, DatabaseError, Page};
 use crate::server::model::*;
-use crate::server::storage::{sign_download, verify_download, DownloadGrant};
-use crate::server::AppState;
+use crate::server::storage::{DownloadGrant, sign_download, verify_download};
 
 #[derive(Debug)]
 pub struct ApiError(pub ApiProblem);
@@ -136,22 +136,21 @@ impl FromRequestParts<AppState> for ApiPage {
             crate::chain::id::validate_chain_id(chain_id)
                 .map_err(|e| problem(422, "invalid_chain_id", &e.to_string()))?;
         }
-        if let Some(address) = &mut page.contract_address {
-            if page
+        if let Some(address) = &mut page.contract_address
+            && (page
                 .chain_id
                 .as_ref()
                 .is_some_and(|c| c.starts_with("eip155:"))
-                || address.starts_with("0x")
-            {
-                let parsed: alloy_primitives::Address = address.parse().map_err(|_| {
-                    problem(
-                        422,
-                        "invalid_contract_address",
-                        "Invalid EVM contract address",
-                    )
-                })?;
-                *address = format!("{parsed:#x}");
-            }
+                || address.starts_with("0x"))
+        {
+            let parsed: alloy_primitives::Address = address.parse().map_err(|_| {
+                problem(
+                    422,
+                    "invalid_contract_address",
+                    "Invalid EVM contract address",
+                )
+            })?;
+            *address = format!("{parsed:#x}");
         }
         if let Some(token_id) = &mut page.token_id {
             if token_id.is_empty() || !token_id.bytes().all(|b| b.is_ascii_digit()) {
@@ -224,7 +223,7 @@ fn normalize(state: &AppState, specification: &mut Specification) -> Result<(), 
                     422,
                     "pinning_unavailable",
                     "No IPFS providers are configured",
-                ))
+                ));
             }
             OutputRequest::Archive {
                 retention_days: Some(days),
@@ -234,7 +233,7 @@ fn normalize(state: &AppState, specification: &mut Specification) -> Result<(), 
                     422,
                     "retention_unavailable",
                     "Requested retention exceeds this server's configured retention",
-                ))
+                ));
             }
             _ => {}
         }
@@ -244,10 +243,10 @@ fn normalize(state: &AppState, specification: &mut Specification) -> Result<(), 
 fn redact_failures(value: &mut Value) {
     match value {
         Value::Object(object) => {
-            if let Some(message) = object.get_mut("error").and_then(|e| e.get_mut("message")) {
-                if let Some(text) = message.as_str() {
-                    *message = json!(crate::errors::redact_urls(text));
-                }
+            if let Some(message) = object.get_mut("error").and_then(|e| e.get_mut("message"))
+                && let Some(text) = message.as_str()
+            {
+                *message = json!(crate::errors::redact_urls(text));
             }
             for child in object.values_mut() {
                 redact_failures(child);
@@ -303,10 +302,10 @@ fn created(resource: Resource, value: Value, settlement: Option<String>) -> Resp
     response
         .headers_mut()
         .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
-    if let Some(settlement) = settlement {
-        if let Ok(header) = settlement.parse() {
-            response.headers_mut().insert("x-payment-response", header);
-        }
+    if let Some(settlement) = settlement
+        && let Ok(header) = settlement.parse()
+    {
+        response.headers_mut().insert("x-payment-response", header);
     }
     response
 }
@@ -618,7 +617,11 @@ async fn output_specification(
             .flat_map(|i| &i.assets)
             .any(|a| a.state == State::Ready && a.sha256.is_none())
     {
-        return Err(problem(409,"source_unavailable","This snapshot has assets without retained bytes; request a fresh snapshot with an archive output"));
+        return Err(problem(
+            409,
+            "source_unavailable",
+            "This snapshot has assets without retained bytes; request a fresh snapshot with an archive output",
+        ));
     }
     let mut specification = Specification {
         nfts: items.into_iter().map(|i| i.nft).collect(),
@@ -1060,20 +1063,17 @@ pub async fn content(
     if method == axum::http::Method::GET
         && !headers.contains_key(header::RANGE)
         && !state.unsafe_skip_checksum_check
+        && let Some(digest) = &archive.sha256
+        && crate::server::hashing::compute_file_sha256(&path)
+            .await
+            .map_err(ApiError::internal)?
+            != *digest
     {
-        if let Some(digest) = &archive.sha256 {
-            if crate::server::hashing::compute_file_sha256(&path)
-                .await
-                .map_err(ApiError::internal)?
-                != *digest
-            {
-                return Err(problem(
-                    500,
-                    "integrity_failure",
-                    "Archive failed its integrity check",
-                ));
-            }
-        }
+        return Err(problem(
+            500,
+            "integrity_failure",
+            "Archive failed its integrity check",
+        ));
     }
     let range = if headers
         .get(header::IF_RANGE)

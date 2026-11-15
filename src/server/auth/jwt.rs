@@ -1,9 +1,9 @@
 use base64::Engine;
 use josekit::jwk::Jwk;
-use josekit::jws::alg::eddsa::EddsaJwsAlgorithm;
-use josekit::jws::JwsHeader;
 use josekit::jws::ES256;
-use josekit::jwt::{decode_with_verifier, JwtPayload};
+use josekit::jws::JwsHeader;
+use josekit::jws::alg::eddsa::EddsaJwsAlgorithm;
+use josekit::jwt::{JwtPayload, decode_with_verifier};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -52,10 +52,10 @@ pub async fn verify_jwt(
     }
 
     // Check expiration
-    if let Some(exp) = payload.expires_at() {
-        if exp < SystemTime::now() {
-            return Err("JWT expired".to_string());
-        }
+    if let Some(exp) = payload.expires_at()
+        && exp < SystemTime::now()
+    {
+        return Err("JWT expired".to_string());
     }
 
     let claims = JwtClaims {

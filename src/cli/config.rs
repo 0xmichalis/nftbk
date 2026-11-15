@@ -116,10 +116,12 @@ tezos = ["KT1ABC:1"]
             let non_existent_path = PathBuf::from("/non/existent/path.toml");
             let result = load_token_config(&non_existent_path).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to read tokens config file"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to read tokens config file")
+            );
         }
 
         #[tokio::test]
@@ -130,10 +132,12 @@ tezos = ["KT1ABC:1"]
 
             let result = load_token_config(&temp_file.path().to_path_buf()).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to parse tokens config file"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to parse tokens config file")
+            );
         }
 
         #[tokio::test]
@@ -179,7 +183,9 @@ tezos = "https://tezos.publicnode.com"
 
         #[tokio::test]
         async fn resolves_environment_variables() {
-            std::env::set_var("TEST_RPC_URL", "https://test.example.com");
+            // SAFETY: Test-only. Other tests read the environment through std::env, which
+            // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+            unsafe { std::env::set_var("TEST_RPC_URL", "https://test.example.com") };
 
             let temp_file = NamedTempFile::new().unwrap();
             let config_content = r#"
@@ -196,7 +202,9 @@ ethereum = "${TEST_RPC_URL}"
                 "https://test.example.com"
             );
 
-            std::env::remove_var("TEST_RPC_URL");
+            // SAFETY: Test-only. Other tests read the environment through std::env, which
+            // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+            unsafe { std::env::remove_var("TEST_RPC_URL") };
         }
 
         #[tokio::test]
@@ -209,10 +217,12 @@ ethereum = "${MISSING_VAR}"
 
             let result = load_chain_config(&temp_file.path().to_path_buf()).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed resolving env vars"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed resolving env vars")
+            );
         }
 
         #[tokio::test]
@@ -220,10 +230,12 @@ ethereum = "${MISSING_VAR}"
             let non_existent_path = PathBuf::from("/non/existent/path.toml");
             let result = load_chain_config(&non_existent_path).await;
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to read chains config file"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to read chains config file")
+            );
         }
     }
 
@@ -261,10 +273,12 @@ bearer_token_env = "PINATA_TOKEN"
             let non_existent_path = "/non/existent/path.toml".to_string();
             let result = load_ipfs_config(Some(&non_existent_path));
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to read IPFS config file"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to read IPFS config file")
+            );
         }
 
         #[test]
@@ -276,10 +290,12 @@ bearer_token_env = "PINATA_TOKEN"
             let path = temp_file.path().to_string_lossy().to_string();
             let result = load_ipfs_config(Some(&path));
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to parse IPFS config file"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to parse IPFS config file")
+            );
         }
     }
 

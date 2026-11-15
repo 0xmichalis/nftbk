@@ -3,7 +3,7 @@ use async_compression::tokio::bufread::GzipDecoder;
 use std::path::Path;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
 
-use super::limits::{check_size, response_reader, MAX_FILE_BYTES};
+use super::limits::{MAX_FILE_BYTES, check_size, response_reader};
 
 pub(crate) async fn stream_reader_to_file<R: AsyncRead + Unpin>(
     reader: &mut R,
@@ -31,12 +31,12 @@ pub(crate) async fn stream_http_to_file(
     let mut file_path = file_path.to_path_buf();
     let (detected_ext, prefix_buf) =
         crate::content::extensions::detect_extension_from_stream(&mut reader).await;
-    if !crate::content::extensions::has_known_extension(&file_path) {
-        if let Some(detected_ext) = detected_ext {
-            let current_path_str = file_path.to_string_lossy();
-            tracing::debug!("Appending detected media extension: {}", detected_ext);
-            file_path = std::path::PathBuf::from(format!("{current_path_str}.{detected_ext}"));
-        }
+    if !crate::content::extensions::has_known_extension(&file_path)
+        && let Some(detected_ext) = detected_ext
+    {
+        let current_path_str = file_path.to_string_lossy();
+        tracing::debug!("Appending detected media extension: {}", detected_ext);
+        file_path = std::path::PathBuf::from(format!("{current_path_str}.{detected_ext}"));
     }
 
     let mut reader = prefix_buf.as_slice().chain(reader);
@@ -130,8 +130,8 @@ mod stream_http_to_file_tests {
     use futures_util::StreamExt;
     use tempfile::TempDir;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     #[tokio::test]
@@ -286,11 +286,11 @@ mod stream_http_to_file_tests {
 #[cfg(test)]
 mod stream_gzip_http_to_file_tests {
     use super::*;
-    use flate2::{write::GzEncoder, Compression};
+    use flate2::{Compression, write::GzEncoder};
     use tempfile::TempDir;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     #[tokio::test]
@@ -302,9 +302,11 @@ mod stream_gzip_http_to_file_tests {
         let out = TempDir::new().unwrap();
         let file_path = out.path().join("expanded.bin");
 
-        assert!(stream_gzip_http_to_file(response, &file_path)
-            .await
-            .is_err());
+        assert!(
+            stream_gzip_http_to_file(response, &file_path)
+                .await
+                .is_err()
+        );
         assert!(!file_path.exists());
     }
 

@@ -1,16 +1,16 @@
 use std::sync::atomic::Ordering;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use futures_util::FutureExt;
 use serde_json::json;
 use tokio::task::JoinHandle;
 use tracing::{error, warn};
 
 use crate::ipfs::PinRequest;
+use crate::server::AppState;
 use crate::server::database::r#trait::{ManagedPin, PinUpdate, Progress};
 use crate::server::model::*;
 use crate::server::snapshot::{build_archive, capture, failure, quote};
-use crate::server::AppState;
 
 pub fn spawn_workers(parallelism: usize, state: AppState) -> Vec<JoinHandle<()>> {
     (0..parallelism.max(1))
@@ -188,7 +188,10 @@ async fn pin(state: &AppState, claim: &Claim) -> Result<()> {
                         .submitted_at
                         .is_some_and(|at| chrono::Utc::now() - at > chrono::Duration::minutes(15))
                 {
-                    let error = failure("pin_reconciliation_required", "The provider has not confirmed this submission; reconcile the remote request before retrying");
+                    let error = failure(
+                        "pin_reconciliation_required",
+                        "The provider has not confirmed this submission; reconcile the remote request before retrying",
+                    );
                     state
                         .db
                         .update_pin(
@@ -290,11 +293,11 @@ async fn pin(state: &AppState, claim: &Claim) -> Result<()> {
 
 async fn delete_archive(state: &AppState, claim: &Claim) -> Result<()> {
     let context = state.db.context(claim).await?;
-    if let Some(key) = context["storage_key"].as_str() {
-        if !key.starts_with("blobs/") {
-            state.storage.remove(key).await?;
-            state.storage.remove(&format!("{key}.sha256")).await?;
-        }
+    if let Some(key) = context["storage_key"].as_str()
+        && !key.starts_with("blobs/")
+    {
+        state.storage.remove(key).await?;
+        state.storage.remove(&format!("{key}.sha256")).await?;
     }
     state.db.progress(claim, Progress::Deleted).await?;
     Ok(())
@@ -344,7 +347,9 @@ async fn delete_backup(state: &AppState, claim: &Claim) -> Result<()> {
                 .delete(Resource::Archive, &claim.owner_id, &archive.id)
                 .await?;
             if operation.state == "failed" {
-                bail!("Archive deletion failed; retry its operation before completing backup deletion");
+                bail!(
+                    "Archive deletion failed; retry its operation before completing backup deletion"
+                );
             }
             pending = true;
         }

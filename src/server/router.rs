@@ -1,18 +1,18 @@
+use axum::Router;
 use axum::extract::{Request, State};
-use axum::http::{header, HeaderMap};
+use axum::http::{HeaderMap, header};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
-use axum::Router;
 use subtle::ConstantTimeEq;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+use crate::server::AppState;
 use crate::server::api::ApiProblem;
 use crate::server::auth::jwt::verify_jwt;
 use crate::server::handlers::*;
 use crate::server::model::*;
-use crate::server::AppState;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -84,14 +84,13 @@ pub async fn authenticate(state: &AppState, headers: &HeaderMap) -> Result<Strin
                 &credential.audience,
             )
             .await
+                && !claims.sub.is_empty()
             {
-                if !claims.sub.is_empty() {
-                    principal = Some(Principal {
-                        issuer: claims.iss,
-                        subject: claims.sub,
-                    });
-                    break;
-                }
+                principal = Some(Principal {
+                    issuer: claims.iss,
+                    subject: claims.sub,
+                });
+                break;
             }
         }
         principal.ok_or_else(|| problem(401, "unauthorized", "Bearer authentication failed"))?
@@ -141,13 +140,13 @@ pub fn build_router(state: AppState) -> Router {
 mod build_router_tests {
     use std::sync::Arc;
 
-    use axum::body::{to_bytes, Body};
+    use axum::body::{Body, to_bytes};
     use axum::http::{Method, Request, StatusCode};
-    use serde_json::{json, Value};
+    use serde_json::{Value, json};
     use tower::ServiceExt;
 
     use super::*;
-    use crate::server::database::mock::{state, MockDatabase, OWNER};
+    use crate::server::database::mock::{MockDatabase, OWNER, state};
     use crate::server::database::r#trait::Creation;
 
     #[tokio::test]
@@ -254,10 +253,12 @@ mod build_router_tests {
                 serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap())
                     .unwrap();
             assert_eq!(problem["status"], status.as_u16());
-            assert!(problem["type"]
-                .as_str()
-                .unwrap()
-                .starts_with("urn:nftbk:problem:"));
+            assert!(
+                problem["type"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("urn:nftbk:problem:")
+            );
         }
     }
 

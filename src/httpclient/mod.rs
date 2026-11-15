@@ -5,19 +5,19 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::dns::{Addrs, Name, Resolve, Resolving};
-use reqwest::{redirect, ClientBuilder, Method, RequestBuilder};
+use reqwest::{ClientBuilder, Method, RequestBuilder, redirect};
 use tracing::info;
 use url::{Host, Url};
 
 use crate::content::dedup::hard_link_to_identical_sibling;
 use crate::content::get_filename;
-use crate::content::{extensions, try_exists, write_and_postprocess_file, Options};
+use crate::content::{Options, extensions, try_exists, write_and_postprocess_file};
 use crate::httpclient::fetch::{try_fetch_response, try_head_content_length};
-use crate::httpclient::limits::{data_url_bytes, response_bytes, MAX_BUFFER_BYTES, MAX_FILE_BYTES};
+use crate::httpclient::limits::{MAX_BUFFER_BYTES, MAX_FILE_BYTES, data_url_bytes, response_bytes};
 use crate::httpclient::retry::{retry_operation, should_retry};
 use crate::httpclient::stream::stream_http_to_file;
 use crate::ipfs::config::{
-    prioritize_authenticated, IpfsGatewayConfig, IpfsGatewayType, IPFS_GATEWAYS,
+    IPFS_GATEWAYS, IpfsGatewayConfig, IpfsGatewayType, prioritize_authenticated,
 };
 use crate::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES;
 use crate::url::{is_data_url, resolve_url_with_gateways};
@@ -193,12 +193,12 @@ impl HttpClient {
 
         if is_data_url(url) {
             let content = data_url_bytes(url, MAX_FILE_BYTES)?;
-            if !extensions::has_known_extension(&file_path) {
-                if let Some(detected_ext) = extensions::detect_media_extension(&content) {
-                    let current_path_str = file_path.to_string_lossy();
-                    tracing::debug!("Appending detected media extension: {}", detected_ext);
-                    file_path = PathBuf::from(format!("{current_path_str}.{detected_ext}"));
-                }
+            if !extensions::has_known_extension(&file_path)
+                && let Some(detected_ext) = extensions::detect_media_extension(&content)
+            {
+                let current_path_str = file_path.to_string_lossy();
+                tracing::debug!("Appending detected media extension: {}", detected_ext);
+                file_path = PathBuf::from(format!("{current_path_str}.{detected_ext}"));
             }
 
             info!("Saving {} (data url)", file_path.display());
@@ -591,10 +591,12 @@ mod public_resolver_tests {
 
     #[tokio::test]
     async fn rejects_localhost_from_the_system_resolver() {
-        assert!(PublicResolver
-            .resolve("localhost".parse().unwrap())
-            .await
-            .is_err());
+        assert!(
+            PublicResolver
+                .resolve("localhost".parse().unwrap())
+                .await
+                .is_err()
+        );
     }
 }
 
@@ -649,8 +651,8 @@ mod fetch_and_write_tests {
     use std::os::unix::fs::MetadataExt;
     use tempfile::TempDir;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     const PNG_1X1: &[u8] = &[
@@ -768,8 +770,8 @@ mod fetch_tests {
     use super::*;
     use crate::ipfs::config::IpfsGatewayType;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     #[tokio::test]
@@ -831,11 +833,13 @@ mod fetch_tests {
             .mount(&server)
             .await;
 
-        assert!(HttpClient::new()
-            .with_max_retries(0)
-            .fetch(&server.uri())
-            .await
-            .is_err());
+        assert!(
+            HttpClient::new()
+                .with_max_retries(0)
+                .fetch(&server.uri())
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
@@ -1052,8 +1056,8 @@ mod fetch_tests {
 mod head_content_length_tests {
     use super::*;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     #[tokio::test]
@@ -1130,10 +1134,10 @@ mod head_content_length_tests {
 #[cfg(test)]
 mod fetch_and_stream_to_file_tests {
     use super::*;
-    use flate2::{write::GzEncoder, Compression};
+    use flate2::{Compression, write::GzEncoder};
     use std::io::Write;
     use tempfile::TempDir;
-    use wiremock::{matchers::method, Mock, MockServer, ResponseTemplate};
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
 
     #[tokio::test]
     async fn retries_failed_body_and_replaces_partial_file() {

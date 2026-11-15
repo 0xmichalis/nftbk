@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
@@ -240,11 +240,13 @@ mod verify_download_tests {
         assert!(verify_download(&key, &token, "other").is_err());
         assert!(verify_download(&key, &format!("x{token}"), &grant.archive_id).is_err());
         grant.expires_at = Utc::now() - chrono::Duration::seconds(1);
-        assert!(verify_download(
-            &key,
-            &sign_download(&key, &grant).unwrap(),
-            &grant.archive_id
-        )
-        .is_err());
+        assert!(
+            verify_download(
+                &key,
+                &sign_download(&key, &grant).unwrap(),
+                &grant.archive_id
+            )
+            .is_err()
+        );
     }
 }

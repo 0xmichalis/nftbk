@@ -1,8 +1,8 @@
-use reqwest::{header::CONTENT_LENGTH, Method};
+use reqwest::{Method, header::CONTENT_LENGTH};
 use tracing::{info, warn};
 
 use crate::ipfs::config::IpfsGatewayConfig;
-use crate::ipfs::url::{generate_url_for_gateways, GatewayUrl};
+use crate::ipfs::url::{GatewayUrl, generate_url_for_gateways};
 
 async fn send_request(
     method: Method,
@@ -326,8 +326,8 @@ pub(crate) async fn try_head_content_length(
 mod try_get_content_length_tests {
     use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType};
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     fn leak_str(s: String) -> &'static str {
@@ -388,8 +388,8 @@ mod try_get_content_length_tests {
 #[cfg(test)]
 mod try_fetch_response_tests {
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType};
@@ -434,7 +434,9 @@ mod try_fetch_response_tests {
 
     #[tokio::test]
     async fn primary_gateway_request_carries_its_bearer_token() {
-        std::env::set_var("NFTBK_TEST_PRIMARY_GW_TOKEN", "secret");
+        // SAFETY: Test-only. Other tests read the environment through std::env, which
+        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        unsafe { std::env::set_var("NFTBK_TEST_PRIMARY_GW_TOKEN", "secret") };
         let mock_server = MockServer::start().await;
         let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
         let url = format!("{}/ipfs/{}?edition_number=20", mock_server.uri(), cid);
@@ -585,8 +587,8 @@ mod try_fetch_response_tests {
 #[cfg(test)]
 mod retry_with_gateways_tests {
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType};
@@ -775,8 +777,8 @@ mod retry_with_gateways_tests {
 #[cfg(test)]
 mod fetch_url_tests {
     use wiremock::{
-        matchers::{header, method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path},
     };
 
     #[tokio::test]

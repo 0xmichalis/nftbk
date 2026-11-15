@@ -263,11 +263,11 @@ impl IpfsPinningProvider for IpfsPinningClient {
 
 #[cfg(test)]
 mod tests {
+    use crate::USER_AGENT;
     use crate::ipfs::{
         IpfsPinningClient, IpfsPinningProvider, Pin, PinOrigins, PinResponseStatus, PinStatus,
         PinsListQuery,
     };
-    use crate::USER_AGENT;
     use wiremock::matchers::{
         body_partial_json, header, header_exists, method, path, path_regex, query_param,
     };
@@ -428,8 +428,8 @@ mod find_pin_tests {
     use super::*;
     use serde_json::json;
     use wiremock::{
-        matchers::{method, path, query_param},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path, query_param},
     };
 
     #[tokio::test]

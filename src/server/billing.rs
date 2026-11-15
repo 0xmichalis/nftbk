@@ -6,10 +6,10 @@ use sha2::{Digest, Sha256};
 use x402_types::facilitator::Facilitator;
 use x402_types::proto::{self, v1};
 
-use crate::server::database::r#trait::{PaymentUpdate, QuoteTerms};
-use crate::server::handlers::{problem, ApiError};
-use crate::server::model::*;
 use crate::server::AppState;
+use crate::server::database::r#trait::{PaymentUpdate, QuoteTerms};
+use crate::server::handlers::{ApiError, problem};
+use crate::server::model::*;
 
 pub fn pricing_version(
     config: Option<&crate::server::x402::X402Config>,
@@ -185,7 +185,7 @@ pub async fn pay(
                 "Invalid facilitator response",
             )
             .into_response()
-            .into())
+            .into());
         }
     }
     let proof_hash = format!("{:x}", Sha256::digest(encoded));
@@ -294,12 +294,12 @@ mod pay_tests {
     use axum::body::to_bytes;
     use chrono::Utc;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     use super::*;
-    use crate::server::database::mock::{state, MockDatabase, OWNER};
+    use crate::server::database::mock::{MockDatabase, OWNER, state};
     use crate::server::x402::{PricingRaw, X402Config, X402ConfigRaw, X402FacilitatorConfigRaw};
 
     fn config(url: &str) -> X402Config {

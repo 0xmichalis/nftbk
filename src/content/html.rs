@@ -48,12 +48,11 @@ fn add_resource(
 
 fn is_locale_file(path: &Path) -> bool {
     // e.g., locale/en.txt
-    if let Some(parent) = path.parent() {
-        if parent.file_name().is_some_and(|n| n == "locale") {
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                return ext == "txt";
-            }
-        }
+    if let Some(parent) = path.parent()
+        && parent.file_name().is_some_and(|n| n == "locale")
+        && let Some(ext) = path.extension().and_then(|e| e.to_str())
+    {
+        return ext == "txt";
     }
     false
 }
