@@ -184,7 +184,7 @@ tezos = "https://tezos.publicnode.com"
         #[tokio::test]
         async fn resolves_environment_variables() {
             // SAFETY: Test-only. Other tests read the environment through std::env, which
-            // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+            // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
             unsafe { std::env::set_var("TEST_RPC_URL", "https://test.example.com") };
 
             let temp_file = NamedTempFile::new().unwrap();
@@ -203,7 +203,7 @@ ethereum = "${TEST_RPC_URL}"
             );
 
             // SAFETY: Test-only. Other tests read the environment through std::env, which
-            // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+            // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
             unsafe { std::env::remove_var("TEST_RPC_URL") };
         }
 

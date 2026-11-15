@@ -302,7 +302,7 @@ verification_key = "-----BEGIN PUBLIC KEY-----\\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8
         #[test]
         fn loads_and_validates_complete_config() {
             // SAFETY: Test-only. Other tests read the environment through std::env, which
-            // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+            // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
             unsafe {
                 std::env::set_var("ALCHEMY_API_KEY", "test-key");
                 std::env::set_var("FILEBASE_TOKEN", "test-token");
@@ -367,7 +367,7 @@ bearer_token_env = "FILEBASE_TOKEN"
             );
 
             // SAFETY: Test-only. Other tests read the environment through std::env, which
-            // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+            // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
             unsafe {
                 std::env::remove_var("ALCHEMY_API_KEY");
                 std::env::remove_var("FILEBASE_TOKEN");

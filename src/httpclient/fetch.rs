@@ -435,7 +435,7 @@ mod try_fetch_response_tests {
     #[tokio::test]
     async fn primary_gateway_request_carries_its_bearer_token() {
         // SAFETY: Test-only. Other tests read the environment through std::env, which
-        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
         unsafe { std::env::set_var("NFTBK_TEST_PRIMARY_GW_TOKEN", "secret") };
         let mock_server = MockServer::start().await;
         let cid = "QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco";
