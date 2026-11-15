@@ -142,7 +142,7 @@ mod prioritize_authenticated_tests {
     #[test]
     fn authenticated_gateways_come_first_preserving_relative_order() {
         // SAFETY: Test-only. Other tests read the environment through std::env, which
-        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
         unsafe { std::env::set_var("NFTBK_TEST_GW_TOKEN_A", "tok") };
         let gateways = [
             gw("https://a", None),
@@ -159,7 +159,7 @@ mod prioritize_authenticated_tests {
     #[test]
     fn blank_token_is_treated_as_absent() {
         // SAFETY: Test-only. Other tests read the environment through std::env, which
-        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
         unsafe { std::env::set_var("NFTBK_TEST_GW_TOKEN_BLANK", "  ") };
         let gateway = gw("https://a", Some("NFTBK_TEST_GW_TOKEN_BLANK"));
         assert_eq!(gateway.resolve_bearer_token(), None);
