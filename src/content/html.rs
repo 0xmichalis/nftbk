@@ -123,13 +123,9 @@ fn is_safe_resource_path(resource_url: &str) -> bool {
         warn!("Skipping unsafe or absolute path: {}", resource_url);
         return false;
     }
-    if resource_url.starts_with("data:")
+    !(resource_url.starts_with("data:")
         || resource_url.starts_with("javascript:")
-        || resource_url.starts_with("#")
-    {
-        return false;
-    }
-    true
+        || resource_url.starts_with("#"))
 }
 
 async fn extract_resource_paths_from_file(path: &Path) -> Result<Vec<String>> {

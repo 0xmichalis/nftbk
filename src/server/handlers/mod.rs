@@ -437,7 +437,7 @@ pub async fn create_backup(
             response
                 .headers_mut()
                 .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
-            return Ok(response);
+            return Ok(*response);
         }
     };
     let current = state
@@ -679,7 +679,7 @@ async fn create_output(
             response
                 .headers_mut()
                 .insert(header::CACHE_CONTROL, "no-store".parse().unwrap());
-            return Ok(response);
+            return Ok(*response);
         }
     };
     Ok(created(

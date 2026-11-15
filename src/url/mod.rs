@@ -76,8 +76,7 @@ pub fn get_last_path_segment(url: &str, fallback: &str) -> String {
         .ok()
         .and_then(|url| {
             url.path_segments()?
-                .filter(|s| !s.is_empty())
-                .next_back()
+                .rfind(|s| !s.is_empty())
                 .map(|s| s.to_string())
         })
         .unwrap_or_else(|| fallback.to_string())
