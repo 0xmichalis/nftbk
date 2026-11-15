@@ -143,13 +143,9 @@ impl BlobStore {
         let active: std::collections::HashSet<_> = db.active_leases().await?.into_iter().collect();
         for (id, token, path) in candidates {
             if !active.contains(&(id, token)) {
-                fs::remove_dir_all(&path).await.or_else(|e| {
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        Ok(())
-                    } else {
-                        Err(e)
-                    }
-                })?;
+                fs::remove_dir_all(&path)
+                    .await
+                    .or_else(|e| (e.kind() == std::io::ErrorKind::NotFound).ok_or(e))?;
                 if let Some(parent) = path.parent() {
                     fs::remove_dir(parent).await.ok();
                 }

@@ -318,14 +318,12 @@ fn validate_url(url: &Url) -> io::Result<()> {
             Some(Host::Ipv4(ip)) => is_public_ip(ip.into()),
             Some(Host::Ipv6(ip)) => is_public_ip(ip.into()),
         };
-    if allowed {
-        Ok(())
-    } else {
-        Err(io::Error::new(
+    allowed.ok_or_else(|| {
+        io::Error::new(
             io::ErrorKind::PermissionDenied,
             "Content URL must use HTTP(S) and a public destination",
-        ))
-    }
+        )
+    })
 }
 
 struct PublicResolver;

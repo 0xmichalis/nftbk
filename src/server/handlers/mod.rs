@@ -348,7 +348,7 @@ fn representation(resource: Resource, value: Value, headers: &HeaderMap) -> Resp
 fn matches_etag(header: Option<&str>, etag: &str) -> bool {
     header.is_some_and(|h| {
         h.split(',').any(|s| {
-            let s = s.trim().strip_prefix("W/").unwrap_or(s.trim());
+            let s = s.trim().trim_prefix("W/");
             s == etag || s == "*"
         })
     })

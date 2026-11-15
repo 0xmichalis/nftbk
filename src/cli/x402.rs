@@ -113,7 +113,7 @@ impl X402PaymentHandler {
             )
         })?;
 
-        let hex = hex.strip_prefix("0x").unwrap_or(hex);
+        let hex = hex.trim_prefix("0x");
         let bytes = hex::decode(hex).context("Failed to decode private key hex")?;
         let signing_key =
             SigningKey::from_slice(&bytes).context("Failed to create signing key from bytes")?;

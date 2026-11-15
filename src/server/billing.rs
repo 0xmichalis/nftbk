@@ -289,6 +289,7 @@ fn encode_settlement(value: &Document) -> String {
 
 #[cfg(test)]
 mod pay_tests {
+    use std::assert_matches;
     use std::sync::{Arc, Mutex};
 
     use axum::body::to_bytes;
@@ -393,16 +394,14 @@ mod pay_tests {
         {
             let updates = db.payment_updates.lock().unwrap();
             assert_eq!(updates.len(), 2);
-            assert!(
-                matches!(&updates[0],PaymentUpdate::Begin {proof_hash,settle_request} if proof_hash.len()==64 && settle_request["paymentPayload"]==payload)
-            );
-            assert!(matches!(
+            assert_matches!(&updates[0],PaymentUpdate::Begin {proof_hash,settle_request} if proof_hash.len()==64 && settle_request["paymentPayload"]==payload);
+            assert_matches!(
                 updates[1],
                 PaymentUpdate::Failed {
                     ambiguous: true,
                     ..
                 }
-            ));
+            );
         }
         *db.payment.lock().unwrap() =
             Some(json!({"state":"reconciliation_required","quote_id":OWNER}));
@@ -487,13 +486,11 @@ mod pay_tests {
             }
             let updates = db.payment_updates.lock().unwrap();
             if let Some(ambiguous) = ambiguous {
-                assert!(matches!(&updates[0], PaymentUpdate::Begin { .. }));
+                assert_matches!(&updates[0], PaymentUpdate::Begin { .. });
                 if status == 200 {
-                    assert!(matches!(&updates[1], PaymentUpdate::Settled(_)));
+                    assert_matches!(&updates[1], PaymentUpdate::Settled(_));
                 } else {
-                    assert!(
-                        matches!(&updates[1],PaymentUpdate::Failed {ambiguous:value,..} if *value==ambiguous)
-                    );
+                    assert_matches!(&updates[1],PaymentUpdate::Failed {ambiguous:value,..} if *value==ambiguous);
                 }
             } else {
                 assert!(updates.is_empty());

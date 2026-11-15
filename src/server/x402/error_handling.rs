@@ -289,6 +289,7 @@ pub fn tolerant_recover_verify(
 mod handle_result_tests {
     use super::*;
     use serde_json::json;
+    use std::assert_matches;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -319,13 +320,13 @@ mod handle_result_tests {
             0,
         )
         .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(FacilitatorClientError::HttpStatus {
                 status: StatusCode::TOO_MANY_REQUESTS,
                 ..
             })
-        ));
+        );
     }
 }
 
@@ -347,19 +348,20 @@ mod tolerant_parse_supported_tests {
 #[cfg(test)]
 mod tolerant_recover_verify_tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn preserves_payment_challenges_and_unknown_rejection_reasons() {
         let challenge = tolerant_recover_verify(r#"{"error":"payment_required","accepts":[]}"#)
             .unwrap()
             .unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             challenge,
             FacilitatorClientError::HttpStatus {
                 status: StatusCode::PAYMENT_REQUIRED,
                 ..
             }
-        ));
+        );
         let invalid = tolerant_recover_verify(
             r#"{"isValid":false,"invalidReason":"future_reason","payer":""}"#,
         )

@@ -819,6 +819,7 @@ mod process_nfts_tests {
     use crate::ipfs::IpfsPinningClient;
     use crate::{ProcessManagementConfig, chain::common::ContractTokenId};
     use anyhow::anyhow;
+    use std::assert_matches;
     use std::sync::Arc;
     use std::sync::atomic::AtomicBool;
     use tempfile::TempDir;
@@ -1771,10 +1772,7 @@ mod process_nfts_tests {
         assert_eq!(token_mapping.pin_responses.len(), 3);
         for pin_response in &token_mapping.pin_responses {
             assert_eq!(pin_response.id, "test-request-id");
-            assert!(matches!(
-                pin_response.status,
-                crate::ipfs::PinResponseStatus::Pinned
-            ));
+            assert_matches!(pin_response.status, crate::ipfs::PinResponseStatus::Pinned);
         }
     }
 }

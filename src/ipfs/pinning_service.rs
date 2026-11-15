@@ -263,6 +263,8 @@ impl IpfsPinningProvider for IpfsPinningClient {
 
 #[cfg(test)]
 mod tests {
+    use std::assert_matches;
+
     use crate::USER_AGENT;
     use crate::ipfs::{
         IpfsPinningClient, IpfsPinningProvider, Pin, PinOrigins, PinResponseStatus, PinStatus,
@@ -321,7 +323,7 @@ mod tests {
         let res = client.create_pin(&request).await.unwrap();
         assert_eq!(res.id, "req-123");
         assert_eq!(res.cid, "bafybeigdyrzt5v276s3jvq7j4q6vti7"); // CID from server response
-        assert!(matches!(res.status, PinResponseStatus::Pinned));
+        assert_matches!(res.status, PinResponseStatus::Pinned);
         assert_eq!(res.provider_url, base);
         assert_eq!(res.size, Some(1024));
     }
@@ -343,7 +345,7 @@ mod tests {
         let res = client.get_pin("req-123").await.unwrap();
         assert_eq!(res.id, "req-123");
         assert_eq!(res.cid, "bafybeigdyrzt5v276s3jvq7j4q6vti7");
-        assert!(matches!(res.status, PinResponseStatus::Pinned));
+        assert_matches!(res.status, PinResponseStatus::Pinned);
         assert_eq!(res.provider_url, base);
         assert_eq!(res.size, Some(1024));
     }

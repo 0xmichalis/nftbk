@@ -1,4 +1,5 @@
 //! Explicitly opt-in PostgreSQL integration tests. Unit tests mock Database.
+use std::assert_matches;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
@@ -170,13 +171,13 @@ async fn migrates_legacy_records_without_losing_locations_or_ipfs_coverage() {
         "legacy_archive_unavailable"
     );
     assert!(!pending.archives[0].error.as_ref().unwrap().retryable);
-    assert!(matches!(
+    assert_matches!(
         database
             .db
             .retry(&owner, pending.archives[0].operation_id.as_deref().unwrap())
             .await,
         Err(DatabaseError::Conflict(_))
-    ));
+    );
     assert_ne!(backup.id, "legacy-task");
     assert_eq!(backup.provenance, "legacy");
     assert_eq!(backup.nft_count, 2);
@@ -492,7 +493,7 @@ async fn fences_stale_workers_and_scopes_resource_reads_to_the_owner() {
     assert!(active.exists());
     assert_eq!(first.operation.id, second.operation.id);
     assert_ne!(first.lease_token, second.lease_token);
-    assert!(matches!(
+    assert_matches!(
         database
             .db
             .progress(
@@ -504,7 +505,7 @@ async fn fences_stale_workers_and_scopes_resource_reads_to_the_owner() {
             )
             .await,
         Err(DatabaseError::LostLease)
-    ));
+    );
     assert_eq!(
         database
             .db
@@ -909,20 +910,20 @@ async fn binds_quotes_and_payments_and_never_reuses_an_ambiguous_authorization()
     };
     let mut wrong = spec.clone();
     wrong.outputs = vec![OutputRequest::Ipfs];
-    assert!(matches!(
+    assert_matches!(
         database
             .db
             .create(creation("wrong-output", wrong, "policy-2"))
             .await,
         Err(DatabaseError::Conflict(_))
-    ));
-    assert!(matches!(
+    );
+    assert_matches!(
         database
             .db
             .create(creation("wrong-policy", spec.clone(), "policy-3"))
             .await,
         Err(DatabaseError::Conflict(_))
-    ));
+    );
     let backup = database
         .db
         .create(creation("payment", spec.clone(), "policy-2"))
@@ -940,17 +941,17 @@ async fn binds_quotes_and_payments_and_never_reuses_an_ambiguous_authorization()
         .payment(Resource::Backup, &owner, id, Some(proof.clone()))
         .await
         .unwrap();
-    assert!(matches!(
+    assert_matches!(
         database
             .db
             .payment(Resource::Backup, &owner, id, Some(proof.clone()))
             .await,
         Err(DatabaseError::Conflict(_))
-    ));
-    assert!(matches!(
+    );
+    assert_matches!(
         database.db.delete(Resource::Backup, &owner, id).await,
         Err(DatabaseError::Conflict(_))
-    ));
+    );
     database
         .db
         .payment(
@@ -973,19 +974,19 @@ async fn binds_quotes_and_payments_and_never_reuses_an_ambiguous_authorization()
             .unwrap()["state"],
         "reconciliation_required"
     );
-    assert!(matches!(
+    assert_matches!(
         database
             .db
             .payment(Resource::Backup, &owner, id, Some(proof.clone()))
             .await,
         Err(DatabaseError::Conflict(_))
-    ));
+    );
     let second = database
         .db
         .create(creation("other-request", spec, "policy-2"))
         .await
         .unwrap();
-    assert!(matches!(
+    assert_matches!(
         database
             .db
             .payment(
@@ -996,7 +997,7 @@ async fn binds_quotes_and_payments_and_never_reuses_an_ambiguous_authorization()
             )
             .await,
         Err(DatabaseError::Conflict(_))
-    ));
+    );
     database
         .db
         .payment(
@@ -1361,7 +1362,7 @@ async fn expires_unpaid_reservations_without_releasing_uncertain_settlements() {
             .unwrap()["state"],
         "awaiting_payment"
     );
-    assert!(matches!(
+    assert_matches!(
         database
             .db
             .payment(
@@ -1375,7 +1376,7 @@ async fn expires_unpaid_reservations_without_releasing_uncertain_settlements() {
             )
             .await,
         Err(DatabaseError::Conflict(_))
-    ));
+    );
     let deletion = database.db.claim().await.unwrap().unwrap();
     assert_eq!(deletion.operation.kind, "delete_backup");
     assert_eq!(deletion.operation.target_id, ids[0]);
