@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use tracing::{error, info};
 
+use crate::envvar::Env;
 use crate::ipfs::IpfsPinningConfig;
 use crate::server::auth::jwt::JwtCredential;
 use crate::server::x402::{X402Config, X402ConfigRaw};
@@ -66,9 +67,9 @@ impl ConfigRaw {
     }
 
     /// Get chain configuration
-    pub fn chain_config(&self) -> anyhow::Result<ChainConfig> {
+    pub fn chain_config(&self, env: &dyn Env) -> anyhow::Result<ChainConfig> {
         let mut chain_config = ChainConfig(self.chains.clone());
-        chain_config.resolve_env_vars()?;
+        chain_config.resolve_env_vars(env)?;
         Ok(chain_config)
     }
 
@@ -98,7 +99,7 @@ pub struct Config {
 }
 
 /// Load and validate configuration from file with logging
-pub fn load_and_validate_config(config_path: &str) -> Result<Config> {
+pub fn load_and_validate_config(config_path: &str, env: &dyn Env) -> Result<Config> {
     let config = match ConfigRaw::load_from_file(std::path::Path::new(config_path)) {
         Ok(config) => {
             info!("Loaded unified configuration from '{}'", config_path);
@@ -157,7 +158,7 @@ pub fn load_and_validate_config(config_path: &str) -> Result<Config> {
 
     // Extract and resolve chain configuration
     let chain_config = config
-        .chain_config()
+        .chain_config(env)
         .with_context(|| "Failed to resolve environment variables in chain config")?;
 
     Ok(Config {
@@ -301,12 +302,10 @@ verification_key = "-----BEGIN PUBLIC KEY-----\\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8
 
         #[test]
         fn loads_and_validates_complete_config() {
-            // SAFETY: Test-only. Other tests read the environment through std::env, which
-            // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
-            unsafe {
-                std::env::set_var("ALCHEMY_API_KEY", "test-key");
-                std::env::set_var("FILEBASE_TOKEN", "test-token");
-            }
+            let env = HashMap::from([
+                ("ALCHEMY_API_KEY", "test-key"),
+                ("FILEBASE_TOKEN", "test-token"),
+            ]);
 
             let config_content = r#"
 [chains]
@@ -339,7 +338,7 @@ bearer_token_env = "FILEBASE_TOKEN"
 "#;
             let temp_file = create_temp_config(config_content);
 
-            let result = load_and_validate_config(&temp_file.path().to_string_lossy());
+            let result = load_and_validate_config(&temp_file.path().to_string_lossy(), &env);
             assert!(result.is_ok());
 
             let config = result.unwrap();
@@ -365,13 +364,6 @@ bearer_token_env = "FILEBASE_TOKEN"
                     .unwrap()
                     .contains("test-key")
             );
-
-            // SAFETY: Test-only. Other tests read the environment through std::env, which
-            // shares this call's lock; only a libc getenv (OpenSSL, getaddrinfo) could race.
-            unsafe {
-                std::env::remove_var("ALCHEMY_API_KEY");
-                std::env::remove_var("FILEBASE_TOKEN");
-            }
         }
 
         #[test]
@@ -382,7 +374,8 @@ ethereum = "https://eth-mainnet.g.alchemy.com/v2/test-key"
 "#;
             let temp_file = create_temp_config(config_content);
 
-            let result = load_and_validate_config(&temp_file.path().to_string_lossy());
+            let result =
+                load_and_validate_config(&temp_file.path().to_string_lossy(), &HashMap::new());
             assert!(result.is_ok());
 
             let config = result.unwrap();
@@ -410,7 +403,8 @@ verification_key = "-----BEGIN PUBLIC KEY-----\ntest-key-2\n-----END PUBLIC KEY-
 "#;
             let temp_file = create_temp_config(config_content);
 
-            let result = load_and_validate_config(&temp_file.path().to_string_lossy());
+            let result =
+                load_and_validate_config(&temp_file.path().to_string_lossy(), &HashMap::new());
             assert!(result.is_ok());
 
             let config = result.unwrap();
@@ -441,7 +435,8 @@ network = "base-sepolia"
 "#;
             let temp_file = create_temp_config(config_content);
 
-            let result = load_and_validate_config(&temp_file.path().to_string_lossy());
+            let result =
+                load_and_validate_config(&temp_file.path().to_string_lossy(), &HashMap::new());
             assert!(result.is_ok());
 
             let config = result.unwrap();
@@ -470,7 +465,8 @@ bearer_token_env = "FILEBASE_TOKEN"
 "#;
             let temp_file = create_temp_config(config_content);
 
-            let result = load_and_validate_config(&temp_file.path().to_string_lossy());
+            let result =
+                load_and_validate_config(&temp_file.path().to_string_lossy(), &HashMap::new());
             assert!(result.is_ok());
 
             let config = result.unwrap();
@@ -479,7 +475,7 @@ bearer_token_env = "FILEBASE_TOKEN"
 
         #[test]
         fn returns_error_for_nonexistent_file() {
-            let result = load_and_validate_config("/nonexistent/path/config.toml");
+            let result = load_and_validate_config("/nonexistent/path/config.toml", &HashMap::new());
             assert!(result.is_err());
 
             let error = result.unwrap_err();
@@ -491,7 +487,8 @@ bearer_token_env = "FILEBASE_TOKEN"
             let config_content = "invalid toml content {";
             let temp_file = create_temp_config(config_content);
 
-            let result = load_and_validate_config(&temp_file.path().to_string_lossy());
+            let result =
+                load_and_validate_config(&temp_file.path().to_string_lossy(), &HashMap::new());
             assert!(result.is_err());
 
             let error = result.unwrap_err();
@@ -520,7 +517,8 @@ network = "base-sepolia"
 "#;
             let temp_file = create_temp_config(config_content);
 
-            let result = load_and_validate_config(&temp_file.path().to_string_lossy());
+            let result =
+                load_and_validate_config(&temp_file.path().to_string_lossy(), &HashMap::new());
             assert!(result.is_err());
 
             let error = result.unwrap_err();
@@ -536,7 +534,8 @@ ethereum = "https://eth-mainnet.g.alchemy.com/v2/${MISSING_VAR}"
 "#;
             let temp_file = create_temp_config(config_content);
 
-            let result = load_and_validate_config(&temp_file.path().to_string_lossy());
+            let result =
+                load_and_validate_config(&temp_file.path().to_string_lossy(), &HashMap::new());
             assert!(result.is_err());
 
             let error = result.unwrap_err();
@@ -552,7 +551,8 @@ ethereum = "https://eth-mainnet.g.alchemy.com/v2/${MISSING_VAR}"
             let config_content = "";
             let temp_file = create_temp_config(config_content);
 
-            let result = load_and_validate_config(&temp_file.path().to_string_lossy());
+            let result =
+                load_and_validate_config(&temp_file.path().to_string_lossy(), &HashMap::new());
             assert!(result.is_ok());
 
             let config = result.unwrap();
@@ -575,7 +575,8 @@ verification_key = "-----BEGIN PUBLIC KEY-----\\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8
 "#;
             let temp_file = create_temp_config(config_content);
 
-            let result = load_and_validate_config(&temp_file.path().to_string_lossy());
+            let result =
+                load_and_validate_config(&temp_file.path().to_string_lossy(), &HashMap::new());
             assert!(result.is_ok());
 
             let config = result.unwrap();

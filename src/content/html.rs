@@ -8,6 +8,7 @@ use tokio::fs;
 use tracing::{debug, info, warn};
 use url::Url;
 
+use crate::envvar::ProcessEnv;
 use crate::httpclient::fetch::try_fetch_response;
 use crate::httpclient::stream::stream_http_to_file;
 use crate::ipfs::config::IPFS_GATEWAYS;
@@ -109,7 +110,7 @@ pub(crate) fn strip_gateway_injected_markup(html: &str) -> String {
 /// Fetch `absolute_url` (with IPFS gateway fallback) and stream it to `resource_path`.
 async fn download_resource(absolute_url: &str, resource_path: &Path) -> Result<()> {
     debug!("Downloading HTML resource: {}", absolute_url);
-    let (response, _status) = try_fetch_response(absolute_url, IPFS_GATEWAYS).await;
+    let (response, _status) = try_fetch_response(absolute_url, IPFS_GATEWAYS, &ProcessEnv).await;
     let response = response?;
     info!("Saving HTML resource at {}", resource_path.display());
     stream_http_to_file(response, resource_path).await?;
