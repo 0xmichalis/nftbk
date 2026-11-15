@@ -7,9 +7,18 @@ use nftbk::cli::Cli;
 use nftbk::envvar::{ProcessEnv, should_enable_color};
 use nftbk::logging;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    // dotenvy writes .env into the process environment. That is only sound while no
+    // other thread can read the environment, so it runs before the Tokio runtime starts.
     dotenv().ok();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed building the Runtime")
+        .block_on(run())
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
     let log_level = cli.log_level;
     let enable_color = should_enable_color(cli.no_color, &ProcessEnv);

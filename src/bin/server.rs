@@ -63,10 +63,19 @@ struct Args {
     max_content_request_retries: u32,
 }
 
-#[tokio::main]
-async fn main() {
-    // We are consuming config both from the environment and from the command line
+fn main() {
+    // We are consuming config both from the environment and from the command line.
+    // dotenvy writes .env into the process environment. That is only sound while no
+    // other thread can read the environment, so it runs before the Tokio runtime starts.
     dotenv().ok();
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("Failed building the Runtime")
+        .block_on(run());
+}
+
+async fn run() {
     let args = Args::parse();
     let enable_color = should_enable_color(args.no_color, &ProcessEnv);
     logging::init(args.log_level, enable_color);
