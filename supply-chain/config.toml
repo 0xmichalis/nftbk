@@ -37,7 +37,7 @@ version = "1.1.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.alloy-json-abi]]
-version = "1.5.2"
+version = "1.7.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.alloy-json-rpc]]
@@ -45,7 +45,7 @@ version = "1.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.alloy-primitives]]
-version = "1.6.1@git:13dd0788817029241f11fd30f3b197da46e396fe"
+version = "1.7.3@git:af6831ffe1ebf4cbf64998363afa266fb6b447fe"
 criteria = "safe-to-deploy"
 notes = "Temporary upstream Alloy PR 1147 pinned by commit to use patched k256 0.14 / crypto-bigint 0.7. Protocol encoding and recoverable signing are regression-tested; pending independent source audit."
 
@@ -62,23 +62,23 @@ version = "1.2.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.alloy-sol-macro]]
-version = "1.5.2"
+version = "1.7.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.alloy-sol-macro-expander]]
-version = "1.5.2"
+version = "1.7.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.alloy-sol-macro-input]]
-version = "1.5.2"
+version = "1.7.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.alloy-sol-type-parser]]
-version = "1.5.2"
+version = "1.7.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.alloy-sol-types]]
-version = "1.5.2"
+version = "1.7.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.alloy-transport]]
@@ -879,7 +879,7 @@ version = "0.1.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.macro-string]]
-version = "0.1.4"
+version = "0.2.0"
 criteria = "safe-to-deploy"
 
 [[exemptions.markup5ever]]
@@ -1054,6 +1054,14 @@ criteria = "safe-to-deploy"
 version = "3.4.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.proc-macro-error-attr3]]
+version = "3.0.1"
+criteria = "safe-to-deploy"
+
+[[exemptions.proc-macro-error3]]
+version = "3.0.1"
+criteria = "safe-to-deploy"
+
 [[exemptions.proc-macro2]]
 version = "1.0.104"
 criteria = "safe-to-deploy"
@@ -1172,7 +1180,7 @@ version = "0.9.10"
 criteria = "safe-to-deploy"
 
 [[exemptions.ruint]]
-version = "1.20.0"
+version = "1.21.1"
 criteria = "safe-to-deploy"
 
 [[exemptions.ruint-macro]]
@@ -1432,7 +1440,7 @@ version = "3.0.9"
 criteria = "safe-to-deploy"
 
 [[exemptions.syn-solidity]]
-version = "1.5.2"
+version = "1.7.3"
 criteria = "safe-to-deploy"
 
 [[exemptions.sync_wrapper]]
@@ -1473,10 +1481,6 @@ criteria = "safe-to-deploy"
 
 [[exemptions.time]]
 version = "0.3.47"
-criteria = "safe-to-deploy"
-
-[[exemptions.tiny-keccak]]
-version = "2.0.2"
 criteria = "safe-to-deploy"
 
 [[exemptions.tinystr]]
@@ -1861,6 +1865,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.winnow]]
 version = "0.7.14"
+criteria = "safe-to-deploy"
+
+[[exemptions.winnow]]
+version = "1.0.5"
 criteria = "safe-to-deploy"
 
 [[exemptions.wiremock]]

@@ -21,7 +21,7 @@ path = "src/bin/server.rs"
 [dependencies]
 alloy-primitives = { version = "1.5", features = ["serde"] }
 alloy-rpc-client = { version = "1.2", features = ["ws", "ipc"] }
-alloy-sol-types = "1.2"
+alloy-sol-types = "1.7.3"
 anyhow = "1.0"
 async-compression = { version = "0.4", features = ["tokio", "futures-io", "gzip"] }
 async-trait = "0.1.88"
@@ -84,6 +84,8 @@ wiremock = "0.6"
 
 # Temporary upstream k256 0.14 migration until Alloy publishes it:
 # https://github.com/alloy-rs/core/pull/1147
-# Older primitives retain crypto-bigint 0.5 in Cargo.lock through optional k256.
+# Pinned to the PR head at alloy-core 1.7.3. Crates.io primitives, 1.7.3
+# included, still use k256 0.13 and bring crypto-bigint 0.5 back into
+# Cargo.lock, so move this rev whenever alloy-sol-types needs newer primitives.
 [patch.crates-io]
-alloy-primitives = { git = "https://github.com/alloy-rs/core", rev = "13dd0788817029241f11fd30f3b197da46e396fe" }
+alloy-primitives = { git = "https://github.com/alloy-rs/core", rev = "af6831ffe1ebf4cbf64998363afa266fb6b447fe" }
