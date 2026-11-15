@@ -183,7 +183,7 @@ pub trait Database: Send + Sync {
     async fn progress(&self, claim: &Claim, progress: Progress) -> Result<()>;
     async fn put_blob(&self, claim: &Claim, blob: &Blob) -> Result<()>;
     async fn reserve_pin(&self, claim: &Claim, asset: &Asset, provider: &str)
-        -> Result<ManagedPin>;
+    -> Result<ManagedPin>;
     async fn update_pin(&self, claim: &Claim, update: PinUpdate) -> Result<()>;
     async fn release_pins(&self, claim: &Claim) -> Result<Vec<ManagedPin>>;
     async fn payment(

@@ -1,4 +1,4 @@
-use anyhow::{bail, ensure, Result};
+use anyhow::{Result, bail, ensure};
 
 /// Validate a case-sensitive CAIP-2 identifier for a supported chain family.
 pub fn validate_chain_id(id: &str) -> Result<()> {

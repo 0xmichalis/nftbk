@@ -2,11 +2,11 @@ use std::fs;
 use std::io::{self, Seek, Write};
 use std::path::Path as StdPath;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use flate2::write::GzEncoder;
 use flate2::Compression;
+use flate2::write::GzEncoder;
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 use zip::write::SimpleFileOptions;
@@ -44,17 +44,16 @@ impl<W: Write, H: Write> Write for TeeWriter<W, H> {
 pub fn sync_files(files_written: &[std::path::PathBuf]) {
     let mut synced_dirs = std::collections::HashSet::new();
     for file in files_written {
-        if file.is_file() {
-            if let Ok(f) = std::fs::File::open(file) {
-                let _ = f.sync_all();
-            }
+        if file.is_file()
+            && let Ok(f) = std::fs::File::open(file)
+        {
+            let _ = f.sync_all();
         }
-        if let Some(parent) = file.parent() {
-            if synced_dirs.insert(parent.to_path_buf()) {
-                if let Ok(dir) = std::fs::File::open(parent) {
-                    let _ = dir.sync_all();
-                }
-            }
+        if let Some(parent) = file.parent()
+            && synced_dirs.insert(parent.to_path_buf())
+            && let Ok(dir) = std::fs::File::open(parent)
+        {
+            let _ = dir.sync_all();
         }
     }
 }
@@ -180,14 +179,14 @@ fn add_dir_to_tar_gz<T: Write>(
 }
 
 fn check_shutdown_signal(shutdown_flag: Option<&Arc<AtomicBool>>) -> io::Result<()> {
-    if let Some(flag) = shutdown_flag {
-        if flag.load(Ordering::Relaxed) {
-            warn!("Received shutdown signal, stopping archive operation");
-            return Err(io::Error::new(
-                io::ErrorKind::Interrupted,
-                ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
-            ));
-        }
+    if let Some(flag) = shutdown_flag
+        && flag.load(Ordering::Relaxed)
+    {
+        warn!("Received shutdown signal, stopping archive operation");
+        return Err(io::Error::new(
+            io::ErrorKind::Interrupted,
+            ARCHIVE_INTERRUPTED_BY_SHUTDOWN,
+        ));
     }
     Ok(())
 }
@@ -303,8 +302,8 @@ pub fn negotiate_archive_format(accept: Option<&str>, user_agent: Option<&str>) 
 #[cfg(test)]
 mod archive_helpers_tests {
     use super::{archive_format_from_accept, negotiate_archive_format};
-    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicBool;
 
     #[test]
     fn accept_zip_parses_to_zip() {
@@ -365,7 +364,7 @@ mod archive_helpers_tests {
 
     #[test]
     fn test_shutdown_interruption_returns_correct_error() {
-        use super::{check_shutdown_signal, ARCHIVE_INTERRUPTED_BY_SHUTDOWN};
+        use super::{ARCHIVE_INTERRUPTED_BY_SHUTDOWN, check_shutdown_signal};
         use std::io;
 
         // Test that shutdown signal returns the correct error message

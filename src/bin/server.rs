@@ -7,8 +7,8 @@ use tracing::{error, info};
 use nftbk::envvar::{is_defined, should_enable_color};
 use nftbk::logging;
 use nftbk::logging::LogLevel;
-use nftbk::server::config::{load_and_validate_config, Config};
-use nftbk::server::{run_server, ServerConfig};
+use nftbk::server::config::{Config, load_and_validate_config};
+use nftbk::server::{ServerConfig, run_server};
 use nftbk::types::DEFAULT_MAX_CONTENT_REQUEST_RETRIES;
 
 #[derive(Parser, Debug)]

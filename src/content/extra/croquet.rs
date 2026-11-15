@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use tokio::fs;
 use tracing::{debug, info};
 
-use crate::httpclient::stream::{stream_gzip_http_to_file, stream_http_to_file};
 use crate::httpclient::HttpClient;
+use crate::httpclient::stream::{stream_gzip_http_to_file, stream_http_to_file};
 
 pub async fn fetch_croquet_challenge(
     output_path: &Path,
@@ -125,8 +125,8 @@ mod tests {
     }
 
     fn gzip(content: &[u8]) -> Vec<u8> {
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
         use std::io::Write;
 
         let mut encoder = GzEncoder::new(Vec::new(), Compression::default());

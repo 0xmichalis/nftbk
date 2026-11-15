@@ -32,7 +32,8 @@ CI fails on a stale cache.
 CI runs `cargo audit`, `cargo deny check bans licenses sources` and
 `cargo vet --locked`. A new or bumped crate needs an audit or exemption
 under `supply-chain/`. RUSTSEC ignores live in `.cargo/audit.toml`, each
-with a comment saying why it is ignored.
+with a comment saying why it is ignored. `.cargo/config.toml` sets a 7-day
+dependency cooldown; its comment shows how to take a newer version early.
 
 ## Markdown
 

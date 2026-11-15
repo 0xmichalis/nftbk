@@ -487,10 +487,12 @@ mod normalize_base_url_tests {
         // Only whitespace
         let result = normalize_base_url("   ");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("base_url cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("base_url cannot be empty")
+        );
     }
 
     #[test]
@@ -498,10 +500,12 @@ mod normalize_base_url_tests {
         // Empty string
         let result = normalize_base_url("");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("base_url cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("base_url cannot be empty")
+        );
 
         // Invalid URL (no scheme)
         let result = normalize_base_url("example.com");
@@ -516,58 +520,72 @@ mod normalize_base_url_tests {
         // Wrong scheme - FTP
         let result = normalize_base_url("ftp://example.com");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("http or https scheme"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("http or https scheme")
+        );
 
         // Wrong scheme - file
         let result = normalize_base_url("file:///path/to/file");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("http or https scheme"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("http or https scheme")
+        );
 
         // Wrong scheme - ws
         let result = normalize_base_url("ws://example.com");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("http or https scheme"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("http or https scheme")
+        );
 
         // Wrong scheme - wss
         let result = normalize_base_url("wss://example.com");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("http or https scheme"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("http or https scheme")
+        );
 
         // With query string
         let result = normalize_base_url("https://example.com?param=value");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("must not contain a query"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("must not contain a query")
+        );
 
         // With fragment
         let result = normalize_base_url("https://example.com#fragment");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("must not contain a fragment"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("must not contain a fragment")
+        );
 
         // With both query and fragment
         let result = normalize_base_url("https://example.com?param=value#fragment");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("must not contain a query"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("must not contain a query")
+        );
     }
 
     #[test]
@@ -692,10 +710,12 @@ mod tests {
 
         let result = X402Config::compile(raw);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("recipient_address cannot be empty"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("recipient_address cannot be empty")
+        );
     }
 
     #[test]

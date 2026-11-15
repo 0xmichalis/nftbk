@@ -7,3 +7,13 @@
 # stays scoped to unix.
 [target.'cfg(unix)']
 runner = ["env", "RUSTC_BOOTSTRAP=1"]
+
+# Dependency cooldown: resolution skips crate versions published less than
+# 7 days ago unless Cargo.lock already has them. To take one early, such as
+# a security fix, lock it explicitly; this also admits any too-new
+# dependencies it needs, so review the "published N days ago" lines:
+#   CARGO_RESOLVER_INCOMPATIBLE_PUBLISH_AGE=allow cargo update -p <crate> --precise <version>
+# A plain `cargo update` drops such a version again until it is 7 days old,
+# so update other crates with `-p` meanwhile.
+[registry]
+global-min-publish-age = "7 days"

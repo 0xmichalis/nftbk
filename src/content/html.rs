@@ -48,12 +48,11 @@ fn add_resource(
 
 fn is_locale_file(path: &Path) -> bool {
     // e.g., locale/en.txt
-    if let Some(parent) = path.parent() {
-        if parent.file_name().is_some_and(|n| n == "locale") {
-            if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                return ext == "txt";
-            }
-        }
+    if let Some(parent) = path.parent()
+        && parent.file_name().is_some_and(|n| n == "locale")
+        && let Some(ext) = path.extension().and_then(|e| e.to_str())
+    {
+        return ext == "txt";
     }
     false
 }
@@ -123,13 +122,9 @@ fn is_safe_resource_path(resource_url: &str) -> bool {
         warn!("Skipping unsafe or absolute path: {}", resource_url);
         return false;
     }
-    if resource_url.starts_with("data:")
+    !(resource_url.starts_with("data:")
         || resource_url.starts_with("javascript:")
-        || resource_url.starts_with("#")
-    {
-        return false;
-    }
-    true
+        || resource_url.starts_with("#"))
 }
 
 async fn extract_resource_paths_from_file(path: &Path) -> Result<Vec<String>> {

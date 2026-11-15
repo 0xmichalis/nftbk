@@ -3,7 +3,7 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use tokio::fs;
-use tracing::{info, warn, Instrument};
+use tracing::{Instrument, info, warn};
 
 use crate::chain::common::ContractTokenId;
 use crate::chain::evm::EvmChainProcessor;
@@ -108,11 +108,11 @@ impl BackupConfig {
                 all_token_pin_mappings.extend(ipfs_out.pin_requests);
             }
 
-            if cfg.storage_config.prune_redundant {
-                if let Some(ref out) = cfg.storage_config.output_path {
-                    info!("Pruning redundant files...");
-                    crate::prune::prune_redundant_files(out, token_config, &all_files).await?;
-                }
+            if cfg.storage_config.prune_redundant
+                && let Some(ref out) = cfg.storage_config.output_path
+            {
+                info!("Pruning redundant files...");
+                crate::prune::prune_redundant_files(out, token_config, &all_files).await?;
             }
 
             info!(

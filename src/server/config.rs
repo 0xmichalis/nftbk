@@ -301,8 +301,12 @@ verification_key = "-----BEGIN PUBLIC KEY-----\\nMIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8
 
         #[test]
         fn loads_and_validates_complete_config() {
-            std::env::set_var("ALCHEMY_API_KEY", "test-key");
-            std::env::set_var("FILEBASE_TOKEN", "test-token");
+            // SAFETY: Test-only. Other tests read the environment through std::env, which
+            // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+            unsafe {
+                std::env::set_var("ALCHEMY_API_KEY", "test-key");
+                std::env::set_var("FILEBASE_TOKEN", "test-token");
+            }
 
             let config_content = r#"
 [chains]
@@ -345,21 +349,29 @@ bearer_token_env = "FILEBASE_TOKEN"
             assert_eq!(config.ipfs_pinning_configs.len(), 1);
 
             // Verify environment variables were resolved
-            assert!(config
-                .chain_config
-                .0
-                .get("eip155:1")
-                .unwrap()
-                .contains("test-key"));
-            assert!(config
-                .chain_config
-                .0
-                .get("eip155:137")
-                .unwrap()
-                .contains("test-key"));
+            assert!(
+                config
+                    .chain_config
+                    .0
+                    .get("eip155:1")
+                    .unwrap()
+                    .contains("test-key")
+            );
+            assert!(
+                config
+                    .chain_config
+                    .0
+                    .get("eip155:137")
+                    .unwrap()
+                    .contains("test-key")
+            );
 
-            std::env::remove_var("ALCHEMY_API_KEY");
-            std::env::remove_var("FILEBASE_TOKEN");
+            // SAFETY: Test-only. Other tests read the environment through std::env, which
+            // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+            unsafe {
+                std::env::remove_var("ALCHEMY_API_KEY");
+                std::env::remove_var("FILEBASE_TOKEN");
+            }
         }
 
         #[test]
@@ -528,9 +540,11 @@ ethereum = "https://eth-mainnet.g.alchemy.com/v2/${MISSING_VAR}"
             assert!(result.is_err());
 
             let error = result.unwrap_err();
-            assert!(error
-                .to_string()
-                .contains("Failed to resolve environment variables in chain config"));
+            assert!(
+                error
+                    .to_string()
+                    .contains("Failed to resolve environment variables in chain config")
+            );
         }
 
         #[test]

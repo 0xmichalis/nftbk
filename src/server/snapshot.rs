@@ -2,20 +2,20 @@ use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use tokio::fs;
 use uuid::Uuid;
 
+use crate::StorageConfig;
+use crate::chain::NFTChainProcessor;
 use crate::chain::common::ContractTokenId;
 use crate::chain::evm::EvmChainProcessor;
 use crate::chain::tezos::TezosChainProcessor;
-use crate::chain::NFTChainProcessor;
 use crate::ipfs::url::extract_ipfs_cid;
+use crate::server::AppState;
 use crate::server::database::r#trait::Progress;
 use crate::server::model::*;
-use crate::server::AppState;
-use crate::StorageConfig;
 
 pub fn failure(code: &str, message: &str) -> Failure {
     Failure {
@@ -442,10 +442,10 @@ pub fn estimate_price(
         if seen_archive.insert(key) {
             archive_bytes = archive_bytes.checked_add(size).context("Size overflow")?;
         }
-        if let Some(cid) = &asset.cid {
-            if seen_pins.insert(cid) {
-                pin_bytes = pin_bytes.checked_add(size).context("Size overflow")?;
-            }
+        if let Some(cid) = &asset.cid
+            && seen_pins.insert(cid)
+        {
+            pin_bytes = pin_bytes.checked_add(size).context("Size overflow")?;
         }
     }
     let mut total = 0u128;
@@ -606,12 +606,12 @@ mod capture_tests {
     use alloy_sol_types::SolValue;
     use serde_json::json;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     use super::*;
-    use crate::server::database::mock::{state, MockDatabase};
+    use crate::server::database::mock::{MockDatabase, state};
 
     async fn capture_failure(metadata_status: u16, asset_status: u16) -> (Item, bool) {
         let directory = tempfile::tempdir().unwrap();
@@ -718,12 +718,12 @@ mod observe_tests {
     use alloy_sol_types::SolValue;
     use serde_json::json;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     use super::*;
-    use crate::server::database::mock::{state, MockDatabase};
+    use crate::server::database::mock::{MockDatabase, state};
 
     #[tokio::test]
     async fn retains_original_metadata_and_html_filename_instructions() {
@@ -769,13 +769,13 @@ mod observe_tests {
 #[cfg(test)]
 mod observe_with_tests {
     use super::*;
-    use crate::server::database::mock::{state, MockDatabase};
+    use crate::server::database::mock::{MockDatabase, state};
     use alloy_sol_types::SolValue;
     use serde_json::json;
     use std::sync::Arc;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     #[tokio::test]

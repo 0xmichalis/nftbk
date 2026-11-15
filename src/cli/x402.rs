@@ -113,7 +113,7 @@ impl X402PaymentHandler {
             )
         })?;
 
-        let hex = hex.strip_prefix("0x").unwrap_or(hex);
+        let hex = hex.trim_prefix("0x");
         let bytes = hex::decode(hex).context("Failed to decode private key hex")?;
         let signing_key =
             SigningKey::from_slice(&bytes).context("Failed to create signing key from bytes")?;
@@ -647,19 +647,23 @@ mod confirm_payment_with_io_tests {
         }
         let mut output = vec![];
         let mut reader = std::io::Cursor::new(b"n\n");
-        assert!(!handler
-            .confirm_payment_with_io(
-                &address,
-                &requirements,
-                Err(anyhow::anyhow!("RPC unavailable")),
-                &mut output,
-                &mut reader
-            )
-            .await
-            .unwrap());
-        assert!(String::from_utf8(output)
-            .unwrap()
-            .contains("1234567 (failed to query decimals: RPC unavailable)"));
+        assert!(
+            !handler
+                .confirm_payment_with_io(
+                    &address,
+                    &requirements,
+                    Err(anyhow::anyhow!("RPC unavailable")),
+                    &mut output,
+                    &mut reader
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            String::from_utf8(output)
+                .unwrap()
+                .contains("1234567 (failed to query decimals: RPC unavailable)")
+        );
     }
 }
 

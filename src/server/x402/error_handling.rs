@@ -68,7 +68,7 @@ where
                                         e
                                     )),
                                     Some(status),
-                                )
+                                );
                             }
                         }
                     }
@@ -219,25 +219,21 @@ where
             error!(error = %err, "{} failed", context);
 
             // Check if this is a server error (5xx) or rate limit error (429) that should be retried
-            if let FacilitatorClientError::HttpStatus { status, .. } = &err {
-                if status.is_server_error() || status.as_u16() == 429 {
-                    return retry_on_http_error(client, context, build_req, recover, max_retries)
-                        .await;
-                }
+            if let FacilitatorClientError::HttpStatus { status, .. } = &err
+                && (status.is_server_error() || status.as_u16() == 429)
+            {
+                return retry_on_http_error(client, context, build_req, recover, max_retries).await;
             }
 
             // Handle JSON deserialization errors
             if let FacilitatorClientError::JsonDeserialization {
                 context: err_ctx, ..
             } = &err
+                && *err_ctx == context
+                && let Some(recovered) =
+                    handle_deserialization_error(client, context, build_req, recover).await
             {
-                if *err_ctx == context {
-                    if let Some(recovered) =
-                        handle_deserialization_error(client, context, build_req, recover).await
-                    {
-                        return recovered;
-                    }
-                }
+                return recovered;
             }
 
             Err(err)
@@ -251,14 +247,12 @@ pub fn tolerant_parse_supported(body: &str) -> Option<SupportedResponse> {
     if let Some(kinds) = value.get_mut("kinds").and_then(|k| k.as_array_mut()) {
         // First, clean up empty extra objects
         for kind in kinds.iter_mut() {
-            if let Some(obj) = kind.as_object_mut() {
-                if let Some(extra) = obj.get("extra") {
-                    if let Some(extra_obj) = extra.as_object() {
-                        if extra_obj.is_empty() {
-                            obj.remove("extra");
-                        }
-                    }
-                }
+            if let Some(obj) = kind.as_object_mut()
+                && let Some(extra) = obj.get("extra")
+                && let Some(extra_obj) = extra.as_object()
+                && extra_obj.is_empty()
+            {
+                obj.remove("extra");
             }
         }
     }
@@ -295,9 +289,10 @@ pub fn tolerant_recover_verify(
 mod handle_result_tests {
     use super::*;
     use serde_json::json;
+    use std::assert_matches;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     #[tokio::test]
@@ -325,13 +320,13 @@ mod handle_result_tests {
             0,
         )
         .await;
-        assert!(matches!(
+        assert_matches!(
             result,
             Err(FacilitatorClientError::HttpStatus {
                 status: StatusCode::TOO_MANY_REQUESTS,
                 ..
             })
-        ));
+        );
     }
 }
 
@@ -353,19 +348,20 @@ mod tolerant_parse_supported_tests {
 #[cfg(test)]
 mod tolerant_recover_verify_tests {
     use super::*;
+    use std::assert_matches;
 
     #[test]
     fn preserves_payment_challenges_and_unknown_rejection_reasons() {
         let challenge = tolerant_recover_verify(r#"{"error":"payment_required","accepts":[]}"#)
             .unwrap()
             .unwrap_err();
-        assert!(matches!(
+        assert_matches!(
             challenge,
             FacilitatorClientError::HttpStatus {
                 status: StatusCode::PAYMENT_REQUIRED,
                 ..
             }
-        ));
+        );
         let invalid = tolerant_recover_verify(
             r#"{"isValid":false,"invalidReason":"future_reason","payer":""}"#,
         )

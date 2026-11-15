@@ -48,16 +48,16 @@ pub async fn run(
     if !ipfs_out.errors.is_empty() {
         merged.extend(ipfs_out.errors);
     }
-    if !merged.is_empty() {
-        if let Some(ref out_path) = output_path {
-            let mut log_path = out_path.clone();
-            log_path.set_extension("log");
-            let log_content = merged.join("\n") + "\n";
-            use tokio::io::AsyncWriteExt;
-            let mut file = tokio::fs::File::create(&log_path).await?;
-            file.write_all(log_content.as_bytes()).await?;
-            error!("Error log written to {}", log_path.display());
-        }
+    if !merged.is_empty()
+        && let Some(ref out_path) = output_path
+    {
+        let mut log_path = out_path.clone();
+        log_path.set_extension("log");
+        let log_content = merged.join("\n") + "\n";
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(&log_path).await?;
+        file.write_all(log_content.as_bytes()).await?;
+        error!("Error log written to {}", log_path.display());
     }
 
     Ok(())
@@ -131,10 +131,12 @@ ethereum = []
             .await;
 
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to load config"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to load config")
+            );
         }
 
         #[tokio::test]
@@ -153,10 +155,12 @@ ethereum = []
             .await;
 
             assert!(result.is_err());
-            assert!(result
-                .unwrap_err()
-                .to_string()
-                .contains("Failed to read tokens config file"));
+            assert!(
+                result
+                    .unwrap_err()
+                    .to_string()
+                    .contains("Failed to read tokens config file")
+            );
         }
 
         #[tokio::test]

@@ -4,14 +4,14 @@ use std::time::Duration;
 
 use alloy_primitives::{Address, Bytes, U256};
 use alloy_rpc_client::{ClientBuilder, RpcClient};
-use alloy_sol_types::{sol, SolCall};
+use alloy_sol_types::{SolCall, sol};
 use anyhow::{Error, Result};
 use serde::{Deserialize, Serialize};
 use tokio::time::sleep;
 use tracing::debug;
 
-use crate::chain::common::{ContractTokenId, NFTAttribute};
 use crate::chain::ContractTokenInfo;
+use crate::chain::common::{ContractTokenId, NFTAttribute};
 use crate::content::Options;
 use crate::httpclient::HttpClient;
 use crate::ipfs::IpfsPinningProvider;
@@ -280,16 +280,16 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
                 ),
             }
         }
-        if let Some(assets) = &metadata.assets {
-            if let Some(glb) = &assets.glb {
-                add_if_not_empty(
-                    glb,
-                    Options {
-                        fallback_filename: Some("glb".to_string()),
-                        overriden_filename: None,
-                    },
-                );
-            }
+        if let Some(assets) = &metadata.assets
+            && let Some(glb) = &assets.glb
+        {
+            add_if_not_empty(
+                glb,
+                Options {
+                    fallback_filename: Some("glb".to_string()),
+                    overriden_filename: None,
+                },
+            );
         }
         if let Some(image) = &metadata.image {
             add_if_not_empty(
@@ -314,19 +314,18 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
             if let Some(details) = &metadata.animation_details {
                 match details {
                     AnimationDetails::String(s) => {
-                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(s) {
-                            if let Some(fmt) = json.get("format").and_then(|v| v.as_str()) {
-                                if fmt.eq_ignore_ascii_case("html") {
-                                    overriden_filename = Some("index.html".to_string());
-                                }
-                            }
+                        if let Ok(json) = serde_json::from_str::<serde_json::Value>(s)
+                            && let Some(fmt) = json.get("format").and_then(|v| v.as_str())
+                            && fmt.eq_ignore_ascii_case("html")
+                        {
+                            overriden_filename = Some("index.html".to_string());
                         }
                     }
                     AnimationDetails::Object { format, .. } => {
-                        if let Some(fmt) = format {
-                            if fmt.eq_ignore_ascii_case("html") {
-                                overriden_filename = Some("index.html".to_string());
-                            }
+                        if let Some(fmt) = format
+                            && fmt.eq_ignore_ascii_case("html")
+                        {
+                            overriden_filename = Some("index.html".to_string());
                         }
                     }
                 }
@@ -399,21 +398,21 @@ impl crate::chain::NFTChainProcessor for EvmChainProcessor {
 }
 
 fn replace_id_pattern(uri: &str, token_id: &U256) -> Option<String> {
-    if let Some(idx) = uri.rfind("/0x{id}") {
-        if idx + 7 == uri.len() {
-            let hex_token_id = format!("0x{token_id:x}");
-            let new_uri = format!("{}{}", &uri[..idx + 1], hex_token_id);
-            return Some(new_uri);
-        }
+    if let Some(idx) = uri.rfind("/0x{id}")
+        && idx + 7 == uri.len()
+    {
+        let hex_token_id = format!("0x{token_id:x}");
+        let new_uri = format!("{}{}", &uri[..idx + 1], hex_token_id);
+        return Some(new_uri);
     }
 
     // Catch-all pattern: /{id} at end
-    if let Some(idx) = uri.rfind("/{id}") {
-        if idx + 5 == uri.len() {
-            let dec_token_id = token_id.to_string();
-            let new_uri = format!("{}{}", &uri[..idx + 1], dec_token_id);
-            return Some(new_uri);
-        }
+    if let Some(idx) = uri.rfind("/{id}")
+        && idx + 5 == uri.len()
+    {
+        let dec_token_id = token_id.to_string();
+        let new_uri = format!("{}{}", &uri[..idx + 1], dec_token_id);
+        return Some(new_uri);
     }
     None
 }
@@ -762,11 +761,13 @@ mod generate_cryptopunks_data_uri_tests {
         let json = data_uri.trim_start_matches("data:application/json;utf8,");
         let parsed: NFTMetadata = serde_json::from_str(json).expect("valid json");
         assert_eq!(parsed.name.as_deref(), Some("CryptoPunk #0"));
-        assert!(parsed
-            .image_url
-            .as_deref()
-            .unwrap_or("")
-            .starts_with("data:image/svg+xml"));
+        assert!(
+            parsed
+                .image_url
+                .as_deref()
+                .unwrap_or("")
+                .starts_with("data:image/svg+xml")
+        );
         let attrs = parsed.attributes.unwrap();
         assert_eq!(attrs.first().unwrap().trait_type, "Type");
         assert_eq!(attrs.first().unwrap().value, serde_json::json!("Male"));

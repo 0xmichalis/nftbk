@@ -124,15 +124,15 @@ impl IpfsPinningProvider for PinataClient {
 
         // Enforce Pinata-specific name length constraint
         let mut effective_name = request.name.clone();
-        if let Some(n) = &mut effective_name {
-            if n.len() > MAX_PIN_NAME_LEN {
-                warn!(
-                    "Pinata pin name too long ({} > {}), truncating",
-                    n.len(),
-                    MAX_PIN_NAME_LEN
-                );
-                n.truncate(MAX_PIN_NAME_LEN);
-            }
+        if let Some(n) = &mut effective_name
+            && n.len() > MAX_PIN_NAME_LEN
+        {
+            warn!(
+                "Pinata pin name too long ({} > {}), truncating",
+                n.len(),
+                MAX_PIN_NAME_LEN
+            );
+            n.truncate(MAX_PIN_NAME_LEN);
         }
 
         let pinata_request = PinataPinByCidRequest {
@@ -292,8 +292,8 @@ impl IpfsPinningProvider for PinataClient {
 mod tests {
     use super::*;
     use wiremock::{
-        matchers::{body_partial_json, header, method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{body_partial_json, header, method, path},
     };
 
     #[tokio::test]
@@ -731,10 +731,12 @@ mod tests {
 
         let result = client.get_pin("non-existent-id").await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Pin with ID 'non-existent-id' not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Pin with ID 'non-existent-id' not found")
+        );
     }
 
     #[tokio::test]
@@ -757,10 +759,12 @@ mod tests {
 
         let result = client.get_pin("any-id").await;
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Pin with ID 'any-id' not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Pin with ID 'any-id' not found")
+        );
     }
 
     #[tokio::test]
@@ -829,8 +833,8 @@ mod list_pins_tests {
     use super::*;
     use serde_json::json;
     use wiremock::{
-        matchers::{method, path, query_param},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path, query_param},
     };
 
     #[tokio::test]

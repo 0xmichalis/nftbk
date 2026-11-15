@@ -6,10 +6,10 @@ use sha2::{Digest, Sha256};
 use x402_types::facilitator::Facilitator;
 use x402_types::proto::{self, v1};
 
-use crate::server::database::r#trait::{PaymentUpdate, QuoteTerms};
-use crate::server::handlers::{problem, ApiError};
-use crate::server::model::*;
 use crate::server::AppState;
+use crate::server::database::r#trait::{PaymentUpdate, QuoteTerms};
+use crate::server::handlers::{ApiError, problem};
+use crate::server::model::*;
 
 pub fn pricing_version(
     config: Option<&crate::server::x402::X402Config>,
@@ -47,7 +47,7 @@ pub async fn pay(
     owner: &str,
     id: &str,
     headers: &HeaderMap,
-) -> Result<Option<String>, Response> {
+) -> Result<Option<String>, Box<Response>> {
     let Some(config) = &state.x402_config else {
         return Ok(None);
     };
@@ -69,7 +69,8 @@ pub async fn pay(
             "settlement_pending",
             "Payment settlement is pending reconciliation; do not submit a new payment",
         )
-        .into_response());
+        .into_response()
+        .into());
     }
     let quote_id = payment["quote_id"].as_str().ok_or_else(|| {
         problem(500, "payment_missing", "Quote reference is missing").into_response()
@@ -89,7 +90,8 @@ pub async fn pay(
             "quote_expired",
             "Quote is no longer payable; request a fresh quote and use a new idempotency key",
         )
-        .into_response());
+        .into_response()
+        .into());
     }
     let amount = quote
         .amount_atomic
@@ -150,9 +152,7 @@ pub async fn pay(
         .and_then(|v| serde_json::from_slice(&v).ok())
         .ok_or_else(|| challenge("A valid X-PAYMENT header is required"))?;
     if payload.scheme != requirements.scheme || payload.network != requirements.network {
-        return Err(challenge(
-            "Payment scheme or network does not match the quote",
-        ));
+        return Err(challenge("Payment scheme or network does not match the quote").into());
     }
     let encoded =
         serde_json::to_vec(&payload).map_err(|e| ApiError::internal(e).into_response())?;
@@ -177,14 +177,15 @@ pub async fn pay(
     match v1::VerifyResponse::try_from(verified) {
         Ok(v1::VerifyResponse::Valid { payer })
             if payer.parse::<alloy_primitives::Address>().is_ok() => {}
-        Ok(v1::VerifyResponse::Invalid { reason, .. }) => return Err(challenge(&reason)),
+        Ok(v1::VerifyResponse::Invalid { reason, .. }) => return Err(challenge(&reason).into()),
         _ => {
             return Err(problem(
                 503,
                 "verification_unavailable",
                 "Invalid facilitator response",
             )
-            .into_response())
+            .into_response()
+            .into());
         }
     }
     let proof_hash = format!("{:x}", Sha256::digest(encoded));
@@ -255,7 +256,8 @@ pub async fn pay(
                 reply.0["errorReason"]
                     .as_str()
                     .unwrap_or("Settlement rejected"),
-            ))
+            )
+            .into())
         }
         _ => {
             state
@@ -276,7 +278,8 @@ pub async fn pay(
                 "settlement_unknown",
                 "Payment outcome requires reconciliation; do not submit another payment",
             )
-            .into_response())
+            .into_response()
+            .into())
         }
     }
 }
@@ -286,17 +289,18 @@ fn encode_settlement(value: &Document) -> String {
 
 #[cfg(test)]
 mod pay_tests {
+    use std::assert_matches;
     use std::sync::{Arc, Mutex};
 
     use axum::body::to_bytes;
     use chrono::Utc;
     use wiremock::{
-        matchers::{method, path},
         Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
     };
 
     use super::*;
-    use crate::server::database::mock::{state, MockDatabase, OWNER};
+    use crate::server::database::mock::{MockDatabase, OWNER, state};
     use crate::server::x402::{PricingRaw, X402Config, X402ConfigRaw, X402FacilitatorConfigRaw};
 
     fn config(url: &str) -> X402Config {
@@ -390,16 +394,14 @@ mod pay_tests {
         {
             let updates = db.payment_updates.lock().unwrap();
             assert_eq!(updates.len(), 2);
-            assert!(
-                matches!(&updates[0],PaymentUpdate::Begin {proof_hash,settle_request} if proof_hash.len()==64 && settle_request["paymentPayload"]==payload)
-            );
-            assert!(matches!(
+            assert_matches!(&updates[0],PaymentUpdate::Begin {proof_hash,settle_request} if proof_hash.len()==64 && settle_request["paymentPayload"]==payload);
+            assert_matches!(
                 updates[1],
                 PaymentUpdate::Failed {
                     ambiguous: true,
                     ..
                 }
-            ));
+            );
         }
         *db.payment.lock().unwrap() =
             Some(json!({"state":"reconciliation_required","quote_id":OWNER}));
@@ -484,13 +486,11 @@ mod pay_tests {
             }
             let updates = db.payment_updates.lock().unwrap();
             if let Some(ambiguous) = ambiguous {
-                assert!(matches!(&updates[0], PaymentUpdate::Begin { .. }));
+                assert_matches!(&updates[0], PaymentUpdate::Begin { .. });
                 if status == 200 {
-                    assert!(matches!(&updates[1], PaymentUpdate::Settled(_)));
+                    assert_matches!(&updates[1], PaymentUpdate::Settled(_));
                 } else {
-                    assert!(
-                        matches!(&updates[1],PaymentUpdate::Failed {ambiguous:value,..} if *value==ambiguous)
-                    );
+                    assert_matches!(&updates[1],PaymentUpdate::Failed {ambiguous:value,..} if *value==ambiguous);
                 }
             } else {
                 assert!(updates.is_empty());

@@ -81,14 +81,18 @@ mod resolve_env_placeholders_tests {
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             for k in &self.keys {
-                std::env::remove_var(k);
+                // SAFETY: Test-only. Other tests read the environment through std::env, which
+                // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+                unsafe { std::env::remove_var(k) };
             }
         }
     }
 
     #[test]
     fn replaces_single_variable() {
-        std::env::set_var("TEST_ENV_ONE", "abc");
+        // SAFETY: Test-only. Other tests read the environment through std::env, which
+        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        unsafe { std::env::set_var("TEST_ENV_ONE", "abc") };
         let _g = EnvGuard::new(vec!["TEST_ENV_ONE"]);
         let out = resolve_env_placeholders("prefix-${TEST_ENV_ONE}-suffix").unwrap();
         assert_eq!(out, "prefix-abc-suffix");
@@ -96,8 +100,12 @@ mod resolve_env_placeholders_tests {
 
     #[test]
     fn replaces_multiple_variables() {
-        std::env::set_var("TEST_ENV_A", "foo");
-        std::env::set_var("TEST_ENV_B", "bar");
+        // SAFETY: Test-only. Other tests read the environment through std::env, which
+        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        unsafe {
+            std::env::set_var("TEST_ENV_A", "foo");
+            std::env::set_var("TEST_ENV_B", "bar");
+        }
         let _g = EnvGuard::new(vec!["TEST_ENV_A", "TEST_ENV_B"]);
         let out = resolve_env_placeholders("${TEST_ENV_A}:${TEST_ENV_B}").unwrap();
         assert_eq!(out, "foo:bar");
@@ -112,7 +120,9 @@ mod resolve_env_placeholders_tests {
 
     #[test]
     fn error_on_missing_variable() {
-        std::env::remove_var("MISSING_VAR_X");
+        // SAFETY: Test-only. Other tests read the environment through std::env, which
+        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        unsafe { std::env::remove_var("MISSING_VAR_X") };
         let err = resolve_env_placeholders("value ${MISSING_VAR_X}").unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("MISSING_VAR_X"));
@@ -137,7 +147,9 @@ mod should_enable_color_tests {
     impl Drop for EnvGuard {
         fn drop(&mut self) {
             for k in &self.keys {
-                std::env::remove_var(k);
+                // SAFETY: Test-only. Other tests read the environment through std::env, which
+                // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+                unsafe { std::env::remove_var(k) };
             }
         }
     }
@@ -145,7 +157,9 @@ mod should_enable_color_tests {
     #[test]
     fn test_color_environment_variables() {
         // Test 1: NO_COLOR env var disables colors
-        std::env::set_var("NO_COLOR", "1");
+        // SAFETY: Test-only. Other tests read the environment through std::env, which
+        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        unsafe { std::env::set_var("NO_COLOR", "1") };
         let _g1 = EnvGuard::new(vec!["NO_COLOR"]);
 
         // Should disable colors regardless of CLI flag
@@ -154,8 +168,12 @@ mod should_enable_color_tests {
         drop(_g1);
 
         // Test 2: FORCE_COLOR env var enables colors
-        std::env::remove_var("NO_COLOR");
-        std::env::set_var("FORCE_COLOR", "1");
+        // SAFETY: Test-only. Other tests read the environment through std::env, which
+        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        unsafe {
+            std::env::remove_var("NO_COLOR");
+            std::env::set_var("FORCE_COLOR", "1");
+        }
         let _g2 = EnvGuard::new(vec!["NO_COLOR", "FORCE_COLOR"]);
 
         // Should enable colors regardless of CLI flag
@@ -164,8 +182,12 @@ mod should_enable_color_tests {
         drop(_g2);
 
         // Test 3: NO_COLOR takes precedence over FORCE_COLOR
-        std::env::set_var("NO_COLOR", "1");
-        std::env::set_var("FORCE_COLOR", "1");
+        // SAFETY: Test-only. Other tests read the environment through std::env, which
+        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        unsafe {
+            std::env::set_var("NO_COLOR", "1");
+            std::env::set_var("FORCE_COLOR", "1");
+        }
         let _g3 = EnvGuard::new(vec!["NO_COLOR", "FORCE_COLOR"]);
 
         // NO_COLOR should take precedence
@@ -174,8 +196,12 @@ mod should_enable_color_tests {
         drop(_g3);
 
         // Test 4: Uses CLI flag when no env vars are set
-        std::env::remove_var("NO_COLOR");
-        std::env::remove_var("FORCE_COLOR");
+        // SAFETY: Test-only. Other tests read the environment through std::env, which
+        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        unsafe {
+            std::env::remove_var("NO_COLOR");
+            std::env::remove_var("FORCE_COLOR");
+        }
         let _g4 = EnvGuard::new(vec!["NO_COLOR", "FORCE_COLOR"]);
 
         // Should use CLI flag (inverted because it's --no-color)
@@ -184,7 +210,9 @@ mod should_enable_color_tests {
         drop(_g4);
 
         // Test 5: Handles empty env var values
-        std::env::set_var("NO_COLOR", "");
+        // SAFETY: Test-only. Other tests read the environment through std::env, which
+        // shares this call's lock; only a libc getenv (e.g. inside OpenSSL) could race.
+        unsafe { std::env::set_var("NO_COLOR", "") };
         let _g5 = EnvGuard::new(vec!["NO_COLOR"]);
 
         // Empty value should still disable colors (any value disables)

@@ -73,7 +73,9 @@ mod redact_urls_tests {
     #[test]
     fn preserves_error_context_and_removes_multiple_quoted_urls() {
         assert_eq!(
-            redact_urls("RPC failed: \"https://example.invalid/key\"; fallback 'wss://example.invalid/key2'"),
+            redact_urls(
+                "RPC failed: \"https://example.invalid/key\"; fallback 'wss://example.invalid/key2'"
+            ),
             "RPC failed: \"[redacted URL]\"; fallback '[redacted URL]'"
         );
         assert_eq!(

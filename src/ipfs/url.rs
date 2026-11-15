@@ -1,6 +1,6 @@
 use data_encoding::BASE32_NOPAD;
 
-use crate::ipfs::config::{IpfsGatewayConfig, IpfsGatewayType, IPFS_GATEWAYS};
+use crate::ipfs::config::{IPFS_GATEWAYS, IpfsGatewayConfig, IpfsGatewayType};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GatewayUrl {
@@ -227,7 +227,7 @@ pub fn get_ipfs_gateway_urls(url: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ipfs::config::{IpfsGatewayType, IPFS_GATEWAYS};
+    use crate::ipfs::config::{IPFS_GATEWAYS, IpfsGatewayType};
 
     const TEST_GATEWAYS: &[IpfsGatewayConfig] = &[
         IpfsGatewayConfig {
@@ -451,8 +451,7 @@ mod tests {
             let urls = get_ipfs_gateway_urls_with_gateways(ipfs_url, TEST_GATEWAYS);
             let expected_subdomain = "https://bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq.ipfs.4everland.io/images/logo.png";
             assert!(urls.contains(&expected_subdomain.to_string()));
-            let expected_path =
-                "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png";
+            let expected_path = "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png";
             assert!(urls.contains(&expected_path.to_string()));
         }
 
@@ -469,8 +468,7 @@ mod tests {
             let urls = get_ipfs_gateway_urls_with_gateways(url, TEST_GATEWAYS);
             let expected_subdomain = "https://bafybeiemxf5abjwjbikoz4mc3a3dla6ual3jsgpdr4cjr3oz3evfyavhwq.ipfs.4everland.io/images/logo.png?v=1";
             assert!(urls.contains(&expected_subdomain.to_string()));
-            let expected_path =
-                "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png?v=1";
+            let expected_path = "https://ipfs.io/ipfs/QmXoypizjW3WknFiJnKLwHCnL72vedxjQkDDP1mXWo6uco/images/logo.png?v=1";
             assert!(urls.contains(&expected_path.to_string()));
         }
     }
@@ -531,8 +529,7 @@ mod tests {
             let urls_no_path =
                 generate_url_for_gateways(subdomain_url_no_path, TEST_GATEWAYS).unwrap();
             assert_eq!(urls_no_path.len(), TEST_GATEWAYS.len());
-            let expected_subdomain =
-                "https://bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya.ipfs.4everland.io";
+            let expected_subdomain = "https://bafybeifx5hyzbmxuyelfka34jvpw4s5dkwuacvch6q2ngqtkzoo6ddmbya.ipfs.4everland.io";
             assert!(urls_no_path.iter().any(|g| g.url == expected_subdomain));
         }
     }
@@ -640,12 +637,16 @@ mod tests {
                 assert!(!gateway_urls.is_empty());
                 let gateway_strings: Vec<&str> =
                     gateway_urls.iter().map(|g| g.url.as_str()).collect();
-                assert!(gateway_strings
-                    .iter()
-                    .any(|url| url.contains("ipfs.filebase.io")));
-                assert!(gateway_strings
-                    .iter()
-                    .any(|url| url.contains("gateway.pinata.cloud")));
+                assert!(
+                    gateway_strings
+                        .iter()
+                        .any(|url| url.contains("ipfs.filebase.io"))
+                );
+                assert!(
+                    gateway_strings
+                        .iter()
+                        .any(|url| url.contains("gateway.pinata.cloud"))
+                );
             } else {
                 panic!("all_ipfs_gateway_urls should return Some for IPFS URLs");
             }

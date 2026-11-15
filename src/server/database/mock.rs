@@ -1,11 +1,11 @@
 use std::path::Path;
-use std::sync::{atomic::AtomicBool, Arc, Mutex};
+use std::sync::{Arc, Mutex, atomic::AtomicBool};
 
 use async_trait::async_trait;
 
 use super::r#trait::*;
 use crate::server::model::*;
-use crate::server::{storage::BlobStore, AppState};
+use crate::server::{AppState, storage::BlobStore};
 
 pub const OWNER: &str = "11111111-1111-4111-8111-111111111111";
 

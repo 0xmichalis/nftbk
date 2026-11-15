@@ -1,5 +1,5 @@
 use anyhow::Result;
-use rand::{thread_rng, Rng};
+use rand::{Rng, thread_rng};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -286,12 +286,12 @@ pub async fn write_content(
         .map_err(|e| anyhow::anyhow!("Failed to create directory {}: {}", parent.display(), e))?;
 
     // If filename has no known extension, try to detect from content and append
-    if !extensions::has_known_extension(&file_path) {
-        if let Some(detected_ext) = extensions::detect_media_extension(content) {
-            let current_path_str = file_path.to_string_lossy();
-            debug!("Appending detected media extension: {}", detected_ext);
-            file_path = PathBuf::from(format!("{current_path_str}.{detected_ext}"));
-        }
+    if !extensions::has_known_extension(&file_path)
+        && let Some(detected_ext) = extensions::detect_media_extension(content)
+    {
+        let current_path_str = file_path.to_string_lossy();
+        debug!("Appending detected media extension: {}", detected_ext);
+        file_path = PathBuf::from(format!("{current_path_str}.{detected_ext}"));
     }
 
     // Write and postprocess according to type

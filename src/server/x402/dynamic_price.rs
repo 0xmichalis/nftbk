@@ -110,18 +110,22 @@ mod parse_usdc_price_to_wei_tests {
     fn test_parse_multiple_decimal_points() {
         let result = parse_usdc_price_to_wei("1.2.3");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("Invalid price format: multiple decimal points"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Invalid price format: multiple decimal points")
+        );
     }
 
     #[test]
     fn test_parse_too_many_decimal_places() {
         let result = parse_usdc_price_to_wei("0.1234567");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("Price has more than 6 decimal places"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Price has more than 6 decimal places")
+        );
     }
 
     #[test]
@@ -138,9 +142,11 @@ mod parse_usdc_price_to_wei_tests {
 
         let result = parse_usdc_price_to_wei("1.abc");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("Failed to parse fractional part"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Failed to parse fractional part")
+        );
     }
 
     #[test]

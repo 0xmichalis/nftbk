@@ -1,5 +1,5 @@
 use std::fmt;
-use time::{macros::format_description, OffsetDateTime, UtcOffset};
+use time::{OffsetDateTime, UtcOffset, macros::format_description};
 use tracing::Level;
 use tracing_subscriber::fmt::format::{FormatFields, Writer};
 use tracing_subscriber::fmt::{FmtContext, FormatEvent, FormattedFields};
@@ -146,7 +146,7 @@ mod from_loglevel_tests {
 mod custom_format_tests {
     use std::io::{Result as IoResult, Write};
     use std::sync::{Arc, Mutex};
-    use tracing::{info, Level as TracingLevel};
+    use tracing::{Level as TracingLevel, info};
     use tracing_subscriber::fmt::MakeWriter;
 
     #[derive(Clone)]

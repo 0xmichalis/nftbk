@@ -2,8 +2,8 @@ use std::time::Duration;
 
 use base64::Engine;
 use chrono::{DateTime, Utc};
-use serde_json::{json, Value};
-use sqlx::{postgres::PgPoolOptions, PgConnection, PgPool, Postgres, QueryBuilder, Row};
+use serde_json::{Value, json};
+use sqlx::{PgConnection, PgPool, Postgres, QueryBuilder, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use crate::server::model::*;
@@ -928,7 +928,7 @@ impl Database for Db {
                     {
                         return Err(DatabaseError::Conflict(
                             "Payment authorization was already used for another request".into(),
-                        ))
+                        ));
                     }
                     Err(error) => return Err(error.into()),
                 }

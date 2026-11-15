@@ -1,6 +1,6 @@
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use base64::Engine;
 use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac};
@@ -143,13 +143,9 @@ impl BlobStore {
         let active: std::collections::HashSet<_> = db.active_leases().await?.into_iter().collect();
         for (id, token, path) in candidates {
             if !active.contains(&(id, token)) {
-                fs::remove_dir_all(&path).await.or_else(|e| {
-                    if e.kind() == std::io::ErrorKind::NotFound {
-                        Ok(())
-                    } else {
-                        Err(e)
-                    }
-                })?;
+                fs::remove_dir_all(&path)
+                    .await
+                    .or_else(|e| (e.kind() == std::io::ErrorKind::NotFound).ok_or(e))?;
                 if let Some(parent) = path.parent() {
                     fs::remove_dir(parent).await.ok();
                 }
@@ -240,11 +236,13 @@ mod verify_download_tests {
         assert!(verify_download(&key, &token, "other").is_err());
         assert!(verify_download(&key, &format!("x{token}"), &grant.archive_id).is_err());
         grant.expires_at = Utc::now() - chrono::Duration::seconds(1);
-        assert!(verify_download(
-            &key,
-            &sign_download(&key, &grant).unwrap(),
-            &grant.archive_id
-        )
-        .is_err());
+        assert!(
+            verify_download(
+                &key,
+                &sign_download(&key, &grant).unwrap(),
+                &grant.archive_id
+            )
+            .is_err()
+        );
     }
 }
