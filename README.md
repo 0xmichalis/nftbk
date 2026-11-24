@@ -75,7 +75,6 @@ Run `make all` before submitting a change. See the
 [coverage-badge]: https://coveralls.io/repos/github/0xmichalis/nftbk/badge.svg?branch=main
 [coverage]: https://coveralls.io/github/0xmichalis/nftbk?branch=main
 
-
 Quote responses expose `pay_to` alongside `asset_address`, `amount_atomic` and
 `chain_id`. Clients approving a quote should require the x402 challenge to match
 all four fields. The recipient is frozen when the quote is created; changing
