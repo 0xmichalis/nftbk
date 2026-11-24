@@ -35,6 +35,7 @@ pub fn terms(state: &AppState) -> Result<QuoteTerms, ApiError> {
         asset_symbol: config.asset_symbol.clone(),
         chain_id: config.facilitator.network.chain_id().into(),
         asset_address: tag.asset,
+        pay_to: tag.pay_to,
         asset_decimals: 6,
         pricing_version: state.pricing_version.clone(),
         lifetime_seconds: config.max_timeout_seconds.min(u64::from(u32::MAX)) as u32,
@@ -117,6 +118,15 @@ pub async fn pay(
     let tag = config
         .usdc_price_tag_for_token_amount(amount)
         .map_err(|e| ApiError::internal(e).into_response())?;
+    if !quote.pay_to.eq_ignore_ascii_case(&tag.pay_to) {
+        return Err(problem(
+            409,
+            "payment_terms_changed",
+            "Payment recipient changed; request and approve a fresh quote",
+        )
+        .into_response()
+        .into());
+    }
     let requirements = v1::PaymentRequirements {
         scheme: tag.scheme,
         network: tag.network,
@@ -323,8 +333,30 @@ mod pay_tests {
         .unwrap()
     }
     fn quote() -> Document {
-        json!({"id":OWNER,"state":"ready","amount_atomic":"123","asset_symbol":"USDC","chain_id":"eip155:84532","asset_address":"0xasset","asset_decimals":6,"estimated_size_bytes":100,"expires_at":Utc::now()+chrono::Duration::minutes(5),"pricing_version":"test","operation_id":null,"error":null})
+        json!({"id":OWNER,"state":"ready","amount_atomic":"123","asset_symbol":"USDC","chain_id":"eip155:84532","asset_address":"0xasset","pay_to":"0x0000000000000000000000000000000000000002","asset_decimals":6,"estimated_size_bytes":100,"expires_at":Utc::now()+chrono::Duration::minutes(5),"pricing_version":"test","operation_id":null,"error":null})
     }
+    #[tokio::test]
+    async fn rejects_legacy_or_changed_recipient_before_payment() {
+        for pay_to in ["", "0x0000000000000000000000000000000000000003"] {
+            let server = MockServer::start().await;
+            let directory = tempfile::tempdir().unwrap();
+            let mut document = quote();
+            document["pay_to"] = json!(pay_to);
+            let db = Arc::new(MockDatabase {
+                document: Some(document),
+                payment: Mutex::new(Some(json!({"state":"pending","quote_id":OWNER}))),
+                ..Default::default()
+            });
+            let mut state = state(db, directory.path());
+            state.x402_config = Some(config(&server.uri()));
+            let response = pay(&state, Resource::Backup, OWNER, OWNER, &HeaderMap::new())
+                .await
+                .unwrap_err();
+            assert_eq!(response.status(), 409);
+            assert!(server.received_requests().await.unwrap().is_empty());
+        }
+    }
+
     #[tokio::test]
     async fn challenges_without_calling_the_facilitator_or_starting_settlement() {
         let server = MockServer::start().await;
@@ -343,6 +375,7 @@ mod pay_tests {
         let body: Document =
             serde_json::from_slice(&to_bytes(response.into_body(), 8192).await.unwrap()).unwrap();
         assert_eq!(body["accepts"][0]["maxAmountRequired"], "123");
+        assert_eq!(body["accepts"][0]["payTo"], quote()["pay_to"]);
         assert_eq!(body["accepts"][0]["network"], "base-sepolia");
         assert_eq!(server.received_requests().await.unwrap().len(), 0);
         assert_eq!(db.payment_updates.lock().unwrap().len(), 0);
