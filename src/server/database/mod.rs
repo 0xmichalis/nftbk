@@ -353,8 +353,8 @@ impl Database for Db {
                 terms,
                 backup_id,
             } => {
-                sqlx::query("INSERT INTO quotes(id,owner_id,specification,specification_hash,pricing_version,state,asset_symbol,chain_id,asset_address,asset_decimals,expires_at,source_backup_id) VALUES($1::text::uuid,$2::text::uuid,$3,$4,$5,'calculating',$6,$7,$8,$9,now()+make_interval(secs=>$10::double precision),$11::text::uuid)")
-                    .bind(&id).bind(&request.owner_id).bind(json!(specification)).bind(specification.hash()).bind(terms.pricing_version).bind(terms.asset_symbol).bind(terms.chain_id).bind(terms.asset_address).bind(i16::from(terms.asset_decimals)).bind(f64::from(terms.lifetime_seconds)).bind(backup_id).execute(&mut *tx).await?;
+                sqlx::query("INSERT INTO quotes(id,owner_id,specification,specification_hash,pricing_version,state,asset_symbol,chain_id,asset_address,asset_decimals,expires_at,source_backup_id,pay_to) VALUES($1::text::uuid,$2::text::uuid,$3,$4,$5,'calculating',$6,$7,$8,$9,now()+make_interval(secs=>$10::double precision),$11::text::uuid,$12)")
+                    .bind(&id).bind(&request.owner_id).bind(json!(specification)).bind(specification.hash()).bind(terms.pricing_version).bind(terms.asset_symbol).bind(terms.chain_id).bind(terms.asset_address).bind(i16::from(terms.asset_decimals)).bind(f64::from(terms.lifetime_seconds)).bind(backup_id).bind(terms.pay_to).execute(&mut *tx).await?;
                 insert_operation(&mut tx, &request.owner_id, "quote", &id, "queued").await?;
             }
             Creation::Output {

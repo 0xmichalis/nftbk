@@ -52,6 +52,7 @@ pub struct QuoteTerms {
     pub asset_symbol: String,
     pub chain_id: String,
     pub asset_address: String,
+    pub pay_to: String,
     pub asset_decimals: u8,
     pub pricing_version: String,
     pub lifetime_seconds: u32,

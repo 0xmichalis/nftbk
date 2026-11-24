@@ -305,6 +305,9 @@ pub struct Quote {
     pub asset_symbol: String,
     pub chain_id: String,
     pub asset_address: String,
+    /// Payment recipient frozen when the quote is created.
+    #[serde(default)]
+    pub pay_to: String,
     pub asset_decimals: u8,
     pub estimated_size_bytes: Option<u64>,
     pub expires_at: DateTime<Utc>,

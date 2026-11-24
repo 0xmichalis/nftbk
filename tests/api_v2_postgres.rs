@@ -874,6 +874,7 @@ async fn binds_quotes_and_payments_and_never_reuses_an_ambiguous_authorization()
                     asset_symbol: "USDC".into(),
                     chain_id: "eip155:84532".into(),
                     asset_address: "0xasset".into(),
+                    pay_to: "0x0000000000000000000000000000000000000002".into(),
                     asset_decimals: 6,
                     pricing_version: "policy-2".into(),
                     lifetime_seconds: 300,
@@ -882,6 +883,16 @@ async fn binds_quotes_and_payments_and_never_reuses_an_ambiguous_authorization()
         })
         .await
         .unwrap();
+    assert_eq!(
+        quote["pay_to"],
+        "0x0000000000000000000000000000000000000002"
+    );
+    let stored = database
+        .db
+        .get(Resource::Quote, &owner, quote["id"].as_str().unwrap())
+        .await
+        .unwrap();
+    assert_eq!(stored.unwrap()["pay_to"], quote["pay_to"]);
     let claim = database.db.claim().await.unwrap().unwrap();
     database
         .db
@@ -1272,6 +1283,7 @@ async fn expires_unpaid_reservations_without_releasing_uncertain_settlements() {
                     asset_symbol: "USDC".into(),
                     chain_id: "eip155:84532".into(),
                     asset_address: "0xasset".into(),
+                    pay_to: "0x0000000000000000000000000000000000000002".into(),
                     asset_decimals: 6,
                     pricing_version: "test".into(),
                     lifetime_seconds: 300,
