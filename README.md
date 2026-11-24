@@ -74,9 +74,3 @@ Run `make all` before submitting a change. See the
 [ci]: https://github.com/0xmichalis/nftbk/actions/workflows/ci.yml
 [coverage-badge]: https://coveralls.io/repos/github/0xmichalis/nftbk/badge.svg?branch=main
 [coverage]: https://coveralls.io/github/0xmichalis/nftbk?branch=main
-
-Quote responses expose `pay_to` alongside `asset_address`, `amount_atomic` and
-`chain_id`. Clients approving a quote should require the x402 challenge to match
-all four fields. The recipient is frozen when the quote is created; changing
-the server recipient invalidates an older quote with `409 payment_terms_changed`.
-Quotes created before the recipient migration must be requested again.
