@@ -418,7 +418,8 @@ impl Database for Db {
 
     async fn delete(&self, resource: Resource, owner: &str, id: &str) -> Result<Operation> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("SELECT id FROM principals WHERE id=$1::text::uuid FOR UPDATE")
+        // Serialize owner writes while allowing expiry to reference the principal.
+        sqlx::query("SELECT id FROM principals WHERE id=$1::text::uuid FOR NO KEY UPDATE")
             .bind(owner)
             .execute(&mut *tx)
             .await?;
@@ -431,16 +432,44 @@ impl Database for Db {
             Resource::PinSet => ("delete_pin_set", "pin_set_id"),
             _ => return Err(DatabaseError::Invalid("Resource cannot be deleted".into())),
         };
-        if let Some(op_id)=sqlx::query_scalar::<_,String>(&format!("SELECT id::text FROM operations WHERE {column}=$1::text::uuid AND kind=$2 ORDER BY created_at DESC LIMIT 1")).bind(id).bind(kind).fetch_optional(&mut *tx).await? {
-            let result=decode(document(&mut tx,Resource::Operation,owner,&op_id).await?.ok_or(DatabaseError::NotFound)?)?;
-            tx.commit().await?;return Ok(result);
-        }
         let active = sqlx::query(&format!(
-            "SELECT state FROM operations WHERE {column}=$1::text::uuid ORDER BY id FOR UPDATE"
+            "SELECT state FROM operations WHERE {column}=$1::text::uuid AND kind<>$2 ORDER BY id FOR UPDATE"
         ))
         .bind(id)
+        .bind(kind)
         .fetch_all(&mut *tx)
         .await?;
+        if matches!(resource, Resource::Archive) {
+            // Expiry queues cleanup under this lock. Deletion workers lock their operation first.
+            sqlx::query("SELECT id FROM archives WHERE id=$1::text::uuid FOR NO KEY UPDATE")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+        }
+        let existing = sqlx::query_scalar::<_, String>(&format!(
+            "SELECT id::text FROM operations WHERE {column}=$1::text::uuid AND kind=$2 ORDER BY created_at DESC,id DESC LIMIT 1"
+        ))
+        .bind(id)
+        .bind(kind)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some(op_id) = existing {
+            if matches!(resource, Resource::Archive) {
+                sqlx::query(
+                    "UPDATE archives SET state=CASE WHEN deleted_at IS NULL THEN 'deleting' ELSE 'deleted' END,deletion_requested_at=now() WHERE id=$1::text::uuid AND deletion_requested_at IS NULL",
+                )
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            }
+            let result = decode(
+                document(&mut tx, Resource::Operation, owner, &op_id)
+                    .await?
+                    .ok_or(DatabaseError::NotFound)?,
+            )?;
+            tx.commit().await?;
+            return Ok(result);
+        }
         if active
             .iter()
             .any(|r| matches!(r.get::<String, _>("state").as_str(), "queued" | "running"))

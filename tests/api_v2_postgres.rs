@@ -429,6 +429,128 @@ async fn captures_original_metadata_and_runs_independent_archive_and_download_li
 
 #[tokio::test]
 #[ignore = "Requires isolated PostgreSQL; run with NFTBK_INTEGRATION_DATABASE_URL"]
+async fn manual_archive_deletion_reuses_expiry_cleanup() {
+    let database = TestDatabase::new(false).await;
+    let directory = tempfile::tempdir().unwrap();
+    let state = state(&database.db, directory.path(), "https://rpc.example");
+    let app = build_router(state.clone());
+    let owner = database
+        .db
+        .owner(&Principal {
+            issuer: "nftbk:local".into(),
+            subject: "local".into(),
+        })
+        .await
+        .unwrap();
+    let backup_id: String = sqlx::query_scalar(
+        "INSERT INTO backups(owner_id,state,specification,specification_hash) VALUES($1::text::uuid,'ready',$2,'test') RETURNING id::text",
+    )
+    .bind(&owner)
+    .bind(json!(specification()))
+    .fetch_one(&database.db.pool)
+    .await
+    .unwrap();
+
+    for cleanup_state in ["succeeded", "queued", "running", "failed"] {
+        let archive_id: String = sqlx::query_scalar(
+            "INSERT INTO archives(backup_id,owner_id,state,format,retention_days,expires_at) SELECT id,owner_id,'ready','zip',3,now()-interval '1 second' FROM backups WHERE id=$1::text::uuid RETURNING id::text",
+        )
+        .bind(&backup_id)
+        .fetch_one(&database.db.pool)
+        .await
+        .unwrap();
+        let archive_path = format!("/v2/archives/{archive_id}");
+        let get_archive = async || {
+            let (status, _, body) =
+                request(&app, Method::GET, &archive_path, Value::Null, None).await;
+            assert_eq!(status, StatusCode::OK);
+            serde_json::from_slice::<Archive>(&body).unwrap()
+        };
+        let delete_archive = async || {
+            let (status, _, body) =
+                request(&app, Method::DELETE, &archive_path, Value::Null, None).await;
+            assert_eq!(status, StatusCode::ACCEPTED);
+            serde_json::from_slice::<Operation>(&body).unwrap()
+        };
+
+        database.db.maintenance().await.unwrap();
+        let expired = get_archive().await;
+        assert_eq!(expired.state, State::Expired);
+        assert!(expired.deletion_requested_at.is_none());
+        let expiry_id = expired.operation_id.unwrap();
+        let claim = if cleanup_state == "queued" {
+            None
+        } else {
+            let claim = database.db.claim().await.unwrap().unwrap();
+            assert_eq!(claim.operation.id, expiry_id);
+            Some(claim)
+        };
+        match cleanup_state {
+            "succeeded" => workers::execute(&state, claim.as_ref().unwrap())
+                .await
+                .unwrap(),
+            "failed" => database
+                .db
+                .progress(
+                    claim.as_ref().unwrap(),
+                    Progress::Failed(nftbk::server::snapshot::failure(
+                        "cleanup_failed",
+                        "Removal failed",
+                    )),
+                )
+                .await
+                .unwrap(),
+            _ => {}
+        }
+        let before = get_archive().await;
+        if cleanup_state == "succeeded" {
+            assert_eq!(before.state, State::Expired);
+            assert!(before.deleted_at.is_some());
+        }
+
+        let deletion = delete_archive().await;
+        assert_eq!(deletion.id, expiry_id);
+        assert_eq!(deletion.state, cleanup_state);
+        let requested = get_archive().await;
+        assert!(requested.deletion_requested_at.is_some());
+        if cleanup_state == "succeeded" {
+            assert_eq!(requested.state, State::Deleted);
+            assert_eq!(requested.deleted_at, before.deleted_at);
+        } else {
+            assert_eq!(requested.state, State::Deleting);
+            assert!(requested.deleted_at.is_none());
+            if cleanup_state == "failed" {
+                assert_eq!(requested.error.unwrap().code, "cleanup_failed");
+                database.db.retry(&owner, &expiry_id).await.unwrap();
+            }
+            let claim = if cleanup_state == "running" {
+                claim.unwrap()
+            } else {
+                database.db.claim().await.unwrap().unwrap()
+            };
+            assert_eq!(claim.operation.id, expiry_id);
+            workers::execute(&state, &claim).await.unwrap();
+        }
+
+        let repeated = delete_archive().await;
+        assert_eq!(repeated.id, expiry_id);
+        assert_eq!(repeated.state, "succeeded");
+        let deleted = get_archive().await;
+        assert_eq!(deleted.state, State::Deleted);
+        assert!(deleted.deleted_at.is_some());
+        assert_eq!(
+            deleted.deletion_requested_at,
+            requested.deletion_requested_at
+        );
+        assert!(database.db.claim().await.unwrap().is_none());
+    }
+    drop(app);
+    drop(state);
+    database.close().await;
+}
+
+#[tokio::test]
+#[ignore = "Requires isolated PostgreSQL; run with NFTBK_INTEGRATION_DATABASE_URL"]
 async fn fences_stale_workers_and_scopes_resource_reads_to_the_owner() {
     let database = TestDatabase::new(false).await;
     let owner = database
