@@ -3020,7 +3020,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "nftbk"
-version = "2.0.1"
+version = "2.0.2"
 dependencies = [
  "alloy-primitives",
  "alloy-rpc-client",
@@ -5156,8 +5156,8 @@ dependencies = [
 
 [[package]]
 name = "tezos-contract"
-version = "0.4.2"
-source = "git+https://github.com/0xmichalis/tezos-rust-sdk?tag=v0.4.2#8d7200c01530777d6914346e8493d9136c478847"
+version = "0.4.3"
+source = "git+https://github.com/0xmichalis/tezos-rust-sdk?tag=v0.4.3#5678f08559aa8b10f9fd6b837a82de2ebd7872a8"
 dependencies = [
  "async-trait",
  "derive_more 0.99.20",
@@ -5169,8 +5169,8 @@ dependencies = [
 
 [[package]]
 name = "tezos-core"
-version = "0.4.2"
-source = "git+https://github.com/0xmichalis/tezos-rust-sdk?tag=v0.4.2#8d7200c01530777d6914346e8493d9136c478847"
+version = "0.4.3"
+source = "git+https://github.com/0xmichalis/tezos-rust-sdk?tag=v0.4.3#5678f08559aa8b10f9fd6b837a82de2ebd7872a8"
 dependencies = [
  "blake2",
  "bs58 0.4.0",
@@ -5190,8 +5190,8 @@ dependencies = [
 
 [[package]]
 name = "tezos-michelson"
-version = "0.4.2"
-source = "git+https://github.com/0xmichalis/tezos-rust-sdk?tag=v0.4.2#8d7200c01530777d6914346e8493d9136c478847"
+version = "0.4.3"
+source = "git+https://github.com/0xmichalis/tezos-rust-sdk?tag=v0.4.3#5678f08559aa8b10f9fd6b837a82de2ebd7872a8"
 dependencies = [
  "chrono",
  "derive_more 0.99.20",
@@ -5206,8 +5206,8 @@ dependencies = [
 
 [[package]]
 name = "tezos-operation"
-version = "0.4.2"
-source = "git+https://github.com/0xmichalis/tezos-rust-sdk?tag=v0.4.2#8d7200c01530777d6914346e8493d9136c478847"
+version = "0.4.3"
+source = "git+https://github.com/0xmichalis/tezos-rust-sdk?tag=v0.4.3#5678f08559aa8b10f9fd6b837a82de2ebd7872a8"
 dependencies = [
  "chrono",
  "derive_more 0.99.20",
@@ -5220,8 +5220,8 @@ dependencies = [
 
 [[package]]
 name = "tezos-rpc"
-version = "0.4.2"
-source = "git+https://github.com/0xmichalis/tezos-rust-sdk?tag=v0.4.2#8d7200c01530777d6914346e8493d9136c478847"
+version = "0.4.3"
+source = "git+https://github.com/0xmichalis/tezos-rust-sdk?tag=v0.4.3#5678f08559aa8b10f9fd6b837a82de2ebd7872a8"
 dependencies = [
  "async-trait",
  "chrono",
