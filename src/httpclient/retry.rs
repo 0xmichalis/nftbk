@@ -4,7 +4,7 @@ use tokio::time::sleep;
 use tracing::warn;
 
 fn calculate_retry_delay(attempt: u32) -> Duration {
-    let base_delay = 2u64.pow(attempt).min(30);
+    let base_delay = 2u64.saturating_pow(attempt).min(30);
     let jitter: u64 = thread_rng().gen_range(0..500);
     Duration::from_secs(base_delay) + Duration::from_millis(jitter)
 }
@@ -130,7 +130,7 @@ mod should_retry_tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod calculate_retry_delay_tests {
     use super::*;
 
     #[test]
@@ -141,6 +141,19 @@ mod tests {
         assert!(d2 > d1);
         assert!(d3 > d2);
     }
+
+    #[test]
+    fn calculate_retry_delay_keeps_large_attempts_at_the_cap() {
+        for attempt in [5, 6, 63, 64, u32::MAX] {
+            let delay = calculate_retry_delay(attempt);
+            assert!((Duration::from_secs(30)..Duration::from_millis(30_500)).contains(&delay));
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 
     #[test]
     fn test_should_retry_logic() {
