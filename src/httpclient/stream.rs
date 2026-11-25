@@ -1,15 +1,16 @@
 use anyhow::{Context, Result};
 use async_compression::tokio::bufread::GzipDecoder;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWriteExt, BufReader};
+use uuid::Uuid;
 
 use super::limits::{MAX_FILE_BYTES, check_size, response_reader};
 
-pub(crate) async fn stream_reader_to_file<R: AsyncRead + Unpin>(
+async fn stream_reader_to_file<R: AsyncRead + Unpin>(
     reader: &mut R,
     file: &mut tokio::fs::File,
     file_path: &Path,
-) -> anyhow::Result<std::path::PathBuf> {
+) -> Result<()> {
     let copied = tokio::io::copy(&mut reader.take(MAX_FILE_BYTES + 1), file)
         .await
         .with_context(|| format!("Failed to stream content to file {}", file_path.display()))?;
@@ -17,13 +18,13 @@ pub(crate) async fn stream_reader_to_file<R: AsyncRead + Unpin>(
     file.flush()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to flush file {}: {}", file_path.display(), e))?;
-    Ok(file_path.to_path_buf())
+    Ok(())
 }
 
 pub(crate) async fn stream_http_to_file(
     response: reqwest::Response,
     file_path: &Path,
-) -> anyhow::Result<std::path::PathBuf> {
+) -> Result<PathBuf> {
     let mut reader = response_reader(response, MAX_FILE_BYTES)?;
     // The extension probe treats read errors as empty content, so check first.
     reader.fill_buf().await?;
@@ -36,7 +37,7 @@ pub(crate) async fn stream_http_to_file(
     {
         let current_path_str = file_path.to_string_lossy();
         tracing::debug!("Appending detected media extension: {}", detected_ext);
-        file_path = std::path::PathBuf::from(format!("{current_path_str}.{detected_ext}"));
+        file_path = PathBuf::from(format!("{current_path_str}.{detected_ext}"));
     }
 
     let mut reader = prefix_buf.as_slice().chain(reader);
@@ -46,29 +47,51 @@ pub(crate) async fn stream_http_to_file(
 async fn write_reader_to_file<R: AsyncRead + Unpin>(
     reader: &mut R,
     file_path: &Path,
-) -> Result<std::path::PathBuf> {
-    let mut file = tokio::fs::File::create(file_path)
+) -> Result<PathBuf> {
+    // Keep incomplete bytes out of the destination and the sibling dedup scan.
+    // Create the guard in the blocking task so cancellation during creation also cleans up.
+    let scratch_path = file_path.with_file_name(format!(".nftbk-download-{}", Uuid::new_v4()));
+    let (scratch, mut file) = tokio::task::spawn_blocking(move || {
+        std::fs::create_dir(&scratch_path)?;
+        let scratch = DownloadScratch(scratch_path);
+        let file = std::fs::File::create(scratch.0.join("body"))?;
+        Ok::<_, std::io::Error>((scratch, tokio::fs::File::from_std(file)))
+    })
+    .await?
+    .with_context(|| format!("Failed to create file {}", file_path.display()))?;
+
+    stream_reader_to_file(reader, &mut file, file_path).await?;
+    file.sync_all()
         .await
-        .map_err(|e| anyhow::anyhow!("Failed to create file {}: {}", file_path.display(), e))?;
-    let result = async {
-        let path = stream_reader_to_file(reader, &mut file, file_path).await?;
-        file.sync_all().await.map_err(|e| {
-            anyhow::anyhow!("Failed to sync file {} to disk: {}", file_path.display(), e)
-        })?;
+        .with_context(|| format!("Failed to sync file {} to disk", file_path.display()))?;
+    drop(file);
+
+    let path = file_path.to_path_buf();
+    tokio::task::spawn_blocking(move || scratch.publish(path)).await?
+}
+
+struct DownloadScratch(PathBuf);
+
+impl DownloadScratch {
+    fn publish(self, path: PathBuf) -> Result<PathBuf> {
+        std::fs::rename(self.0.join("body"), &path)
+            .with_context(|| format!("Failed to publish file {}", path.display()))?;
         Ok(path)
     }
-    .await;
-    drop(file);
-    if result.is_err() {
-        tokio::fs::remove_file(file_path).await?;
+}
+
+impl Drop for DownloadScratch {
+    fn drop(&mut self) {
+        if let Err(error) = std::fs::remove_dir_all(&self.0) {
+            tracing::warn!("Failed to remove temporary download directory: {error}");
+        }
     }
-    result
 }
 
 pub(crate) async fn stream_gzip_http_to_file(
     response: reqwest::Response,
     file_path: &Path,
-) -> Result<std::path::PathBuf> {
+) -> Result<PathBuf> {
     let reader = response_reader(response, MAX_FILE_BYTES)?;
     let mut decoder = GzipDecoder::new(BufReader::new(reader));
     write_reader_to_file(&mut decoder, file_path).await
@@ -128,7 +151,11 @@ mod stream_reader_to_file_tests {
 mod stream_http_to_file_tests {
     use super::*;
     use futures_util::StreamExt;
+    use std::sync::Arc;
+    use std::task::Poll;
+    use std::time::Duration;
     use tempfile::TempDir;
+    use tokio::sync::Notify;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -182,6 +209,65 @@ mod stream_http_to_file_tests {
     }
 
     #[tokio::test]
+    async fn interrupted_stream_does_not_publish_partial_file() {
+        let out = TempDir::new().unwrap();
+        let file_path = out.path().join("image");
+        let detected_path = file_path.with_extension("png");
+        let stalled = Arc::new(Notify::new());
+        let body_stalled = stalled.clone();
+        let chunks = futures_util::stream::iter([Ok::<_, std::io::Error>(
+            b"\x89PNG\r\n\x1a\npartial image".to_vec(),
+        )])
+        .chain(futures_util::stream::poll_fn(move |_| {
+            body_stalled.notify_one();
+            Poll::Pending
+        }));
+        let response = axum::http::Response::new(reqwest::Body::wrap_stream(chunks)).into();
+        let download = tokio::spawn(async move { stream_http_to_file(response, &file_path).await });
+
+        tokio::time::timeout(Duration::from_secs(5), stalled.notified())
+            .await
+            .unwrap();
+        let published_before_end_of_stream = detected_path.exists();
+        download.abort();
+        assert!(download.await.unwrap_err().is_cancelled());
+
+        assert!(!published_before_end_of_stream);
+        assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn failed_stream_preserves_an_existing_destination() {
+        let out = TempDir::new().unwrap();
+        let file_path = out.path().join("video.mp4");
+        tokio::fs::write(&file_path, b"original").await.unwrap();
+        let chunks = futures_util::stream::iter([
+            Ok(b"partial replacement".to_vec()),
+            Err(std::io::Error::other("body read timed out")),
+        ]);
+        let response = axum::http::Response::new(reqwest::Body::wrap_stream(chunks)).into();
+
+        assert!(stream_http_to_file(response, &file_path).await.is_err());
+
+        assert_eq!(tokio::fs::read(&file_path).await.unwrap(), b"original");
+        assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn failed_publication_cleans_up_the_temporary_download() {
+        let out = TempDir::new().unwrap();
+        let file_path = out.path().join("image.png");
+        tokio::fs::create_dir(&file_path).await.unwrap();
+        let response = axum::http::Response::new(b"image data".to_vec()).into();
+
+        let error = stream_http_to_file(response, &file_path).await.unwrap_err();
+
+        assert!(error.to_string().contains("Failed to publish file"));
+        assert!(file_path.is_dir());
+        assert_eq!(std::fs::read_dir(out.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
     async fn rejects_failed_body_before_creating_file() {
         let chunks = futures_util::stream::iter([Err::<Vec<u8>, _>(std::io::Error::other(
             "body read timed out",
@@ -214,6 +300,7 @@ mod stream_http_to_file_tests {
         assert!(result.is_ok());
         let metadata = std::fs::metadata(&file_path).unwrap();
         assert_eq!(metadata.len(), 1024 * 1024);
+        assert_eq!(std::fs::read_dir(temp_dir.path()).unwrap().count(), 1);
     }
 
     #[tokio::test]
