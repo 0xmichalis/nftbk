@@ -67,17 +67,36 @@ async fn write_reader_to_file<R: AsyncRead + Unpin>(
     drop(file);
 
     let path = file_path.to_path_buf();
-    tokio::task::spawn_blocking(move || scratch.publish(path)).await?
+    tokio::task::spawn_blocking(move || scratch.publish(path, sync_download_directory)).await?
 }
 
 struct DownloadScratch(PathBuf);
 
 impl DownloadScratch {
-    fn publish(self, path: PathBuf) -> Result<PathBuf> {
+    fn publish(
+        self,
+        path: PathBuf,
+        sync_directory: impl FnOnce(&Path) -> std::io::Result<()>,
+    ) -> Result<PathBuf> {
         std::fs::rename(self.0.join("body"), &path)
             .with_context(|| format!("Failed to publish file {}", path.display()))?;
+        // Sync the destination entry and scratch removal in their shared parent.
+        drop(self);
+        let parent = path
+            .parent()
+            .filter(|parent| !parent.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        sync_directory(parent).context("File was published, but syncing its directory failed")?;
         Ok(path)
     }
+}
+
+fn sync_download_directory(parent: &Path) -> std::io::Result<()> {
+    // Linux requires a separate directory sync to persist the published name.
+    if cfg!(target_os = "linux") {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(())
 }
 
 impl Drop for DownloadScratch {
@@ -95,6 +114,45 @@ pub(crate) async fn stream_gzip_http_to_file(
     let reader = response_reader(response, MAX_FILE_BYTES)?;
     let mut decoder = GzipDecoder::new(BufReader::new(reader));
     write_reader_to_file(&mut decoder, file_path).await
+}
+
+#[cfg(test)]
+mod publish_tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn reports_directory_sync_failure_after_publication() {
+        let out = TempDir::new().unwrap();
+        let scratch_path = out.path().join("scratch");
+        std::fs::create_dir(&scratch_path).unwrap();
+        std::fs::write(scratch_path.join("body"), b"complete replacement").unwrap();
+        let destination = out.path().join("image.png");
+        std::fs::write(&destination, b"original").unwrap();
+
+        let error = DownloadScratch(scratch_path.clone())
+            .publish(destination.clone(), |parent| {
+                assert_eq!(parent, out.path());
+                assert_eq!(
+                    std::fs::read(&destination).unwrap(),
+                    b"complete replacement"
+                );
+                assert!(!scratch_path.exists());
+                Err(std::io::Error::other("simulated directory sync error"))
+            })
+            .unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "File was published, but syncing its directory failed"
+        );
+        assert!(error.downcast_ref::<std::io::Error>().is_some());
+        assert!(!crate::httpclient::retry::should_retry(
+            &error,
+            Some(reqwest::StatusCode::OK)
+        ));
+        assert_eq!(std::fs::read(destination).unwrap(), b"complete replacement");
+    }
 }
 
 #[cfg(test)]
