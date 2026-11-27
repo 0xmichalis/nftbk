@@ -25,7 +25,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: 0xmichalis/repo-tooling/actions/cargo-tag@d4f4c5b6fac20dbb0bb4cf85f5280d6948c4a3c8 # v1.1.0
+      - uses: 0xmichalis/repo-tooling/actions/cargo-tag@bfddb8ac3808b18b4dfff99cb030099b8331f0ad
         with:
           before-sha: ${{ github.event.before }}
           token: ${{ github.token }}

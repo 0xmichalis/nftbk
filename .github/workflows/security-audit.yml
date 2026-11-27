@@ -15,4 +15,4 @@ concurrency:
 
 jobs:
   audit:
-    uses: 0xmichalis/repo-tooling/.github/workflows/rust-audit.yml@d4f4c5b6fac20dbb0bb4cf85f5280d6948c4a3c8 # v1.1.0
+    uses: 0xmichalis/repo-tooling/.github/workflows/rust-audit.yml@bfddb8ac3808b18b4dfff99cb030099b8331f0ad
