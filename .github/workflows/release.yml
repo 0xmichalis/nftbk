@@ -35,7 +35,7 @@ jobs:
     permissions:
       contents: read
       packages: write
-    uses: 0xmichalis/repo-tooling/.github/workflows/rust-docker-publish.yml@b0348b137321be8ef7f962f22fa67cab4eee5bf8
+    uses: 0xmichalis/repo-tooling/.github/workflows/rust-docker-publish.yml@bfddb8ac3808b18b4dfff99cb030099b8331f0ad
     with:
       image: ghcr.io/${{ github.repository_owner }}/nftbk-server
       release-tag: ${{ github.event.inputs.tag || github.ref_name }}
